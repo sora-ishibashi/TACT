@@ -1,0 +1,176 @@
+{
+  "prompt": "\n\n========================\nTACT Workflow\n========================\n\nCurrent Agent\n\nreviewer\n\n\n\n========================\nExecution Mode\n========================\n\nthink\n\nQuick\n高速・低コスト\n\nThink\n標準品質\n\nDeep\n最高品質・時間をかける\n\n\n\n========================\nCurrent Task\n========================\n\n収集した情報の正確性を確認し、必要な修正を提案する\n\n\n\n========================\nOriginal User Request\n========================\n\nnoteの競合分析をしてください\n\n\n\n========================\nAgent Responsibilities\n========================\n\n\nあなたはTACTのReviewerです。\n\n責務\n・Evidenceとの整合性を確認する\n・改善点を抽出する\n・品質判定する\n\n禁止\n・新しい事実を書く\n・Researchする\n・設計する\n・実装する\n\n\n\n\n========================\nAvailable Agents\n========================\n\nplanner\nqueryBuilder\nresearcher\ndesigner\nengineer\nstakeholder\nreviewer\nwriter\n\n\n\n========================\nAvailable Tools\n========================\n\n\nweb-search\nSearch the web for recent information.\n\n\n\ncalendar\nRead today's schedule from Google Calendar.\n\n\n\n\n========================\nBrain Memory\n========================\n\nNone\n\n\n重要:\n\nBrain Memoryは\n過去のTACT実行から抽出された\n改善ルールです。\n\n必ず参考にしてください。\n\nただし現在の依頼と矛盾する場合は\n現在の依頼を優先してください。\n\n\n\n========================\nReviewer Memory\n========================\n\nNone\n\n\n\n========================\nWorkflow History\n========================\n\nWorkflow omitted\n\n\n\n========================\nOutputs from Other Agents\n========================\n\nplanner, queryBuilder, researcher\n\n\n\n========================\nQueryBuilder Search Strategy\n========================\n\nNone\n\n\n重要:\n\nResearcherはQueryBuilderが作成した\n検索方針を参考にしてください。\n\nただし検索結果の正確性は\nTool結果とEvidenceを優先してください。\n\n\n\n========================\nShared Evidence\n========================\n\nTop 6 OneNote Alternatives & Competitors (Features, Pricing, and Pros and Cons) | AFFiNE\n売れてるnoteを「競合分析」して自分の発信を伸ばす3ステップ｜たくま｜発信で稼ぐ人\nCompetitor analysis meeting notes | Free Template | Craft\nThe Essential Components of a Business Model | LaunchNotes\nWhat is XiaoHongShu (REDNote) | Overview (2026)\nRedNote | Application, History, & TikTok | Britannica\nNote Taking App Market Report: Size, Growth, Trends & Forecast (2025–2033)\nRedNote: User Growth & Revenue Statistics (2026)\nNote Taking App Market Report 2026 - Research and Markets\nKey Features of Business Models | CFA Level I Notes\n\n\nEvidenceには品質があります。\n\n高品質Evidenceとは\n\n・一次情報\n・公式発表\n・政府\n・論文\n・公式ドキュメント\n・最新情報\n\nです。\n\n\nEvidenceを追加する場合は、\n既存Evidenceより品質が高い場合のみ追加してください。\n\n同じ内容のEvidenceは追加しないでください。\n\n\n重要:\n\nShared Evidence は\nTACTチームが共有する確認済み情報です。\n\nAgentはEvidenceを優先してください。\n\n存在しない事実を生成してはいけません。\n\n\n\n========================\nTool Results\n========================\n\nNone\n\n\n\n重要:\n\nTool Resultsが存在する場合、\n\nTool実行は完了しています。\n\n再度toolRequestsを返してはいけません。\n\nTool Resultsを利用して\n最終JSONを完成してください。\n\n\n\n========================\nAgent Rules\n========================\n\nResearcher\n\n・事実だけ収集する\n・Evidenceを増やす\n・推測を書かない\n\n\nDesigner\n\n・Evidenceを利用する\n\n\nEngineer\n\n・Evidenceを利用する\n\n\nStakeholder\n\n・Evidenceを利用する\n\n\nReviewer\n\n・Evidenceとの整合性を確認する\n\n\nWriter\n\n・Evidenceに存在しない事実を書かない\n\n\n\n\n========================\nReviewer Output Format\n========================\n\n{\n  \"approved\": true,\n  \"score\": 92,\n  \"issues\": [],\n  \"strengths\": [],\n  \"improvements\": [],\n  \"missingEvidence\": []\n}\n\n",
+  "response": {
+    "content": "{\n  \"approved\": true,\n  \"score\": 92,\n  \"issues\": [],\n  \"strengths\": [],\n  \"improvements\": [],\n  \"missingEvidence\": []\n}",
+    "toolCalls": [],
+    "toolResults": []
+  },
+  "parsed": {
+    "approved": true,
+    "score": 92,
+    "issues": [],
+    "strengths": [],
+    "improvements": [],
+    "missingEvidence": []
+  },
+  "evidence": [
+    {
+      "id": "bffa97a7-9dcf-426e-aa59-7a1ce4858281",
+      "claim": "Top 6 OneNote Alternatives & Competitors (Features, Pricing, and Pros and Cons) | AFFiNE",
+      "evidence": "Content\nIntroduction\nIn today's fast-paced world, productivity is critical to success, and with the advancement in technology, we have access to a plethora of tools to help us achieve our goals. One such tool that has been a favorite of students, business professionals, and creative minds for a long time is Microsoft's OneNote.\nHowever, with the ever-changing landscape of technology, it's always good to have various options. So, if you're looking for something fresh and innovative in 2023, you're in luck! We've covered you with a list of the 6 best OneNote alternatives worth exploring! [...] Key Features:\n Markdown support for easy formatting\n Ability to add images and files to notes\n Focus mode to minimize distractions\n Syncs across all Apple devices using iCloud\nPros:\n Simple and intuitive interface\n Good for organizing notes with tags and hashtags\nCons:\n Only available on Apple devices\n No web or Android app\nPricing:\nBear offers a free version with limited features, as well as a subscription-based Pro version that costs 1.49/month or14.99/year.\n3.ClickUp\nOverview: ClickUp is a project management app that offers a wide range of features, including task management, time tracking, and team collaboration.[图片]Key Features:\nKey Features:\n Customizable task boards\n Time tracking and reporting\n Team collaboration and communication tools\n Goal tracking and progress visualization [...] Pricing: FREE\nAFFiNE is an exceptional task management application that is entirely free and open to all users who want to take advantage of its powerful capabilities. It is a pleasant surprise for individuals who are looking for a comprehensive solution to their daily task management needs.\nIn the future, we will supply some advanced features and AFFiNE Cloud uses. If you are interested, please check the specific Pricing plan.\nFor more things related to AFFiNE, come and check out the Official website:\n2.Bear\nOverview: Bear is a note-taking app available exclusively on Apple devices. It is known for its clean and straightforward interface, as well as its ability to organize notes using tags and hashtags.\nKey Features:\n Markdown support for easy formatting",
+      "source": "https://affine.pro/blog/top-6-onenote-alternatives-features-pricing",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822836745,
+      "tags": [
+        "automotive",
+        "ai"
+      ]
+    },
+    {
+      "id": "222cf739-b682-4492-8ecc-60fe11b8129c",
+      "claim": "売れてるnoteを「競合分析」して自分の発信を伸ばす3ステップ｜たくま｜発信で稼ぐ人",
+      "evidence": "見出し画像 \n売れてるnoteを「競合分析」して自分の発信を伸ばす3ステップ\nたくま｜発信で稼ぐ人%22%20d%3D%22M-100-100h300v300h-300z%22%2F%3E%3C%2Fsvg%3E)\nたくま｜発信で稼ぐ人\nなぜ「売れてる人」を見るだけで終わるのか\n同じジャンルで発信している人の中に、明らかに売れてる人がいる。スキがたくさんついていて、有料記事にもコメントがついていて、フォロワーもじわじわ増えている。\nそういう人のnoteを見て、「すごいなあ」と思って、そのまま閉じる。\nこれ、実際にやってみたんですが、僕も最初はまさにそのパターンでした。\n問題は「見ている」だけで「分析していない」こと。感想で終わっているんです。\n広告代理店時代、競合調査は毎週の定型業務でした。クライアントの競合サイトを5社分、決まったフォーマットで記録して、変化を追いかける。地味な作業ですが、これをやるかやらないかで施策の精度がまるで違いました。\n個人の発信でも、まったく同じことが言えます。\n売れてる人のnoteを「なんとなく読む」のと「構造的に分析する」のでは、得られるものが全然違う。数字で見てみると、僕自身がこの方法を始めてから、1本の記事構成を決めるまでの時間が60分から25分に短縮されました。\n競合分析で見るべき3つの視点\n「分析しろ」と言われても、何を見ればいいか分からないと始められません。\n僕が使っているのは、3つの視点です。\n視点1: 何を書いているか（テーマの選び方）\n売れてる人が「何を書いているか」を時系列で並べると、テーマ選定のパターンが見えてきます。\n確認するポイントはこのあたりです。\n 直近10本の記事タイトルを並べる\n - 有料記事と無料記事の比率\n - 繰り返し扱っているテーマ（=その人の「勝ちパターン」） [...] - 有料記事と無料記事の比率\n - 繰り返し扱っているテーマ（=その人の「勝ちパターン」）\n - 最近になって増えたテーマ（=新しい実験）\nここがポイントで、売れてる人は「同じテーマの変奏」をうまく使っています。毎回まったく違うテーマを書いているわけではなく、得意なテーマを角度を変えて繰り返している。\n視点2: どう見せているか（タイトル・構成・価格）\n同じ内容でも「見せ方」で売上は大きく変わります。\n タイトルに数字が入っているか、疑問形か、断定形か\n - 無料部分の長さと内容（どこまで出しているか）\n - 有料部分の価格帯\n - 見出しの構造（How-to型か、リスト型か、ストーリー型か）\nこの視点は、自分の記事と直接比較できるのが強みです。「あの人は無料部分で具体例を2つ出しているのに、自分は抽象的な導入だけだった」みたいな差が具体的に見つかります。\n視点3: どう届けているか（流入経路とSNS活用）\nいい記事を書いても、届かなければ売れません。\n Xでの告知文はどう書いているか\n - 投稿頻度（週に何本ペース？）\n - 他のSNS（Threads等）との連携\n - プロフィールページの導線設計\n僕が観測している個人発信ジャンルでは、X経由の流入が目立ちます。売れてる人のXアカウントを見ると、記事の告知方法にも明確なパターンがあります。\nこの3視点を持つだけで「見方」が変わる\nここまでの3つの視点——テーマ選定・見せ方・届け方——を意識するだけで、他の人のnoteの読み方がガラッと変わります。\n「いい記事だな」で終わっていたのが、「この人はHow-to型で無料部分にチェックリストを1つ入れるパターンが多い」「Xでの告知は記事の一部を引用して、結論は有料部分に誘導している」というふうに、具体的な要素として捉えられるようになる。 [...] 試しに1つだけ、視点2（見せ方）で簡単に見てみます。自分と同じジャンルの売れてる人のnoteを開いて、無料部分をスクロールしてみてください。「この人は冒頭3段落で自分の経験談を入れている」「無料部分の最後にチェックリストが1つある」——そういう具体的な構造が見えてきます。これが「分析」です。\nこの記事の有料部分では、この3視点を使って実際に分析を進めるための具体的な手順を解説します。\n有料部分で得られるもの:\n ステップ1: 5分で作れる「分析ノート」のテンプレートと記入例\n - ステップ2: 分析対象の選び方と、3人分の分析を効率的に進める手順\n - ステップ3: 分析結果を自分の発信に変換する「差分マトリクス」の使い方\n - おまけ: よくある3つの失敗パターンと回避策\nここから先は\n3,330字\n¥  480\nログイン\nこの記事が参加している募集\n#\nnoteの書き方\n6.1万件",
+      "source": "https://note.com/takuma_signal/n/n2b5918394e33",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822822951,
+      "tags": [
+        "finance"
+      ]
+    },
+    {
+      "id": "2de1e3fc-9402-4f7f-82e6-6af1153cf28a",
+      "claim": "Competitor analysis meeting notes | Free Template | Craft",
+      "evidence": "What is a competitor analysis meeting?\nA competitor analysis meeting is a gathering where team members discuss and evaluate the standing of their competitors in the market. These meetings are crucial for understanding the competitive landscape and identifying opportunities for your company to gain an edge. Taking detailed notes during these meetings ensures that you capture all the valuable insights that emerge.\nTry our competitor analysis meeting agenda template to effectively prepare for this strategic session.\nWhat's inside this competitor analysis meeting notes template?\n Opening and introductions: Space for noting participant details and meeting objectives.\n Market overview: Area for capturing insights on market trends and impacts. [...] In a competitive business world, effective documentation during strategic meetings is crucial. This competitor analysis meeting notes template is designed to empower teams and businesses to capture crucial insights from their competitor analysis meetings. This tool goes beyond mere note-taking; it's a strategic asset for capturing and organizing critical meeting information, turning them into actionable steps and tangible results.\nWhat is a competitor analysis meeting? [...] Benefits of this competitor analysis meeting notes template\n Efficiency and clarity: This template offers a comprehensive framework for capturing critical meeting details, ensuring efficient documentation and post-meeting review. Each section is designed to bring clarity and focus, reducing the time spent organizing notes and increasing time for strategic action.\n Facilitates team collaboration and accountability: By creating a shared reference point, this template encourages alignment and collaboration among team members. It clearly outlines responsibilities and action items, promoting accountability and ensuring everyone is on the same page regarding strategic decisions and actions.",
+      "source": "https://www.craft.do/templates/competitor-analysis-meeting-notes",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822822951,
+      "tags": [
+        "automotive",
+        "ai",
+        "finance"
+      ]
+    },
+    {
+      "id": "0360e21c-7acd-4792-a54a-0ae81d22fd6c",
+      "claim": "The Essential Components of a Business Model | LaunchNotes",
+      "evidence": "Understanding the Concept of a Business Model\nA business model refers to the way in which a company operates and generates revenue. It encompasses various aspects, including the products or services offered, the target market, the distribution channels, and the pricing strategy. Essentially, a business model outlines how a company plans to create value for its customers and stakeholders.\nAt its core, a business model is a hypothesis about how an organization can create sustainable economic value. It serves as a guide for making critical decisions and setting strategic direction. By understanding the concept of a business model, entrepreneurs can establish a solid foundation for their ventures. [...] In conclusion, understanding the essential components of a business model is foundational to building a successful and sustainable organization. By comprehending the concept, recognizing the importance, and focusing on key elements, companies can design business models that create value for customers and stakeholders. Furthermore, the interplay of business model components, alignment with company goals, continuous evaluation, and adaptability to market changes are crucial for long-term viability. Embracing emerging trends and leveraging technology will shape the future of business models. As the business landscape continues to evolve, companies must stay agile, innovative, and customer-centric to thrive. [...] When developing a business model, it is important to consider the competitive landscape and industry trends. Conducting market research and analyzing customer needs and preferences can provide valuable insights for designing a successful business model.\nBusiness Model Components\nCredit: researchgate\nOne key aspect of a business model is the value proposition. This refers to the unique value that the products or services offer to customers. A compelling value proposition sets a company apart from competitors and attracts customers. It should address customer pain points and provide solutions that are superior to what is currently available in the market.",
+      "source": "https://www.launchnotes.com/blog/the-essential-components-of-a-business-model",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822829530,
+      "tags": [
+        "automotive",
+        "ai",
+        "finance"
+      ]
+    },
+    {
+      "id": "5c76d05b-bb8e-4434-afc6-2430ba6da198",
+      "claim": "What is XiaoHongShu (REDNote) | Overview (2026)",
+      "evidence": "Users can easily find engaging product demo videos or browse vibrant images and detailed notes for in-depth insights. This mix of content types makes LRB feel dynamic and interactive, catering to both those who prefer reading and those who enjoy scrolling through images or watching videos.\nXiaoHongShu/REDNote User Demographic\nXiaoHongShu (Little Red Book) has a diverse and rapidly growing user base, both in China and among overseas Chinese communities. As of 2024, the platform boasts over 300 million registered users.\nLRB is increasingly recognized as a global platform, with an estimated 15-20 million users accessing it from abroad, including large communities in Malaysia, Singapore, New Zealand, Australia, and more. [...] Below is an overview of LRB’s user demographic, including overall user data and specific insights into the Chinese populations , as well as overseas-born Chinese communities.\nOverall User Data\nXiaoHongShu, or Little Red Book, has amassed a user base exceeding 300 million registered users, with around 100 million active users each month. The gender ratio on the platform is approximately 3:7, with women comprising around 70% of the audience.\nThe user base is predominantly concentrated in tier-one and tier-two cities in China, such as Beijing, Shanghai, Guangzhou, and Shenzhen. Users primarily fall within the 18-35 age range, with a notable emphasis on Millennials and Gen Z.\nApproximately 50% of users are post-95s (those born after 1995), while 35% belong to the post-00s generation. [...] Content Style: LRB is primarily visual, emphasizing user-generated content (UGC) that includes images and videos, such as lifestyle tips, product reviews, and fashion inspiration. Weibo is more word-heavy, functioning as a microblogging platform where users often share longer text posts, news updates, and personal opinions.\n Main Audience: Both platforms attract high-value audiences, but LRB predominantly appeals to young, affluent women interested in lifestyle and shopping, while Weibo has a broader demographic, including users interested in news, entertainment, and celebrity culture. Both audiences are engaged and influential, making them valuable for brands.",
+      "source": "https://prizmdigital.co.nz/what-is-xiaohongshu",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822847227,
+      "tags": [
+        "automotive",
+        "ai",
+        "programming"
+      ]
+    },
+    {
+      "id": "509f7c19-d85a-4980-abcf-7e2f34831c8b",
+      "claim": "RedNote | Application, History, & TikTok | Britannica",
+      "evidence": "In the meantime many TikTok users flocked to RedNote, which gained more than 700,000 users in January 2025. One user explained that this was, in part, to spite the U.S. government for meddling in the private sector. The app quickly worked to accommodate new English-speaking users, adding English translation services and subtitles to its interface. It was also surmised that RedNote would go public, though some analysts remained skeptical about its potential for international growth. [...] The app’s users, largely Chinese citizens, welcomed the American users with a bemused attitude. The cross-cultural exchange fostered communication about Chinese laws and practices, though there were limitations. For example, when an American user asked a question about laws in China versus laws in the special administrative region of Hong Kong, a Chinese user responded, “We prefer not to talk about that here.”\nIn order to make money as an influencer on RedNote, users must upload a picture of themselves with their passport visible. They then can join the app’s Dandelion program, which lets influencers connect with brands to earn money. [...] TikTok shut down on January 18, 2025, but services were gradually restored by the following morning. The official TikTok policy account posted on X about the short-lived ban, thanking Trump for “providing the necessary clarity and assurance to our service providers that they will face no penalties providing TikTok to over 170 million Americans.” On January 20, 2025, the day of his inauguration, Trump signed an executive order that provided TikTok a 75-day extension, or until April 5, 2025, to find alternative owners, suggesting that a U.S. entity take 50 percent ownership of the app in a compromise. Some people thought that after the extension RedNote’s user base would soon rival TikTok’s. Many users, however, stayed on TikTok, and RedNote’s growth plateaued.",
+      "source": "https://www.britannica.com/topic/RedNote",
+      "confidence": "low",
+      "score": 15,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822847227,
+      "tags": [
+        "automotive",
+        "ai"
+      ]
+    },
+    {
+      "id": "8cb17ad4-abe8-43a3-86e3-5569ac3542c6",
+      "claim": "Note Taking App Market Report: Size, Growth, Trends & Forecast (2025–2033)",
+      "evidence": "Dropbox\n Notion\n Zoho\n Ulysses\n Simplenote\n Standard Notes\n Milanote\n Slite\n Typora\n Quip\n Squid\nReport Scope\n| Report Attributes | Details |\n --- |\n| Study Period | 2023-2032 |\n| Base Year | 2024 |\n| Forecast Period | 2026-2032 |\n| Historical Period | 2023 |\n| Estimated Period | 2025 |\n| Unit | Value (USD Billion) |\n| Key Companies Profiled | Google, Evernote, Microsoft (including OneNote and Journal), Apple (including Notes), Dropbox, Notion, Zoho, Ulysses, Simplenote, Standard Notes, Milanote, Slite, Typora, Quip, Squid |\n| Segments Covered |  By Platform Type  By Target Audience  By Feature Set  By Geography |\n| Customization Scope | Free report customization (equivalent to up to 4 analyst's working days) with purchase. Addition or alteration to country, regional & segment scope. | [...] What are the top players operating in the Note Taking App Market?\nThe major players in the market are Google, Evernote, Microsoft (including OneNote and Journal), Apple (including Notes), Dropbox, Notion, Zoho, Ulysses, Simplenote, Standard Notes, Milanote, Slite, Typora, Quip, Squid.\nWhat segments are covered in the Note Taking App Market Reports?\nThe Note Taking App Market is segmented based on Platform Type, Target Audience, Feature Set, And Geography.\nHow can I get a sample report/company profiles for the Note Taking App Market?\nThe sample report for the Note Taking App Market can be obtained on demand from the website. Also, the 24\\7 chat support & direct call services are provided to procure the sample report.\n1 INTRODUCTION  \n1.1 MARKET DEFINITION  \n1.2 MARKET SEGMENTATION [...] Based on Platform Type, the Note Taking App Market is segmented into Mobile Apps and Desktop Apps. At VMR, we observe that Mobile Apps (including smartphone and tablet versions for Android and iOS) are the dominant subsegment, commanding the largest user base and holding the highest share of daily usage volume, which is primarily driven by the proliferation of smartphones and the consumer demand for 'always on' accessibility. The market driver is the massive global mobile internet adoption (57% in 2023), which is particularly pronounced in high growth regions like Asia Pacific, where the sheer volume of new smartphone and tablet users, especially students, is propelling the market. Mobile Apps benefit from the trend of mobile first consumption, allowing for instant note creation via",
+      "source": "https://www.verifiedmarketresearch.com/product/note-taking-app-market",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822836745,
+      "tags": [
+        "automotive",
+        "ai",
+        "finance"
+      ]
+    },
+    {
+      "id": "278b18e8-0aec-465c-a6c7-a2141d0f81ad",
+      "claim": "RedNote: User Growth & Revenue Statistics (2026)",
+      "evidence": "Source: Google Play, Apple Store\nRednote Users Demographics\nThe majority of Rednote users fall within the 18-24 age group (40%), followed by 25-34 years (35%). Smaller proportions are 35-44 years (15%) and 45+ years (10%).\n| Age Group | Percentage |\n --- |\n| 18-24 years | 40% |\n| 25-34 years | 35% |\n| 35-44 years | 15% |\n| 45+ years | 10% |\nThe majority of Rednote users are female (70%), while male users account for 30%.\n| Gender | Percentage |\n --- |\n| Female | 70% |\n| Male | 30% |\nOverview of RedNote Short Videos (2013–2025)\nHow many videos are uploaded on Rednote?\nFrom 2013 to 2025, the platform has experienced exponential growth in video uploads:\n 2013–2015: Early adoption phase, approximately 1 million videos annually. [...] The ban on TikTok in the United States has been a major contributor to the exponential surge in Rednote’s user base, propelling it to over 350 million active users by January 2025. This event marked a turning point, as the majority of TikTok’s displaced U.S. users migrated to Rednote, seeking a platform that combined engaging social networking features with seamless e-commerce integration.\n| Year | Rednote Users |\n --- |\n| 2025 (Jan) | 350 million users |\n| 2024 | 220 million users |\n| 2023 | 190 million users |\n| 2022 | 160 million users |\n| 2021 | 159 million users |\n| 2020 | 121 million users |\n| 2019 | 100 million users |\n| 2018 | 19 million users |\n| 2017 | 15 million users |\n| 2016 | 7 million users |\n| 2015 | 6 million users |\n| 2014 | 3 million users |\n| 2013 | 1 million users | [...] | 2014 | 2,970,000 | 10,000 | 20,000 | 3,000,000 |\n| 2013 | 985,000 | 5,000 | 10,000 | 1,000,000 |\nSource: Statista\nOverview of Rednote Mobile App Downloads: iOS vs Android\n Android (Google Play): Over 10 million downloads with a 4.0-star rating from 122k+ reviews. The app supports global communication, breaking language barriers, and fostering connections worldwide.\n HarmonyOS (Uptodown): Approximately 88.7k downloads, rated 4.4 stars with a focus on lifestyle sharing and international friendships.\n iOS (App Store): Rated 4.9 stars with 182.9k+ reviews. Positioned as the #1 app in Social Networking, it encourages sharing life experiences, connecting globally, and engaging through user-friendly features.\nSource: Google Play, Apple Store\nRednote Users Demographics",
+      "source": "https://sendshort.ai/statistics/rednote",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822847227,
+      "tags": [
+        "automotive",
+        "finance"
+      ]
+    },
+    {
+      "id": "bd6be7b7-13e4-4536-8381-375945e2bf31",
+      "claim": "Note Taking App Market Report 2026 - Research and Markets",
+      "evidence": "Major companies operating in the note taking app market are increasing their focus on introducing innovative product, such as digital note-taking app to gain a competitive edge in the market. A digital note-taking app is a software tool that lets users create, organize, store, and access notes electronically on devices such as smartphones, tablets, or computers. For instance, in August 2023, Goodnotes, a Hong Kong-based digital paper app company, launched Goodnotes 6, a digital note-taking app. GoodNotes 6 introduces a variety of features aimed at enhancing how users create, learn, work, and take notes. This version includes advanced AI tools, such as Spellcheck for handwritten notes and AI Math Assistance for solving math problems and studying. The app also features a redesigned [...] Time Series: Five years historic and ten years forecast.  \nData: Ratios of market size and growth to related markets, GDP proportions, expenditure per capita.  \nData Segmentation: Country and regional historic and forecast data, market share of competitors, market segments.  \nSourcing and Referencing: Data and analysis throughout the report is sourced using end notes.  \nDelivery Format: Word, PDF or Interactive Report + Excel Dashboard  \nAdded Benefits:\n Bi-Annual Data Update\n Customisation\n Expert Consultant Support\nCompanies Mentioned\nThe companies featured in this Note Taking App market report include:  \n Apple Inc.\n Alphabet Inc.\n Microsoft Corporation\n Evernote Corporation\n Notion Labs Inc.\n Turtl Labs Inc.\n MyScript Inc.\n GoodNotes Inc.\n Simplenote Software LLC\n Boost Note GmbH [...] Major companies operating in the note taking app market are Apple Inc.; Alphabet Inc.; Microsoft Corporation; Evernote Corporation; Notion Labs Inc.; Turtl Labs Inc.; MyScript Inc.; GoodNotes Inc.; Simplenote Software LLC; Boost Note GmbH; Notejoy Inc.; Quip LLC; TagSpaces GmbH; Standard Notes AG; Slite AS; Milanote Inc.; Shiny Frog Ltd.; Typora LLC; Nimbus Note Technologies Inc.; JoplinApp; CintaNotes Inc.; Notability LLC.",
+      "source": "https://www.researchandmarkets.com/reports/5790688/note-taking-app-market-report",
+      "confidence": "low",
+      "score": 15,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822836745,
+      "tags": [
+        "automotive",
+        "ai",
+        "finance",
+        "programming"
+      ]
+    },
+    {
+      "id": "0bb30cc7-02d7-4664-9be6-0649c2f7d28b",
+      "claim": "Key Features of Business Models | CFA Level I Notes",
+      "evidence": "A business model describes what a business is about, how it runs its operations and generates revenue and profits, and how it differs from its competitors. A business model should outline the core elements and their interactions without going into the depth of a full-fledged business plan.\nMaster key business model features for CFA Level I with our free trial\nFeatures of a Business Model\nA business model should answer the following questions:\n1. Who are the target customers (or market)?\n2. What does the firm offer?\n3. Where does the firm sell its products or services, and does it reach its customers?\n4. How much is the pricing?\n5. How does the firm execute?\n6. What is the business organization and capabilities of the firm?\nWe discuss each of the above questions. [...] We discuss each of the above questions.\n1. Target Customers. A business model should outline the target customers of a firm. Key issues that should be seen here include the geographies, market segments, and customer segments a firm will serve. Concerning customer segments, a business model can be business-to-business (B2B) or business-to-consumer (B2C) markets.\n2. Product or Services Offered by a Firm. A business model should define a firm’s offering: products or services offered. Further, it should outline how the products and services differ from the firm’s competitors based on the target customers’ needs. A well-defined firm offering helps analysts to determine the total amount of capital available for a business and identify important competitors and risks. [...] 6. Business Organization and Capability of a Firm. A business model should outline a firm’s business organization and capabilities. This defines how a firm is structured to deliver the value proposition. A business model should give assets and capabilities (such as skilled labor and modern technology) that a firm must implement. It should also state whether these assets and capabilities are owned (insourced) or rented (outsourced) since it is important in determining business strategies and potential risks.Within the business organization of the firm and its capabilities, we need to discuss the value chain, and profitability, and unit economics.\nValue Chain",
+      "source": "https://analystprep.com/cfa-level-1-exam/corporate-issuers/key-features-of-business-models",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785822829530,
+      "tags": [
+        "automotive",
+        "ai",
+        "finance",
+        "programming"
+      ]
+    }
+  ],
+  "toolResults": {}
+}
