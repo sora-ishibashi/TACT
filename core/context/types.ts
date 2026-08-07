@@ -147,7 +147,9 @@ export interface Evidence {
   createdAt: number;
 
   // タグ（検索用）
-  tags: string[];
+tags: string[];
+
+references?: string[];
 }
 
 // =========================
@@ -193,17 +195,23 @@ export interface WorkflowContext {
     )[]
   >;
 
-  // =====================
-  // Shared Evidence
-  // =====================
+// =====================
+// Shared Evidence
+// =====================
 
-  evidence: Evidence[];
+evidence: Evidence[];
 
-  // =====================
-  // Runtime
-  // =====================
+// =====================
+// Agent Handoffs
+// =====================
 
-  agentStatus: Record<string, string>;
+handoffs: Record<string, unknown>;
+
+// =====================
+// Runtime
+// =====================
+
+agentStatus: Record<string, string>;
 
   reviewHistory: unknown[];
 

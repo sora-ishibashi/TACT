@@ -1,0 +1,45 @@
+{
+  "prompt": "\n\n========================\nTACT Workflow\n========================\n\nCurrent Agent\n\nqueryBuilder\n\n\n\n========================\nExecution Mode\n========================\n\nthink\n\nQuick\n高速・低コスト\n\nThink\n標準品質\n\nDeep\n最高品質・時間をかける\n\n\n\n========================\nCurrent Task\n========================\n\nResearcherが使用する最適な検索クエリを作成する。\n\n\n\n========================\nOriginal User Request\n========================\n\n面接の対策法を教えて\n\n\n\n========================\nAgent Responsibilities\n========================\n\n\nあなたはTACTのQueryBuilderです。\n\n責務\n・Researcherの検索品質を最大化する\n・検索意図を分析する\n・検索キーワードを構築する\n・検索対象を具体化する\n・必要なら期間・地域・対象・比較条件を追加する\n\n禁止\n・調査する\n・検索結果を要約する\n・事実を書く\n・結論を書く\n・推測を書く\n\n\n========================\nCurrent Handoff\n========================\n\n\nQueryBuilder Handoff\n\n次に動くAgentは Researcher です。\n\n検索Queryだけを設計してください。\n検索結果や分析を書いてはいけません。\n\n\n========================\nAvailable Agents\n========================\n\nplanner\nqueryBuilder\nresearcher\ndesigner\nengineer\nstakeholder\nreviewer\nwriter\n\n\n\n========================\nAvailable Tools\n========================\n\n\nweb-search\nSearch the web for recent information.\n\n\n\ncalendar\nRead today's schedule from Google Calendar.\n\n\n\n\n========================\nBrain Memory\n========================\n\nNone\n\n\n重要:\n\nBrain Memoryは\n過去のTACT実行から抽出された\n改善ルールです。\n\n必ず参考にしてください。\n\nただし現在の依頼と矛盾する場合は\n現在の依頼を優先してください。\n\n\n\n========================\nReviewer Memory\n========================\n\nNone\n\n\n\n========================\nWorkflow History\n========================\n\n\n========================\nPLANNER\n========================\n\n{\n  \"goal\": \"面接対策法の提案を行う\",\n  \"category\": \"research\",\n  \"difficulty\": \"medium\",\n  \"estimatedTime\": \"1 min\",\n  \"thinking\": \"ユーザーの依頼を分析した結果、面接対策法に関する情報収集が必要であると判断しました。Researcherを選定し、面接対策方法に関する有用な情報を収集させます。\",\n  \"reason\": \"このAgent構成を選んだ理由は、面接対策法に関する情報を収集するためにResearcherが必要であるからです。ユーザーが求める具体的な対策法を知るためには、質の高い情報が重要です。\",\n  \"plan\": [\n    {\n      \"agent\": \"researcher\",\n      \"task\": \"面接対策法に関する情報を収集する\"\n    }\n  ]\n}\n\n\n\n\n========================\nOutputs from Other Agents\n========================\n\n\n========================\nPLANNER\n========================\n\n{\n  \"goal\": \"面接対策法の提案を行う\",\n  \"category\": \"research\",\n  \"difficulty\": \"medium\",\n  \"estimatedTime\": \"1 min\",\n  \"thinking\": \"ユーザーの依頼を分析した結果、面接対策法に関する情報収集が必要であると判断しました。Researcherを選定し、面接対策方法に関する有用な情報を収集させます。\",\n  \"reason\": \"このAgent構成を選んだ理由は、面接対策法に関する情報を収集するためにResearcherが必要であるからです。ユーザーが求める具体的な対策法を知るためには、質の高い情報が重要です。\",\n  \"plan\": [\n    {\n      \"agent\": \"researcher\",\n      \"task\": \"面接対策法に関する情報を収集する\"\n    }\n  ]\n}\n\n\n\n\n========================\nQueryBuilder Search Strategy\n========================\n\nNone\n\n\n重要:\n\nResearcherはQueryBuilderが作成した\n検索方針を参考にしてください。\n\nただし検索結果の正確性は\nTool結果とEvidenceを優先してください。\n\n\n\n========================\nShared Evidence\n========================\n\n\n\n\nEvidenceには品質があります。\n\n高品質Evidenceとは\n\n・一次情報\n・公式発表\n・政府\n・論文\n・公式ドキュメント\n・最新情報\n\nです。\n\n\nEvidenceを追加する場合は、\n既存Evidenceより品質が高い場合のみ追加してください。\n\n同じ内容のEvidenceは追加しないでください。\n\n\n重要:\n\nShared Evidence は\nTACTチームが共有する確認済み情報です。\n\nAgentはEvidenceを優先してください。\n\n存在しない事実を生成してはいけません。\n\n\n\n========================\nTool Results\n========================\n\nNone\n\n\n\n重要:\n\nTool Resultsが存在する場合、\n\nTool実行は完了しています。\n\n再度toolRequestsを返してはいけません。\n\nTool Resultsを利用して\n最終JSONを完成してください。\n\n\n\n========================\nAgent Rules\n========================\n\n\n・検索戦略のみ設計する\n・検索は実行しない\n・Researcherが調査しやすいQueryを設計する\n・回答を書かない\n\n\n========================\nHandoff\n========================\n\nあなたの成果物は、\n次のAgentが利用します。\n\nそのため、\n\n・次のAgentが迷わないこと\n・不足情報が分かること\n・重要事項が分かること\n\nを意識してください。\n\n最後に必ず\n\nhandoff\n\nを出力してください。\n\n\n========================\nQueryBuilder Output Format\n========================\n\n{\n  \"intent\":\"\",\n  \"searchTargets\":[],\n  \"queries\":[\n    {\n      \"query\":\"\",\n      \"priority\":1\n    }\n  ],\n  \"reason\":[]\n}\n",
+  "response": {
+    "content": "{\n  \"intent\": \"面接で成功するための対策法を知りたい。\",\n  \"searchTargets\": [\n    \"面接対策方法\",\n    \"模擬面接\",\n    \"自己PRの作り方\",\n    \"質問集\",\n    \"フィードバックの取り方\"\n  ],\n  \"queries\": [\n    {\n      \"query\": \"面接対策法\",\n      \"priority\": 1\n    },\n    {\n      \"query\": \"模擬面接の効果\",\n      \"priority\": 2\n    },\n    {\n      \"query\": \"自己PR 書き方 面接\",\n      \"priority\": 3\n    },\n    {\n      \"query\": \"面接 質問集\",\n      \"priority\": 4\n    },\n    {\n      \"query\": \"面接 フィードバック 活用法\",\n      \"priority\": 5\n    }\n  ],\n  \"reason\": [\n    \"面接対策法には多様な方法があるため、包括的に情報を収集することが重要である。\"\n  ]\n}",
+    "toolCalls": [],
+    "toolResults": []
+  },
+  "parsed": {
+    "intent": "面接で成功するための対策法を知りたい。",
+    "searchTargets": [
+      "面接対策方法",
+      "模擬面接",
+      "自己PRの作り方",
+      "質問集",
+      "フィードバックの取り方"
+    ],
+    "queries": [
+      {
+        "query": "面接対策法",
+        "priority": 1
+      },
+      {
+        "query": "模擬面接の効果",
+        "priority": 2
+      },
+      {
+        "query": "自己PR 書き方 面接",
+        "priority": 3
+      },
+      {
+        "query": "面接 質問集",
+        "priority": 4
+      },
+      {
+        "query": "面接 フィードバック 活用法",
+        "priority": 5
+      }
+    ],
+    "reason": [
+      "面接対策法には多様な方法があるため、包括的に情報を収集することが重要である。"
+    ]
+  },
+  "evidence": [],
+  "toolResults": {}
+}

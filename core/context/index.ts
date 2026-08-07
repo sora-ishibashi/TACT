@@ -39,6 +39,13 @@ export function createContext(
     evidence: [],
 
     // =========================
+// Agent Handoffs
+// =========================
+
+handoffs: {},
+
+
+    // =========================
     // Workflow State
     // =========================
 

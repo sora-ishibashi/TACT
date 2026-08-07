@@ -1,0 +1,50 @@
+{
+  "prompt": "\n\n========================\nTACT Workflow\n========================\n\nCurrent Agent\n\nqueryBuilder\n\n\n\n========================\nExecution Mode\n========================\n\nthink\n\nQuick\n高速・低コスト\n\nThink\n標準品質\n\nDeep\n最高品質・時間をかける\n\n\n\n========================\nCurrent Task\n========================\n\nResearcherが使用する最適な検索クエリを作成する。\n\n\n\n========================\nOriginal User Request\n========================\n\nnote株式会社の競合分析をしてください\n\n\n\n========================\nAgent Responsibilities\n========================\n\n\nあなたはTACTのQueryBuilderです。\n\n責務\n・Researcherの検索品質を最大化する\n・検索意図を分析する\n・検索キーワードを構築する\n・検索対象を具体化する\n・必要なら期間・地域・対象・比較条件を追加する\n\n禁止\n・調査する\n・検索結果を要約する\n・事実を書く\n・結論を書く\n・推測を書く\n\n\n\n\n========================\nAvailable Agents\n========================\n\nplanner\nqueryBuilder\nresearcher\ndesigner\nengineer\nstakeholder\nreviewer\nwriter\n\n\n\n========================\nAvailable Tools\n========================\n\n\nweb-search\nSearch the web for recent information.\n\n\n\ncalendar\nRead today's schedule from Google Calendar.\n\n\n\n\n========================\nBrain Memory\n========================\n\nNone\n\n\n重要:\n\nBrain Memoryは\n過去のTACT実行から抽出された\n改善ルールです。\n\n必ず参考にしてください。\n\nただし現在の依頼と矛盾する場合は\n現在の依頼を優先してください。\n\n\n\n========================\nReviewer Memory\n========================\n\nNone\n\n\n\n========================\nWorkflow History\n========================\n\nWorkflow omitted\n\n\n\n========================\nOutputs from Other Agents\n========================\n\n{\n  \"planner\": {\n    \"goal\": \"note株式会社の競合分析を行う。\",\n    \"category\": \"research\",\n    \"difficulty\": \"medium\",\n    \"estimatedTime\": \"1 min\",\n    \"thinking\": \"競合分析のためには、まず必要な情報を収集することが重要です。そのため、情報収集を担当するResearcherを選びました。競合の業界動向や競合各社のデータが必要になるため、Stakeholderも選定し、ビジネス価値の評価を考慮する必要があります。次に、レビューのためReviewer、最終的な成果物を作成するWriterも必要です。\",\n    \"reason\": \"競合分析では、収集したデータを基にビジネス価値を評価し、正確な情報を提供するためのプロセスが必要です。また、最終的な成果物を作成するためにWriterを加えることで、結果を統一的にまとめることができます。\",\n    \"plan\": [\n      {\n        \"agent\": \"researcher\",\n        \"task\": \"note株式会社の競合他社の情報を収集する。\"\n      },\n      {\n        \"agent\": \"stakeholder\",\n        \"task\": \"収集した情報のビジネス価値を評価する。\"\n      },\n      {\n        \"agent\": \"reviewer\",\n        \"task\": \"収集した情報と分析の整合性を確認する。\"\n      },\n      {\n        \"agent\": \"writer\",\n        \"task\": \"競合分析のレポートを作成する。\"\n      }\n    ]\n  }\n}\n\n\n\n========================\nQueryBuilder Search Strategy\n========================\n\nNone\n\n\n重要:\n\nResearcherはQueryBuilderが作成した\n検索方針を参考にしてください。\n\nただし検索結果の正確性は\nTool結果とEvidenceを優先してください。\n\n\n\n========================\nShared Evidence\n========================\n\n\n\n\nEvidenceには品質があります。\n\n高品質Evidenceとは\n\n・一次情報\n・公式発表\n・政府\n・論文\n・公式ドキュメント\n・最新情報\n\nです。\n\n\nEvidenceを追加する場合は、\n既存Evidenceより品質が高い場合のみ追加してください。\n\n同じ内容のEvidenceは追加しないでください。\n\n\n重要:\n\nShared Evidence は\nTACTチームが共有する確認済み情報です。\n\nAgentはEvidenceを優先してください。\n\n存在しない事実を生成してはいけません。\n\n\n\n========================\nTool Results\n========================\n\nNone\n\n\n\n重要:\n\nTool Resultsが存在する場合、\n\nTool実行は完了しています。\n\n再度toolRequestsを返してはいけません。\n\nTool Resultsを利用して\n最終JSONを完成してください。\n\n\n\n========================\nAgent Rules\n========================\n\nResearcher\n\nあなたは調査専門AIです。\n\nあなたの仕事は分析ではありません。\n\nQueryBuilderが作成した検索戦略に従って、\n必要なEvidenceだけを収集してください。\n\n========================\nResearch Process\n========================\n\nStep1\n\n検索目的を確認する\n\nStep2\n\n検索結果を確認する\n\nStep3\n\nEvidence候補を抽出する\n\nStep4\n\nEvidenceの品質を比較する\n\nStep5\n\n重複を除去する\n\nStep6\n\nEvidenceを分類する\n\n========================\nEvidence Rules\n========================\n\n優先順位\n\n1\n政府\n\n2\n公式サイト\n\n3\n論文\n\n4\n企業IR\n\n5\n大手メディア\n\n6\nその他\n\n========================\n禁止事項\n========================\n\n・分析を書く\n\n・意見を書く\n\n・推測を書く\n\n・同じEvidenceを追加する\n\n・根拠のない数値を書く\n\n\nAnalyst\n\n・Researcherが収集したEvidenceを分析する\n\n・Evidence同士の関係を見つける\n\n・比較する\n\n・原因を考察する\n\n・SWOTや競争優位を整理する\n\n・新しい事実は絶対に作らない\n\n・EvidenceからInsightを作る\n\n・Evidenceから洞察を作る\n\n・同じEvidenceを繰り返さない\n\n・重要度を付ける\n\n・Evidenceが不足している場合は推測しない\n\n・RecommendationはEvidenceに基づくこと\n\n・Writerがそのまま利用できる分析を書く\n\nDesigner\n\n・Evidenceを利用する\n\n\nEngineer\n\n・Evidenceを利用する\n\n\nStakeholder\n\n・Evidenceを利用する\n\n\nReviewer\n\n・Evidenceとの整合性を確認する\n\n\nWriter\n\n・Evidenceに存在しない事実を書かない\n\n・Analyst Outputを最優先する\n\n・Reviewerの指摘を反映する\n\n・分析は禁止\n\n・文章化だけを担当する\n\n・読みやすい構成にする\n\n・見出しを付ける\n\n・箇条書きを適切に使う\n\n・結論を最初に書く\n\n\n\n========================\nQueryBuilder Output Format\n========================\n\n{\n  \"intent\":\"\",\n  \"searchTargets\":[],\n  \"queries\":[\n    {\n      \"query\":\"\",\n      \"priority\":1\n    }\n  ],\n  \"reason\":[]\n}\n\n\n",
+  "response": {
+    "content": "{\n  \"intent\": \"note株式会社の競合分析を行う\",\n  \"searchTargets\": [\n    \"note株式会社の競合サービス\",\n    \"note株式会社の市場\",\n    \"note株式会社のユーザー\",\n    \"note株式会社の料金\",\n    \"note株式会社の収益モデル\",\n    \"note株式会社の強みと弱み\"\n  ],\n  \"queries\": [\n    {\n      \"query\": \"note株式会社 競合サービス\",\n      \"priority\": 1\n    },\n    {\n      \"query\": \"note株式会社 市場動向\",\n      \"priority\": 1\n    },\n    {\n      \"query\": \"note株式会社 ユーザー層\",\n      \"priority\": 1\n    },\n    {\n      \"query\": \"note株式会社 料金プラン\",\n      \"priority\": 1\n    },\n    {\n      \"query\": \"note株式会社 収益モデル\",\n      \"priority\": 1\n    },\n    {\n      \"query\": \"note株式会社 SWOT分析\",\n      \"priority\": 1\n    }\n  ],\n  \"reason\": [\n    \"競合分析を実施するために、note株式会社の競合や市場動向、ユーザー、料金、収益モデル、強みと弱みについての情報を段階的に収集する必要があるため。\"\n  ]\n}",
+    "toolCalls": [],
+    "toolResults": []
+  },
+  "parsed": {
+    "intent": "note株式会社の競合分析を行う",
+    "searchTargets": [
+      "note株式会社の競合サービス",
+      "note株式会社の市場",
+      "note株式会社のユーザー",
+      "note株式会社の料金",
+      "note株式会社の収益モデル",
+      "note株式会社の強みと弱み"
+    ],
+    "queries": [
+      {
+        "query": "note株式会社 競合サービス",
+        "priority": 1
+      },
+      {
+        "query": "note株式会社 市場動向",
+        "priority": 1
+      },
+      {
+        "query": "note株式会社 ユーザー層",
+        "priority": 1
+      },
+      {
+        "query": "note株式会社 料金プラン",
+        "priority": 1
+      },
+      {
+        "query": "note株式会社 収益モデル",
+        "priority": 1
+      },
+      {
+        "query": "note株式会社 SWOT分析",
+        "priority": 1
+      }
+    ],
+    "reason": [
+      "競合分析を実施するために、note株式会社の競合や市場動向、ユーザー、料金、収益モデル、強みと弱みについての情報を段階的に収集する必要があるため。"
+    ]
+  },
+  "evidence": [],
+  "toolResults": {}
+}

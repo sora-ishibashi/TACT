@@ -4,12 +4,12 @@ export type AgentId =
   | "planner"
   | "queryBuilder"
   | "researcher"
+  | "analyst"
   | "designer"
   | "engineer"
   | "stakeholder"
   | "reviewer"
   | "writer";
-
 
 export interface Agent {
 

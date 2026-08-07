@@ -3,6 +3,7 @@ import { Evidence } from "../context/types";
 import { AgentId } from "../agents/types";
 import { responsibilities } from "./responsibilities";
 import { formatBrainMemory } from "../brain/memory";
+import { outputFormats } from "./outputFormats";
 
 
 const availableAgents = [
@@ -42,16 +43,87 @@ export function buildPrompt(
   >,
   toolResults?: Record<string, unknown>,
   memory?: Record<string, string[]>,
+  handoffs?: Record<string, unknown>,
   evidence: Evidence[] = [],
   mode: "quick" | "think" | "deep" = "think"
 ) {
 
 
+const visibleOutputs: Record<AgentId, string[]> = {
+
+  planner: [],
+
+  queryBuilder: [
+    "planner"
+  ],
+
+  researcher: [
+    "planner",
+    "queryBuilder"
+  ],
+
+  analyst: [
+    "planner",
+    "researcher"
+  ],
+
+  designer: [
+    "planner",
+    "analyst"
+  ],
+
+  engineer: [
+    "planner",
+    "designer"
+  ],
+
+  stakeholder: [
+    "planner",
+    "analyst"
+  ],
+
+  reviewer: [
+    "planner",
+    "researcher",
+    "analyst",
+    "designer",
+    "engineer",
+    "stakeholder"
+  ],
+
+  writer: [
+    "planner",
+    "researcher",
+    "analyst",
+    "designer",
+    "engineer",
+    "stakeholder",
+    "reviewer"
+  ],
+
+};
+
 const previousOutputs =
   outputs
-    ? Object.keys(outputs).join(", ")
-    : "None";
+    ? visibleOutputs[agentId]
+        .map((id) => {
 
+          const output = outputs[id];
+
+          if (!output) return null;
+
+          return `
+========================
+${id.toUpperCase()}
+========================
+
+${JSON.stringify(output, null, 2)}
+`;
+
+        })
+        .filter(Boolean)
+        .join("\n")
+    : "None";
 
   const queryBuilderOutput =
     agentId === "researcher" &&
@@ -65,7 +137,21 @@ const previousOutputs =
 
 
 
-const workflowHistory = "Workflow omitted";
+const workflowHistory =
+  stepOutputs &&
+  Object.keys(stepOutputs).length > 0
+    ? Object.values(stepOutputs)
+        .map(
+          ({ agent, output }) => `
+========================
+${agent.toUpperCase()}
+========================
+
+${JSON.stringify(output, null, 2)}
+`
+        )
+        .join("\n")
+    : "None";
 
 
 const toolOutput =
@@ -89,139 +175,173 @@ const toolOutput =
 
 
 
-const evidenceText =
+const evidenceSummary =
   evidence
-    .map(e => e.claim)
+    .map(
+      (e) => `
+ID: ${e.id}
+Claim: ${e.claim}
+Source: ${e.source ?? "Unknown"}
+`
+    )
     .join("\n");
 
 
-// ==========================
-// Agent別 Output Format
-// ==========================
-
-const outputFormats: Record<AgentId, string> = {
+const agentRules: Record<AgentId, string> = {
 
 planner: `
-========================
-Planner Output Format
-========================
-
-{
-  "goal":"",
-  "category":"",
-  "difficulty":"",
-  "estimatedTime":"",
-  "thinking":"",
-  "reason":"",
-  "plan":[]
-}
+・ユーザー要求を整理する
+・ゴールを明確にする
+・Workflowを設計する
+・回答を書かない
 `,
 
 queryBuilder: `
-========================
-QueryBuilder Output Format
-========================
-
-{
-  "intent":"",
-  "searchTargets":[],
-  "queries":[
-    {
-      "query":"",
-      "priority":1
-    }
-  ],
-  "reason":[]
-}
+・検索戦略のみ設計する
+・検索は実行しない
+・Researcherが調査しやすいQueryを設計する
+・回答を書かない
 `,
 
 researcher: `
-========================
-Researcher Output Format
-========================
+・Evidenceのみ収集する
+・推測しない
+・分析しない
+・高品質Evidenceを優先する
+・出典を保持する
+`,
 
-{
-  "toolRequests":[],
-  "evidence":{
-    "market":[],
-    "competitors":[],
-    "users":[],
-    "businessModel":[],
-    "features":[],
-    "technology":[],
-    "financial":[],
-    "news":[],
-    "other":[]
-  },
-  "missingInformation":[],
-  "nextSearchSuggestions":[]
-}
+analyst: `
+・Evidenceを分析する
+・比較する
+・原因を整理する
+・洞察を作る
+・新しい事実は禁止
+・Evidenceに基づいて考察する
 `,
 
 designer: `
-========================
-Designer Output Format
-========================
-
-{
-  "design":[],
-  "assumptions":[]
-}
+・分析結果をUI・UXへ落とし込む
+・Evidenceを優先する
+・設計のみ担当する
 `,
 
 engineer: `
-========================
-Engineer Output Format
-========================
-
-{
-  "architecture":[],
-  "implementation":[]
-}
+・技術設計を行う
+・実装方針を作る
+・Evidenceを優先する
 `,
 
 stakeholder: `
-========================
-Stakeholder Output Format
-========================
-
-{
-  "value":[],
-  "risks":[],
-  "recommendations":[]
-}
+・ユーザー価値を評価する
+・事業価値を評価する
+・リスクを整理する
 `,
 
 reviewer: `
-========================
-Reviewer Output Format
-========================
-
-{
-  "approved": true,
-  "score": 92,
-  "issues": [],
-  "strengths": [],
-  "improvements": [],
-  "missingEvidence": []
-}`,
+・成果物をレビューする
+・Evidenceとの整合性を確認する
+・改善点を抽出する
+・品質だけを評価する
+`,
 
 writer: `
-========================
-Writer Output Format
-========================
-
-{
-  "title":"",
-  "summary":"",
-  "answer":"",
-  "nextActions":[]
-}
+・完成した成果物を作成する
+・Analystの分析を文章化する
+・Reviewerを反映する
+・新しい分析は禁止
+・新しい事実は禁止
 `
-
 };
 
+
 const outputFormat = outputFormats[agentId];
+
+const handoffInstructions: Record<AgentId, string> = {
+
+  planner: `
+Planner Handoff
+
+次に動くAgentは QueryBuilder です。
+
+Researcherが検索しやすいように、
+目的・調査対象を明確にしてください。
+`,
+
+  queryBuilder: `
+QueryBuilder Handoff
+
+次に動くAgentは Researcher です。
+
+検索Queryだけを設計してください。
+検索結果や分析を書いてはいけません。
+`,
+
+  researcher: `
+Researcher Handoff
+
+次に動くAgentは Analyst です。
+
+分析しやすいように、
+Evidenceを整理してください。
+`,
+
+  analyst: `
+Analyst Handoff
+
+次に動くAgentは Designer / Engineer / Stakeholder です。
+
+Evidenceから
+
+・重要な洞察
+・比較
+・原因
+・リスク
+・機会
+
+を整理してください。
+`,
+
+  designer: `
+Designer Handoff
+
+次に動くAgentは Reviewer です。
+
+設計判断が分かる形でまとめてください。
+`,
+
+  engineer: `
+Engineer Handoff
+
+次に動くAgentは Reviewer です。
+
+実装判断が分かる形でまとめてください。
+`,
+
+  stakeholder: `
+Stakeholder Handoff
+
+次に動くAgentは Reviewer です。
+
+価値・リスクを整理してください。
+`,
+
+  reviewer: `
+Reviewer Handoff
+
+次に動くAgentは Writer です。
+
+不足点を具体的に指摘してください。
+`,
+
+  writer: `
+Writer Handoff
+
+あなたが最終Agentです。
+
+完成品を作成してください。
+`
+};
 
 return `
 
@@ -274,7 +394,11 @@ Agent Responsibilities
 
 ${responsibilities[agentId]}
 
+========================
+Current Handoff
+========================
 
+${handoffInstructions[agentId]}
 
 ========================
 Available Agents
@@ -357,7 +481,7 @@ Tool結果とEvidenceを優先してください。
 Shared Evidence
 ========================
 
-${evidenceText}
+${evidenceSummary}
 
 
 Evidenceには品質があります。
@@ -416,41 +540,29 @@ Tool Resultsを利用して
 Agent Rules
 ========================
 
-Researcher
+${agentRules[agentId]}
 
-・事実だけ収集する
-・Evidenceを増やす
-・推測を書かない
+========================
+Handoff
+========================
 
+あなたの成果物は、
+次のAgentが利用します。
 
-Designer
+そのため、
 
-・Evidenceを利用する
+・次のAgentが迷わないこと
+・不足情報が分かること
+・重要事項が分かること
 
+を意識してください。
 
-Engineer
+最後に必ず
 
-・Evidenceを利用する
+handoff
 
+を出力してください。
 
-Stakeholder
-
-・Evidenceを利用する
-
-
-Reviewer
-
-・Evidenceとの整合性を確認する
-
-
-Writer
-
-・Evidenceに存在しない事実を書かない
-
-
-
-${outputFormat}
-
-`;
+${outputFormat}`;
 
 }

@@ -1,0 +1,167 @@
+{
+  "prompt": "\n\n========================\nTACT Workflow\n========================\n\nCurrent Agent\n\nwriter\n\n\n\n========================\nExecution Mode\n========================\n\nthink\n\nQuick\n高速・低コスト\n\nThink\n標準品質\n\nDeep\n最高品質・時間をかける\n\n\n\n========================\nCurrent Task\n========================\n\n競合分析の結果を文書としてまとめる\n\n\n\n========================\nOriginal User Request\n========================\n\nnote株式会社の競合他社を分析して\n\n\n\n========================\nAgent Responsibilities\n========================\n\n\nあなたはTACTのWriterです。\n\n責務\n・Evidenceをもとに成果物を完成させる\n・読みやすく整理する\n・論理的にまとめる\n\n禁止\n・Evidenceに存在しない事実を書く\n・推測を書く\n・情報を誇張する\n\n\n\n\n========================\nAvailable Agents\n========================\n\nplanner\nqueryBuilder\nresearcher\ndesigner\nengineer\nstakeholder\nreviewer\nwriter\n\n\n\n========================\nAvailable Tools\n========================\n\n\nweb-search\nSearch the web for recent information.\n\n\n\ncalendar\nRead today's schedule from Google Calendar.\n\n\n\n\n========================\nBrain Memory\n========================\n\nNone\n\n\n重要:\n\nBrain Memoryは\n過去のTACT実行から抽出された\n改善ルールです。\n\n必ず参考にしてください。\n\nただし現在の依頼と矛盾する場合は\n現在の依頼を優先してください。\n\n\n\n========================\nReviewer Memory\n========================\n\nNone\n\n\n\n========================\nWorkflow History\n========================\n\nWorkflow omitted\n\n\n\n========================\nOutputs from Other Agents\n========================\n\nplanner, queryBuilder, researcher, reviewer\n\n\n\n========================\nQueryBuilder Search Strategy\n========================\n\nNone\n\n\n重要:\n\nResearcherはQueryBuilderが作成した\n検索方針を参考にしてください。\n\nただし検索結果の正確性は\nTool結果とEvidenceを優先してください。\n\n\n\n========================\nShared Evidence\n========================\n\nNote Taking App Market- Global Industry Analysis and Forecast\nHow to Run Product Competitive Analysis That Leads to Better Product Decisions\nnote、約30万件の有料記事を分析。はじめたばかりでも収益につながりやすいテーマが明らかに｜note株式会社\nクリエイターが開拓した新市場、10年の変化を数値で振り返る。noteでの売上トップ1,000人の平均年収は1,100万円超え｜note株式会社\nnote Research Tool - Chrome Web Store\nHow a Market-State Note Is Written | MARKETDPRO\n競合分析のやり方を8ステップで解説｜活用するフレームワークや調査のポイントとは - NPSソリューション | NTTドコモビジネスX（旧：NTTコム オンライン）\n競合分析で自社の強みを知ろう！8段階で進める分析方法 | きゃらくるカート\n売れてるnoteを「競合分析」して自分の発信を伸ばす3ステップ｜たくま｜発信で稼ぐ人\n【note株式会社】を勝手に企業リサーチ★byプラスカラー | 株式会社プラスカラー\n\n\nEvidenceには品質があります。\n\n高品質Evidenceとは\n\n・一次情報\n・公式発表\n・政府\n・論文\n・公式ドキュメント\n・最新情報\n\nです。\n\n\nEvidenceを追加する場合は、\n既存Evidenceより品質が高い場合のみ追加してください。\n\n同じ内容のEvidenceは追加しないでください。\n\n\n重要:\n\nShared Evidence は\nTACTチームが共有する確認済み情報です。\n\nAgentはEvidenceを優先してください。\n\n存在しない事実を生成してはいけません。\n\n\n\n========================\nTool Results\n========================\n\nNone\n\n\n\n重要:\n\nTool Resultsが存在する場合、\n\nTool実行は完了しています。\n\n再度toolRequestsを返してはいけません。\n\nTool Resultsを利用して\n最終JSONを完成してください。\n\n\n\n========================\nAgent Rules\n========================\n\nResearcher\n\n・事実だけ収集する\n・Evidenceを増やす\n・推測を書かない\n\n\nDesigner\n\n・Evidenceを利用する\n\n\nEngineer\n\n・Evidenceを利用する\n\n\nStakeholder\n\n・Evidenceを利用する\n\n\nReviewer\n\n・Evidenceとの整合性を確認する\n\n\nWriter\n\n・Evidenceに存在しない事実を書かない\n\n\n\n\n========================\nWriter Output Format\n========================\n\n{\n  \"title\":\"\",\n  \"summary\":\"\",\n  \"answer\":\"\",\n  \"nextActions\":[]\n}\n\n\n",
+  "response": {
+    "content": "{\n  \"title\": \"note株式会社の競合分析\",\n  \"summary\": \"note株式会社の競合他社に関する分析を行い、市場の動向と競争力を示します。\",\n  \"answer\": \"note株式会社の競合分析結果は以下の通りです。競合となる主な企業には、noteと同様のプラットフォームを提供する企業（ブログ、クリエイター向けサービスなど）があります。特に、note株式会社は約30万件の有料記事を分析し、特に収益化のしやすいテーマに注力しています。10年かけてクリエイターが開拓した新市場において、noteの売上トップ1,000人の平均年収は1,100万円を超えています。これに対抗する競合と比較すると、他社の提供する収益化の支援や市場の動向も重要です。競合分析を通じて、noteが持つ強みや新たに注力すべき分野を明確にすることが求められます。特に市場の変化に応じたフレームワークを活用し、顧客ニーズに即した商品戦略へとつなげることが期待されます。\",\n  \"nextActions\": []\n}",
+    "toolCalls": [],
+    "toolResults": []
+  },
+  "parsed": {
+    "title": "note株式会社の競合分析",
+    "summary": "note株式会社の競合他社に関する分析を行い、市場の動向と競争力を示します。",
+    "answer": "note株式会社の競合分析結果は以下の通りです。競合となる主な企業には、noteと同様のプラットフォームを提供する企業（ブログ、クリエイター向けサービスなど）があります。特に、note株式会社は約30万件の有料記事を分析し、特に収益化のしやすいテーマに注力しています。10年かけてクリエイターが開拓した新市場において、noteの売上トップ1,000人の平均年収は1,100万円を超えています。これに対抗する競合と比較すると、他社の提供する収益化の支援や市場の動向も重要です。競合分析を通じて、noteが持つ強みや新たに注力すべき分野を明確にすることが求められます。特に市場の変化に応じたフレームワークを活用し、顧客ニーズに即した商品戦略へとつなげることが期待されます。",
+    "nextActions": []
+  },
+  "evidence": [
+    {
+      "id": "1f9dbf57-68fc-4a75-8dbd-ed9e0e0d1d81",
+      "claim": "Note Taking App Market- Global Industry Analysis and Forecast",
+      "evidence": "South America (Brazil, Argentina, Columbia and Rest of South America)\nKey Players / Competitors Profiles Covered in Brief in Global Note Taking App Market Report in Strategic Perspective:\n1. Google Keep\n2. Evernote Corporation\n3. Dropbox\n4. Standard Notes\n5. Microsoft\n6. Apple Inc.\n7. Notion\n8. Slite\n9. Alphabet Inc.\n10. Notion Labs Inc.\n11. Turtl Labs Inc.\n12. MyScript Inc.\n13. GoodNotes Inc.\n14. Simplenote Software LLC\n15. Boost Note GmbH\n16. Notejoy Inc.\n17. Quip LLC\n18. TagSpaces GmbH\n19. Milanote\n20. Shiny Frog Ltd.\n21. Typora LLC\n22. Nimbus Note Technologies\n23. Zoho Corporation\n24. ClickUp\n25. Noteshelf\nFrequently Asked Questions\n1. What is the projected size and growth of the Note Taking App Market? [...] | 15 January 2026 | Microsoft | The firm announced the global rollout of advanced semantic search and automated meeting summarization within the OneNote ecosystem. | This development strengthens its competitive moat against standalone AI note-takers by leveraging deep Microsoft 365 integration. |\n| 03 July 2025 | Apple Inc. | Apple introduced system-wide handwriting-to-text improvements and collaborative canvas updates for its native Notes application. | The move increases pressure on third-party developers like GoodNotes by offering native, low-latency handwriting tools for iPad users. | [...] The reports also help in understanding the Market dynamic, structure by analyzing the market segments and projecting the Note Taking App Market size. Clear representation of competitive analysis of key players by Vehicle type, price, financial position, product portfolio, growth strategies, and regional presence in the Note Taking App Market make the report investor’s guide.\nRecent Industry Developments\n| Exact Date | Company | Development | Impact |\n ---  --- |\n| 22 January 2026 | BOOX | The company released Firmware V4.0, introducing integrated Note Outlines and advanced File-To-Note conversion capabilities. | This update significantly enhances document-to-note workflows for professional and academic users in the E-ink hardware segment. |",
+      "source": "https://www.maximizemarketresearch.com/market-report/note-taking-app-market/148234",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848856173,
+      "tags": [
+        "automotive",
+        "ai",
+        "finance"
+      ]
+    },
+    {
+      "id": "98925333-232d-4ebd-ae9b-9d8a34fac14e",
+      "claim": "How to Run Product Competitive Analysis That Leads to Better Product Decisions",
+      "evidence": "Can TicNote Cloud help manage ongoing competitive product analysis?\nYes. TicNote Cloud can keep transcripts, notes, documents, and AI-generated summaries inside shared Projects, so your product competitive analysis stays tied to source evidence over time. That makes it easier to revisit past findings, compare updates, and share one working record across PM, research, and marketing teams.\nWhy use TicNote Cloud instead of scattered notes and separate AI tools for competitor product analysis? [...] For every finding, save the source link, timestamp, and a short note so each claim stays verifiable. TicNote Cloud is useful here because teams can store review excerpts, transcripts, call notes, uploaded docs, and AI summaries in one Project, which makes it easier to defend a score later or refresh the analysis without starting over.\nHow do you turn competitor product analysis into roadmap decisions?\nA product competitive analysis only matters when it changes what your team does next. The goal is not to collect more notes. It's to turn evidence into clear bets, owners, and measures of success. If you need a format for sharing decisions, this guide on turning research into action plans can help.\nFind patterns, not isolated feature gaps [...] TL;DR: skill agent workflow for faster competitive research\nStart your product competitive analysis as a decision system, not a note pile. This guide is for product managers, founders, marketers, researchers, and strategy teams who need a repeatable way to set scope, pick the right competitors, compare features, gather proof, normalize findings in a competitor feature matrix, and turn insights into owners, timelines, and KPIs.\nCompetitive research often breaks down when evidence lives in scattered tabs, docs, and meeting notes. That slows decisions and makes follow-through weak. A workspace like TicNote Cloud helps teams capture source evidence, organize competitor findings, and keep outputs shareable without losing context.",
+      "source": "https://ticnote.com/en/blog/product-competitive-analysis",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848856173,
+      "tags": [
+        "automotive",
+        "ai",
+        "finance"
+      ]
+    },
+    {
+      "id": "65657289-d90d-445b-ac84-e518d5468d86",
+      "claim": "note、約30万件の有料記事を分析。はじめたばかりでも収益につながりやすいテーマが明らかに｜note株式会社",
+      "evidence": "noteは今後も、あらゆるクリエイターが収益化を進めやすいようnoteのプラットフォーム活用法とコンテンツ相場の情報提供を続けてまいります。\nnoteでは、本レポートでご紹介した役に立つスキルや課題解決ノウハウを持つ方の収益化を支援しています。詳しくは、以下のページをご参照ください。\nnoteの収益化メニュー｜note（ノート）   クリエイターの創作をささえる、noteの収益化メニュー。2つの課金形態と4つのメニューから、自分にあったやり方でコンテンツ   note.com\n1月14日まで開催中「noteクリエイター感謝祭」\n現在、クリエイターの収益を後押しする「noteクリエイター感謝祭」を開催しています。noteの有料コンテンツを購入した方に最大100%のポイント還元を行っています。\n年末年始は、noteの投稿数・閲覧数がもっとも伸びる時期です。1年の抱負と連動して自己研鑽できるお役立ちコンテンツの需要が伸びるため、有料コンテンツの販売を始めるには絶好のタイミングです。\n＜ポイントバックキャンペーン概要＞  \n期間：2025年12月1日（月）〜 2026年1月14日（水）  \n内容：対象商品の購入・加入ごとに抽選で最大100%還元  \n総還元額：5000万円分のnoteポイント  \n対象：有料記事、有料マガジン、メンバーシップ、定期購読マガジン\n▼詳細は、以下をご参照ください。\nポイントバックキャンペーン｜note（ノート）    note.com\n分析概要\nnoteの市場（メンバーシップ・有料記事の成長率）\n 期間：2024年11月と2025年11月の同月比較\n 対象：noteメンバーシップ全体、プラットフォーム全体の有料記事売上\n有料記事（単価・文字数の分析） [...] noteの有料記事は、誰でも読める部分（無料エリア）と、購入した人だけ読める部分（有料エリア）を分けて設定できます。\n実用ノウハウ系の記事の場合、有料エリアの文字数が読み物系より少ない傾向にあるにもかかわらず、平均単価は約1.9倍です。無料エリアの文字数は読み物記事の約1.5倍で、「この記事を読むと○○ができるようになる」という価値を有料エリアの前にしっかり伝えることで、購入につなげています。\n読み物系の場合  \n「その人の作品を読みたい」というファンが購入するため、いきなり有料エリアから始まることもあります。有料エリアで読み応えのある体験を提供することが重要です。\n以下の表は、読み物記事の文字数を1.0とした場合の比較です。\n自分のスキルや経験を収益化したい方へ\n今回の分析結果は、これから有料コンテンツの販売に挑戦したいクリエイターにとっても、多くのヒントを含んでいます。これらの結果を踏まえて、執行役員の米岡がコメントします。\n総括コメント：note株式会社 執行役員 米岡 徹\nnoteは「だれもが創作をはじめ、続けられるようにする」というミッションのもと、クリエイターがそれぞれの専門性や経験を活かして持続的に収益を得られる環境づくりを推進しています。\n今回の分析を通じて明らかになったのは、AI時代だからこそ「量」ではなく、「その人にしか語れない経験やノウハウ」にこそ価値がつく、ということです。読者は「この人から学びたい」と思えるコンテンツにお金を支払っています。\nこれから始める方は、まずこれまでの実体験とご自身の視点や考えを整理し、発信してください。自分では普通と思うことも、誰かの課題を解決できるはずです。そこから例えば、ランチ一回分の対価を得る。そんな小さくとも確かな手応えが、創作活動の糧になり継続する支えになるはずです。 [...] 3. コンテンツ別の平均価格：実用ノウハウ系は1842円、読み物系は983円\n約30万件にのぼる有料記事のうち、売れている記事（各分類の売上上位20%）を分析しました。その結果、コンテンツのタイプによって、平均価格に大きな差があることが明らかになりました。実用ノウハウ系の平均価格は1842円で、読み物系（983円）の約1.9倍です。\n＜コンテンツのタイプ分類＞\n 実用ノウハウ系：収入アップやスキル向上、課題解決につながることを期待して購入されるコンテンツ（例：投資ノウハウ、IT・ビジネススキル、キャリア相談など）\n 読み物系：読む体験自体が目的であり、楽しむ・知るといった消費行動が中心のコンテンツ（例：小説、マンガ、エッセイ、コラムなど）\n実用ノウハウ系コンテンツは、「この記事を読むと、○○ができるようになる」「この方法で課題が解決する」といった具体的な価値を提示しています。読者は、得られるスキルや解決策に対して「元が取れる」と感じれば、高単価でも購入する傾向があることがデータで示されています。\n4. 文字数と売上：長く書けば売れるわけではなく、相関はほぼゼロ\n売れている記事の分析から、文字数と売上にはほとんど関連がないことが明らかになりました。有料エリアの文字数と売上の関連性を分析したところ、実用ノウハウ系では相関係数が-0.023、読み物系では0.011と、いずれもほぼゼロ（\\2）でした。「たくさん書けば売れる」というわけではないことがデータで示されています。\n\\2：相関係数は-1〜1の範囲をとり、0に近いほど関連性が弱いことを意味します。\n実用ノウハウ系の場合  \nnoteの有料記事は、誰でも読める部分（無料エリア）と、購入した人だけ読める部分（有料エリア）を分けて設定できます。",
+      "source": "https://note.jp/n/n8522197d1ced",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848844776,
+      "tags": [
+        "ai",
+        "finance"
+      ]
+    },
+    {
+      "id": "b5bd0d0d-7a2f-4327-bc8d-dbd68a7e24c9",
+      "claim": "クリエイターが開拓した新市場、10年の変化を数値で振り返る。noteでの売上トップ1,000人の平均年収は1,100万円超え｜note株式会社",
+      "evidence": "note株式会社\n見出し画像 \nクリエイターが開拓した新市場、10年の変化を数値で振り返る。noteでの売上トップ1,000人の平均年収は1,100万円超え\nnote株式会社%22%20d%3D%22M-100-100h300v300h-300z%22%2F%3E%3C%2Fsvg%3E)\nnote株式会社\nnoteのサービス開始10周年を記念して、クリエイターエコノミーの成長とそれに伴う情報発信やコミュニケーションの変化をまとめました。以下、主なトピックスです。\n✓新しい経済圏が生まれ、個人で稼ぐ時代が確立  \n✓ネット発コンテンツが続々ヒット  \n✓時代とともに、情報発信やコミュニケーションの在り方が変化\nnote株式会社のミッションである「だれもが創作をはじめ、続けられるようにする」を実現するために、より使い勝手が良く、クリエイターにさまざまなチャンスを提供するサービスとして、これからも運営してまいります。\n新しい経済圏が生まれ、個人で稼ぐ時代が確立\nこれまで商品やサービスを受けとる側だった人々が、みずから販売して収益をあげるクリエイターエコノミー。2014年、「好きなことで生きていく」というYouTubeのCMは大きな話題を呼び、この新たな市場が生まれました。現在の国内市場規模は約1兆6,552億円（※1）です。\nnoteではクリエイターが自由に値づけをして自分のコンテンツを販売することができ、現在では累計15.5万人もの方が収益を得ています。noteでの売上トップ1,000に入る方の年間平均売上は、1.8万円から2023年度は1,160万円（※2）と、この10年で飛躍的に増加しました。 [...] 初期のインターネットビジネスは広告モデルが主流で、ほとんどのコンテンツは無料で公開されていました。noteのサービス開始直後の2014年6月には、人気雑誌が読み放題のdマガジンが生まれ、2015年にはNetflixやAmazon Prime Videoが日本へ上陸。コンテンツの対価を視聴者や読者が支払う、課金型も普及しました。収益モデルが多様化して、2022年のネットコンテンツ市場は2014年比で2.5倍の5兆円（※3）を突破しています。\nまた、個人から商品やサービスを購入する行為もぐっと身近になり、フリマアプリのような個人間ECの市場規模は、調査がはじまった2018年の1兆5,891億円から2022年は2兆3,630億円（※4）と1.5倍に増加。ネットコンテンツでも、同様の消費行動が起きています。\nnoteでコンテンツを購入したことがある方は、この10年間で累計350万人（2024年3月末時点）にのぼり、1ヶ月あたりの平均支払い金額は2,683円（※5）とクリエイターのコンテンツを買うことも、すっかり定着したと言えます。\n実際に、noteでは個人で読者課金型のメディアを運営し、多くの支持を集めているクリエイターが多数活動しています。\n経済ジャーナリスト・後藤達也さん  \n月額500円からのメンバーシップ（サブスクリプション）で、経済ニュースや投資の基本を分かりやすく開設するメディアを運営。3万人以上の方が参加しています。\n後藤達也｜note   経済ニュースを「わかりやすく、おもしろく」。経済や投資になじみのない方を念頭に、偏りのない情報発信を目指しています。国民の   note.com\n漫画家・かっぴーさん  \n映像化や舞台化もされた大人気マンガ『左ききのエレン』が全話読めるメンバーシップを運営。2023年は、熱心な読者から2,000万円超の購読料が集まっています。 [...] また、新型コロナウイルスが流行した2020年を境に、オンラインを中心としたライフスタイルが主流となり、投稿数はさらに増加。現在は4,344万件（2024年3月末時点）の記事が集まっています。\nnoteはクリエイターが収益を上げられるプラットフォームであると同時に、さまざまなクリエイターの自己表現の場としても成長してきました。たくさんのクリエイターが、noteで気の合う仲間を見つけ、活動の幅を広げ、新たなファンを獲得しています。ほんの一例ですが、noteを彩ってくださっているクリエイターをご紹介します。\n消費者と企業間のコミュニケーションにも変化が起きました。情報発信ツールが多様化したことで、広告を通じた自社の宣伝だけでなく、消費者の共感を呼ぶストーリーをオウンドメディアに投稿したり、SNSでインタラクティブなコミュニケーションを行うようになりました。\nこうした動きは、企業だけではありません。2020年に新型コロナウイルスが流行した際は、note上で専門家有志の会が情報発信を開始。先の見えない状況に誰もが不安を抱える中で、専門家からのリアルタイムな情報が、多くのひとの支えになりました。\n公的な団体や官公庁が発信する意義が高まる中、現在では、ほぼすべての都道府県で、1つ以上の自治体がnoteを活用して情報発信を行っています。\n※1出所：三菱UFJリサーチ&コンサルティング『国内クリエイターエコノミーに関する調査結果』  \n※2：2014年4月-2015年3月、2023年4月-2024年3月で年間売上トップ1,000クリエイターの平均売上  \n※3出所：一般財団法人デジタルコンテンツ協会『デジタルコンテンツ白書』  \n※4出所：経済産業省『電子商取引に関する市場調査』  \n※5：2023年4月-2024年3月の平均額\n #notenews\n #note10周年",
+      "source": "https://note.jp/n/n131d989e370e",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848828584,
+      "tags": [
+        "finance"
+      ]
+    },
+    {
+      "id": "fa62a73d-e0c3-4f89-acc5-8a8db22f295f",
+      "claim": "note Research Tool - Chrome Web Store",
+      "evidence": "「note Research Tool」は、note（ノート）で売れる・読まれる記事を書きたいクリエイターのための、競合調査・分析を圧倒的に効率化するChrome拡張機能です。 note上で気になった有料記事や人気記事のページを開き、拡張機能のボタンを押すだけで、記事の需要や構成を解き明かすための重要データ（タイトル・価格・著者・スキ数・コメント数・目次）を自動的に抽出します。 さらに、抽出した複数記事のデータから、ChatGPTやClaude等のLLM（大規模言語モデル）の性能を最大限に引き出す「競合分析・市場調査用プロンプト」をワンクリックで作成。あとはクリップボードにコピーしてAIに貼り付けるだけで、プロ水準の市場調査が完了します。 【🌟 主な機能と特徴】 1. データの自動抽出 noteの記事ページから、以下の情報を一瞬でスクレイピングします。 ・タイトル ・価格（無料/有料の判別、金額の取得） ・著者名 ・スキ数（読者の熱量指標） ・コメント数（エンゲージメント指標） ・目次（H2/H3などの見出し構成） 2. AI競合分析プロンプトの自動生成 複数（最大30件）の記事データをストックし、それらを横断して比較・分析するための専用プロンプトを自動で組み上げます。 AIに「読者の熱量分析」「刺さるパワーワードの抽出」「売れる構成の共通パターンと競合のいない抜け穴の発見」を的確に指示できるため、ご自身のnote記事の企画や構成案作りに直結します。 3. シンプルで直感的なUI ・集めた記事はポップアップ内でカード状に一覧表示。 ・1日3記事まで誰でも無料で利用可能。 ・Pro版ライセンスキーの入力で、無制限（上限30記事までの一括分析等）のフル機能を開放。 【💡 こんな方におすすめ】 ・これからnoteで有料記事を販売したい方 [...] 【💡 こんな方におすすめ】 ・これからnoteで有料記事を販売したい方 ・競合（ライバル）がどんなテーマで、どんな目次構成で記事を書いているか分析したい方 ・売れている記事のタイトルの付け方や価格設定の相場を知りたい方 ・ChatGPT等のAIを使って、記事の構成案や企画を壁打ちしたい方 ※免責事項 ・本機能は、note株式会社の公式提供ツールではありません。 ・ページのHTML構造（DOM）の変更により、一時的にデータが抽出できなくなる場合があります。（アップデートで随時対応いたします） ・アクセス負荷に配慮し、自動巡回ではなくユーザーの能動的なクリック時のみデータを取得します。 [...] PoshPop | Poshmark Closet Bot\n4.5\nAverage rating 4.5 out of 5 stars.\nLearn more about results and reviews.\nPoshmark seller automation tool that is simple and affordable for sharing on Poshmark\n\nASO Genius Free — Play Store ASO Analyzer\n0.0\nAverage rating 0 out of 5 stars.\nLearn more about results and reviews.\nFree Google Play Store ASO analyzer. Audit any app listing for title, keyword, description, review & competitor insights.\n\nNoteStack — Substack Analytics & AI-Powered Scheduler\n4.0\nAverage rating 4 out of 5 stars.\nLearn more about results and reviews.\nAnalyze Substack Notes, schedule drafts, discover trends, and grow subscribers with an AI-powered analytics dashboard.",
+      "source": "https://chromewebstore.google.com/detail/note-research-tool/pialmmgjeifnkkijgkimiapdlacfjjnf",
+      "confidence": "low",
+      "score": 15,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848823686,
+      "tags": [
+        "automotive",
+        "ai",
+        "finance"
+      ]
+    },
+    {
+      "id": "3bb9f456-b61c-4d48-ad1d-d39ce784ba97",
+      "claim": "How a Market-State Note Is Written | MARKETDPRO",
+      "evidence": "What the Reader Should Keep\nThe useful takeaway is not a simple conclusion. It is an order of observation: what moved first, what lagged, what confirmed the move, and what remained uncomfortable.\nFor a reader, this matters because the page should provide original explanatory value rather than a thin summary.\nReview Method and Editorial Boundary\nThe site is written as a research notebook, not as a signal shop. A market note starts from observable conditions: the instrument being watched, the timeframe where pressure appeared, the asset that confirmed the move, and the asset that refused to confirm it. This order matters because the same price movement can mean different things when the surrounding market is calm, stressed, or rotating between themes. [...] A market-state note begins before the chart looks beautiful. It begins when the observer notices that several ordinary things have stopped lining up.\nStarting Point\nThe first line of a useful note is usually not dramatic. It might be: dollar pressure is broad, but gold has not confirmed. Or: yen strength is visible on short timeframes, but the equity index is still calm. These are small sentences, but they stop the reader from jumping too quickly to a conclusion.\nThe MARKETDPRO format keeps that first observation visible. The page should tell the reader where the idea came from before it shows any conclusion.\nEvidence Order [...] Evidence Order\nThe order matters. Start with the instrument that produced the change, then show related instruments, then show timeframe acceptance. If the order is reversed, the page can look like it is trying to prove an answer that was already chosen.\nUncertainty\nUncertainty is not a weakness in a research page. It tells the reader what has not yet been confirmed. A good note may end with a question rather than a call to action.\nArchive Value\nThe note should still be useful weeks later. Even if the market has moved on, a reader should be able to understand what was observed and why it mattered at the time.\nAdditional research notes are included so the page stands as a readable explanation rather than a short dashboard note.\nReading Assumptions",
+      "source": "https://marketdpro.com/how-market-state-note-is-written",
+      "confidence": "low",
+      "score": 15,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848828584,
+      "tags": [
+        "automotive",
+        "ai",
+        "finance"
+      ]
+    },
+    {
+      "id": "891cad1e-54f2-4c22-834a-95588eceaef2",
+      "claim": "競合分析のやり方を8ステップで解説｜活用するフレームワークや調査のポイントとは - NPSソリューション | NTTドコモビジネスX（旧：NTTコム オンライン）",
+      "evidence": "| 分析する要素 | 詳細 | 施策 |\n --- \n| Customer Value  （顧客価値） | 自社の商品やサービスに対して顧客が考える価値 | 企業は顧客が価値を感じられるような商品・サービスを展開する |\n| Cost（コスト） | 顧客が商品・サービスを購入する際に必要な費用（価格・値段） | 企業は顧客が価値を感じられる価格設定を行う |\n| Convenience  （利便性） | 顧客にとって利便性のある商品・サービスであるか | 企業は顧客にとっての利便性を整える  （例：ECサイトのデザインを見やすくする、決済方法の選択肢を増やすなど） |\n| Communication  （コミュニケーション） | イベントやSNSなどを通じて顧客との接点を持つ | 企業は商品・サービスに関する情報発信を行う、顧客の声を集めるなどのコミュニケーションをとる |\n競合分析で4C分析を活用する場合は、各要素を自社と競合他社で比較しながら具体的な施策を検討します。\nSWOT分析\nSWOT分析とは、「Strength（強み）」「Weakness（弱み）」「Opportunitie（機会）」「Threat（脅威）」の4つの視点に着目した分析手法です。自社を取り巻く外部環境と内部環境を、プラス要因とマイナス要因に分類して比較します。\n|  |  |\n --- |\n| Strength（強み） | 自社の商品・サービスの長所、得意とするところ（内部環境のプラス要因） |\n| Weakness（弱み） | 自社の商品・サービスの短所、苦手とするところ（内部環境のマイナス要因） |\n| Opportunitie（機会） | 市場変化などにより自社商品・サービスにプラスに働く要素  （外部環境のプラス要因） | [...] 以下は、主な調査方法とその内容です。\n| 調査方法 | 内容 |\n --- |\n| アンケート調査・インタビュー調査 |  顧客の属性  満足度  購入理由  認知度  商品・サービスを使用するようになった経緯 |\n| Webのアクセス数やSEO戦略、SNSアカウント分析 |  WEBアクセス数  検索順位・キーワード  SEO戦略  レビュー分析  競合他社のSNSアカウントのフォロワー数やエンゲージメント  競合他社に関するユーザーの投稿やその内容 |\n| 購買データ分析 |  商品の購入時期・サービスの利用時期  商品の購入頻度  商品の販売数 |\n6｜情報を整理・分析する\n収集した情報はスプレッドシートやデータベース、導入している分析ツールなどに整理し、データを整えます。また、ポジショニングマップを作成すると、市場における自社の相対的な立ち位置を把握しやすくなります。\nポジショニングマップとは、消費者の認識や評価に基づいて、自社および競合他社の商品・サービスの相対的な位置づけを視覚的に表現したものです。ポジショニングマップにより、自社の立ち位置や優位性を把握したり、競合他社との差別化ポイントを明確にしたりできます。マップを作成する際に重要なのが2つ設定する軸の内容です。この2つの軸は、KBF（購買決定要因）を抽出して設定します。例えば、「価格」と「品質」、「機能性」と「デザイン」など、測定・比較ができる要素を選択しましょう。\n7｜自社の強み・弱みを洗い出す\n分析した情報をもとに、競合に対する自社の強み・弱みを洗い出します。洗い出す際には、顧客目線での強み・弱みを抽出することがポイントです。これらを把握できると、自社のマーケテイング戦略に活かすことができます。次章で紹介するSWOT分析を用いるとより進めやすくなります。\n8｜分析を基にマーケティング戦略を策定する [...] 8｜分析を基にマーケティング戦略を策定する\n最後に、競合分析の結果をもとに、自社の強みを活かせるマーケティング戦略を策定します。以下は、戦略を策定する際の目線の例です。\nこれらをもとに、以下に関するマーケティング戦略を立案します。\n競合分析に活用するフレームワーク\n続いて、競合分析に活用する6つのフレームワークについて解説します。\n3C分析\n3C分析とは、「Customer（顧客）」「Competitor（競合他社）」「Company（自社）」の3つの視点に着目して市場環境を分析する手法です。顧客・競合・自社の順番に分析していきます。\n|  |  |\n --- |\n| Customer（顧客） | 顧客のニーズや購買行動、市場の成長性、市場規模などを分析する |\n| Competitor（競合他社） | 競合の強み・弱み、ポジション、シェア、マーケティング戦略などを分析する |\n| Company（自社） | 自社の強み・弱み、顧客が持つイメージ、リソース、事業の現状などを把握して戦略を立てる |\nたとえ素晴らしい商品やサービスを開発しても、顧客のニーズや市場のトレンドを読み違えてしまうと厳しい競争を勝ち抜くことはできないでしょう。3C分析を活用することで、さまざまな視点から自社や競合他社、市場の現状を把握することができます。また、3C分析の結果は以降で紹介するSWOT分析でも活用されるなど重要なデータとなります。\n4C分析\n4C分析とは、「Customer Value（顧客価値）」「Cost（コスト）」「Convenience（利便性）」「Communication（コミュニケーション）」の4つの要素を顧客視点で分析する手法です。\n| 分析する要素 | 詳細 | 施策 |\n ---",
+      "source": "https://www.nttcoms.com/service/nps/column/competitive-analysis",
+      "confidence": "low",
+      "score": 15,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848852971,
+      "tags": [
+        "finance"
+      ]
+    },
+    {
+      "id": "e64a093b-78be-4bc1-b3f2-adcad575ee81",
+      "claim": "競合分析で自社の強みを知ろう！8段階で進める分析方法 | きゃらくるカート",
+      "evidence": "| Company（自社） | 自社目標やビジョン・組織文化や戦略なども考慮しながら分析する | 自社の強みや弱み リソース 能力 ブランドイメージ |\nC分析を実際に行う際は、Customer・Competitor・Companyの順に分析しましょう。成功要因を発見しやすくなります。\n【関連記事】  \n出店戦略はどう立てる？マーケティングや分析方法について知ろう\n4C分析\n4C分析は、以下4つの要素をそれぞれ分析するフレームワークです。\n Customer Value（顧客にとっての価値）：顧客ニーズを解決する方法を検討する\n Customer Cost（顧客が費やすお金）：顧客が費やせる費用を考慮する\n Convenience（顧客にとっての利便性）：顧客にとって商品やサービスを必要としたときに購入できる場所に店舗があるか・すぐに欲しいものが手に入れられるかを検討する\n Communication（顧客とのコミュニケーション）：顧客に違和感を与えない、消費者目線のコミュニケーションが取れているかをチェックする\n主に自社施策が顧客に対して効果的であるかをチェックするために活用されます。顧客目線で競合分析をしたい場合に有効です。\nSWOT分析\nSWOT分析は、以下4要素に分析内容を分類することで、事業を取り巻く要因を整理する分析方法です。\n Strength（強み）\n Weakness（弱み）\n Opportunity（機会）\n Threat（脅威）\n分析の際は、以下の図に分析対象を分類・配置して行います。\n|  |  |\n --- |\n| SWOT分析 | 内部環境 |\n| 強み | 弱み |\n| 外部環境 | 機会 | 積極的攻勢 | 段階的改善 |\n| 脅威 | 差別化 | 防衛・撤退 | [...] + 必要に応じて市場調査を実施する\n+ 自社と競合をマッピングして位置づけを把握する\n+ これまでの情報をベースに自社の強み・弱みを分析する\n+ 分析結果を元に、自社の戦略を検討する\n 競合分析をする際の注意点\n+ 分析は優位性構築に活かす\n+ 検証バイアスに注意する\n+ 分析結果は定期的に更新する\n 競合分析で自社の強みを知り経営に活かそう\n競合分析とは\n競合分析とは、自社とライバルとなる競合打者について調査・分析する方法です。特定の業界や市場で、自社と同じ商品・サービスを提供する他社や、ライバルとなりうる企業を対象に分析します。主な分析内容は、以下のものです。\n 対象の戦略\n 商品性能\n サービス内容\n 強みや弱みなどの評価\n競合分析を行うことで、以下のことが分かります。\n 自社と他社の力関係\n 自社の得意分野や特性\n 自社の市場における立ち位置\nこれらの分析結果は、市場での競争優位性を獲得するのに効果的な戦略を打つために活用されます。\n競合分析の目的\nそもそも、なぜ企業や店舗に競合分析が必要なのでしょうか。次は競合分析を行う目的を解説します。\n自社の客観的評価\n自社を客観的に評価するには、競合他社との情報を比較する必要があります。自社をより正確な視点で評価・改善するには、競合分析は欠かせない要素です。\n競合他社の戦略・製品やサービス・マーケティングを評価し、自社のものと比べることで、優位性や改善点が明らかになります。より効果的な施策を打ち顧客を確保するには、他社との違いを理解することが大切です。\n市場理解\n競合分析は市場全体の構造や動向を理解するためにも行われます。市場全体のトレンドや顧客ニーズ・競合のポジショニングを把握することで、自社の立ち位置が分かります。 [...] こうした関連情報も一覧に加えておくと、後の分析にも活用できるため、より深い分析ができます。\n【関連記事】  \nスーパーのショッピングカートはどうやって選ぶ？購入する際のポイント\n必要に応じて市場調査を実施する\nここまでの分析で情報が足りない場合は、市場調査も実施しましょう。有効な情報収集方法としては、以下の方法があります。\n アンケートやインタビュー\n 口コミやSNS\n 購買データ分析\n ミステリーショッパー\n市場調査方法はそれぞれ特徴があるため、目的に合わせた方法を選択するのがポイントです。\n自社と競合をマッピングして位置づけを把握する\nこれまでの情報を一覧表にまとめたら、市場全体の構図を理解しやすいようにマッピングします。マッピングの際には、表を作成するときと同じように、自社を必ず含めましょう。\nこれにより、自社の位置付けを客観的に把握できるほか、自社に近い競合の特定や市場の空きを理解できます。\nマッピング方法としては、特定の要素を縦軸と横軸に置いて自社や競合を配置する方法や、4段階に分けて整理する方法が活用できます。目的や必要性を見極めながら行うのがポイントです。\nこれまでの情報をベースに自社の強み・弱みを分析する\nここまでの情報をベースに、競合と比べたときの自社の強みや弱みを分析します。この段階で活用できるのが、SWOT分析です。\nSWOT分析を本格的に行う場合、競合分析だけでなく外部環境分析や自社分析も行わなくてはなりません。ここまでの段階で情報収集に力を入れているのは、このためです。\n分析結果を元に、自社の戦略を検討する\nすべての分析が終わったら、分析結果をもとに市場で取るべき戦略を考えます。戦略が複数ある場合は優先順位の設定やアクションプランの設定をしましょう。",
+      "source": "https://www.joypalette.co.jp/characle/column/competitive-analysis",
+      "confidence": "low",
+      "score": 15,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848852971,
+      "tags": [
+        "finance"
+      ]
+    },
+    {
+      "id": "da79f4f1-ef5a-471e-834a-4f7eeb543dcf",
+      "claim": "売れてるnoteを「競合分析」して自分の発信を伸ばす3ステップ｜たくま｜発信で稼ぐ人",
+      "evidence": "見出し画像 \n売れてるnoteを「競合分析」して自分の発信を伸ばす3ステップ\nたくま｜発信で稼ぐ人%22%20d%3D%22M-100-100h300v300h-300z%22%2F%3E%3C%2Fsvg%3E)\nたくま｜発信で稼ぐ人\nなぜ「売れてる人」を見るだけで終わるのか\n同じジャンルで発信している人の中に、明らかに売れてる人がいる。スキがたくさんついていて、有料記事にもコメントがついていて、フォロワーもじわじわ増えている。\nそういう人のnoteを見て、「すごいなあ」と思って、そのまま閉じる。\nこれ、実際にやってみたんですが、僕も最初はまさにそのパターンでした。\n問題は「見ている」だけで「分析していない」こと。感想で終わっているんです。\n広告代理店時代、競合調査は毎週の定型業務でした。クライアントの競合サイトを5社分、決まったフォーマットで記録して、変化を追いかける。地味な作業ですが、これをやるかやらないかで施策の精度がまるで違いました。\n個人の発信でも、まったく同じことが言えます。\n売れてる人のnoteを「なんとなく読む」のと「構造的に分析する」のでは、得られるものが全然違う。数字で見てみると、僕自身がこの方法を始めてから、1本の記事構成を決めるまでの時間が60分から25分に短縮されました。\n競合分析で見るべき3つの視点\n「分析しろ」と言われても、何を見ればいいか分からないと始められません。\n僕が使っているのは、3つの視点です。\n視点1: 何を書いているか（テーマの選び方）\n売れてる人が「何を書いているか」を時系列で並べると、テーマ選定のパターンが見えてきます。\n確認するポイントはこのあたりです。\n 直近10本の記事タイトルを並べる\n - 有料記事と無料記事の比率\n - 繰り返し扱っているテーマ（=その人の「勝ちパターン」） [...] - 有料記事と無料記事の比率\n - 繰り返し扱っているテーマ（=その人の「勝ちパターン」）\n - 最近になって増えたテーマ（=新しい実験）\nここがポイントで、売れてる人は「同じテーマの変奏」をうまく使っています。毎回まったく違うテーマを書いているわけではなく、得意なテーマを角度を変えて繰り返している。\n視点2: どう見せているか（タイトル・構成・価格）\n同じ内容でも「見せ方」で売上は大きく変わります。\n タイトルに数字が入っているか、疑問形か、断定形か\n - 無料部分の長さと内容（どこまで出しているか）\n - 有料部分の価格帯\n - 見出しの構造（How-to型か、リスト型か、ストーリー型か）\nこの視点は、自分の記事と直接比較できるのが強みです。「あの人は無料部分で具体例を2つ出しているのに、自分は抽象的な導入だけだった」みたいな差が具体的に見つかります。\n視点3: どう届けているか（流入経路とSNS活用）\nいい記事を書いても、届かなければ売れません。\n Xでの告知文はどう書いているか\n - 投稿頻度（週に何本ペース？）\n - 他のSNS（Threads等）との連携\n - プロフィールページの導線設計\n僕が観測している個人発信ジャンルでは、X経由の流入が目立ちます。売れてる人のXアカウントを見ると、記事の告知方法にも明確なパターンがあります。\nこの3視点を持つだけで「見方」が変わる\nここまでの3つの視点——テーマ選定・見せ方・届け方——を意識するだけで、他の人のnoteの読み方がガラッと変わります。\n「いい記事だな」で終わっていたのが、「この人はHow-to型で無料部分にチェックリストを1つ入れるパターンが多い」「Xでの告知は記事の一部を引用して、結論は有料部分に誘導している」というふうに、具体的な要素として捉えられるようになる。 [...] 試しに1つだけ、視点2（見せ方）で簡単に見てみます。自分と同じジャンルの売れてる人のnoteを開いて、無料部分をスクロールしてみてください。「この人は冒頭3段落で自分の経験談を入れている」「無料部分の最後にチェックリストが1つある」——そういう具体的な構造が見えてきます。これが「分析」です。\nこの記事の有料部分では、この3視点を使って実際に分析を進めるための具体的な手順を解説します。\n有料部分で得られるもの:\n ステップ1: 5分で作れる「分析ノート」のテンプレートと記入例\n - ステップ2: 分析対象の選び方と、3人分の分析を効率的に進める手順\n - ステップ3: 分析結果を自分の発信に変換する「差分マトリクス」の使い方\n - おまけ: よくある3つの失敗パターンと回避策\nここから先は\n3,330字\n¥  480\nログイン\nこの記事が参加している募集\n#\nnoteの書き方\n6.1万件",
+      "source": "https://note.com/takuma_signal/n/n2b5918394e33",
+      "confidence": "low",
+      "score": 15,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848823686,
+      "tags": [
+        "finance"
+      ]
+    },
+    {
+      "id": "b1676e90-3b2e-478b-ac6d-7f84191a8856",
+      "claim": "【note株式会社】を勝手に企業リサーチ★byプラスカラー | 株式会社プラスカラー",
+      "evidence": "デジタルコンテンツ白書2019　デジタルコンテンツ協会\n会社・サービスの特徴\n・2011年、デジタルコンテンツの未来を切り拓くために設立された株式会社ピースオブケイク。あらゆるクリエイターが自由に使うまっ白いノートのようなプレーンさを表現するために名付けられたメディアプラットフォーム「note」を主力サービスとし、2020年に社名もサービス名と同じ名前に変更し、note株式会社となる。  \n・「note」では、クリエイターのあらゆる創作活動を支援しており、2021年4月にサービス開始7周年を迎え、会登登録者数260万人、利用法人1,600社、月間アクティブユーザーは約6,300万人を超える（2020年5月現在）。作品を生み出し、広く認知し、収益化するシステムを全てnoteで完結できることが特徴。  \n・その他のサービスとして、多くの人が集まるnoteの街でかんたんに情報発信できる法人向け情報発信プラットフォーム｢note pro｣や、多数のクリエーターや出版社と提携し、コンテンツとの新しい場を提供している コンテンツ配信サイト「cakes」などがある。\nビジネスモデル\nコンテンツ課金の事業モデル  \n4種類のマネタイズ機能が存在  \n・単発課金：note記事やマガジンを買い切りで販売する形式  \n・定期購読：購入月にマガジンへ追加されたnoteを全て読めるように販売する  \n　　　　　　形式  \n・サークル：誰でも月額課金のコミュニティ運営をスタートできる仕組み  \n・サポート：読者の感じた価値に応じて、対価が得られる仕組み   \n　※無料公開noteも対象\nnotePROの提供（月額5万円）\n代表的な競合\n・株式会社サイバーエージェント（Ameba）  \n芸能人16,000人以上も参加する国内最大規模のブログサービス「アメブロ」。 [...] 芸能人16,000人以上も参加する国内最大規模のブログサービス「アメブロ」。  \nAmeba Pick(アフィリエイト機能)や有料記事販売（REQU/リキュー）などのサービスあり。  \n・株式会社はてな（はてなブログ）  \n誰でも使いやすく簡単に書けるシンプルモダンな最新型ブログ。はてなスターや読者登録、はてなブックマークなど、交流できる機会も多い。\n競合優位性\n・誰でも簡単に安心して創作活動を続けることができる  \n・UI/UXがわかりやすく設計されている  \n・ランキングがないため、コンテンツの多様性を保持  \n・広告がないため、読者がクリエイターの世界に没頭できる  \n・編集部があるため、いいコンテンツが埋もれず、クリエイターにチャンスがあるように日々紹介している\n採用関連\nエンジニア、PM、デザイナー、BizDev、note pro事業、noteディレクター、cakes、コーポレート、Organization Success\n出資・株主\n＜主要出資事業会社＞  \n電通デジタル、TBSイノベーション・パートナーズ、イード、日本経済新聞社、マイナビ、UUUM、テレビ東京ホールディングス\n＜資金調達＞  \n2012年2月　フェムト・スタートアップLLPを割当先とする第三者割当増資を  \n　　　　　　実施  \n2012年7月　サイバーエージェント・ベンチャーズ（現：サイバーエージェン  \n　　　　　　ト・キャピタル）を割当先とする第三者割当増資を実施  \n2013年4月　新生企業投資、フェムトグロースキャピタル、ジャフコを割当先  \n　　　　　　とする第三者割当増資を実施  \n2016年12月　電通デジタルファンドを引受先とする第三者割当増資を実施  \n2017年1月　TBSイノベーション・パートナーズを引き受け先とする第三者割  \n　　　　　　当増資を実施 [...] ■取締役CFO 鹿島 幸裕（かしまゆきひろ）  \n1983年愛知県生まれ。東京大学法学部卒業、スタンフォード大学MBA。外務省、外資系戦略コンサルティング会社を経て、株式会社カカクコムの食べログ本部において新規事業の責任者や全社の経営企画部長を経験。その後全国で100以上の店舗を展開する美容室チェーンのCFO兼CAOを経て、2018年9月にnote入社。2018年12月にCFO就任。戦略・財務を中心にコーポレート系全般を統括。\n■執行役員 坂本 洋史（さかもと ひろふみ）  \n1977年埼玉県生まれ。早稲田大学第二文学部卒業。新卒でアスキー入社。週刊アスキーWeb版の副編集長として、メディア開発・運営責任者を経験。アマゾンジャパンのウェブプロデュースマネージャーとして、マーチャンダイジングやウェブマーケティングなどを担当。2019年7月にnoteに入社。note proの事業開発、事業推進、アライアンスなどを担当。\n■CXO 深津 貴之（ふかつ たかゆき）  \nインタラクション・デザイナー。株式会社thaを経て、Flashコミュニティで活躍。2009年の独立以降は活動の中心をスマートフォンアプリのUI設計に移し、株式会社Art&Mobile、クリエイティブユニットTHE GUILDを設立。noteのCXOなどを務める。執筆、講演などでも精力的に活動。\n市場、マーケット\nデジタルコンテンツ業界の市場規模  \n2018年度：8兆9,666億円（前年比103.0％、コンテンツ市場全体の規模は12兆6,590億円で、全体に占める割合は70.8％  \nデジタルコンテンツ白書2019　デジタルコンテンツ協会\n会社・サービスの特徴",
+      "source": "https://pluscolor.co.jp/column/pr-002",
+      "confidence": "medium",
+      "score": 25,
+      "sourceType": "unknown",
+      "createdBy": "researcher",
+      "createdAt": 1785848823686,
+      "tags": [
+        "automotive",
+        "finance"
+      ]
+    }
+  ],
+  "toolResults": {}
+}

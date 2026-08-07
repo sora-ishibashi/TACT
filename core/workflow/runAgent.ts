@@ -2,7 +2,8 @@ import { buildPrompt } from "../prompt/builder";
 import { runLLM } from "../llm";
 import { executeToolCalls } from "../tools/executeToolCalls";
 import { retrieveEvidence } from "../evidence/retrieveEvidence";
-import { Agent } from "../agent/types";
+import { selectEvidence } from "../evidence/selectEvidence";
+import { Agent } from "../agents/types";
 import fs from "fs";
 import path from "path";
 import { Evidence } from "../context/types";
@@ -80,6 +81,7 @@ const queryBuilderOutput =
 
 const shouldRetrieveEvidence =
   [
+    "analyst",
     "designer",
     "engineer",
     "stakeholder",
@@ -98,6 +100,14 @@ researcher: [
 ]
 .filter(Boolean)
 .join(" "),
+
+analyst: [
+  context.userInput,
+  step.task,
+  "competitor market SWOT pricing positioning comparison",
+]
+  .filter(Boolean)
+  .join(" "),
 
 designer: [
   context.userInput,
@@ -143,13 +153,13 @@ writer: [
 
 const relevantEvidence =
   shouldRetrieveEvidence
-    ? retrieveEvidence(
+    ? selectEvidence(
         context.evidence,
         evidenceQueryByAgent[agent.id] ??
           `${context.userInput} ${step.task}`,
-        10
+        15
       )
-    : context.evidence;
+    : [];
 
   // ===============================
   // 1回目
@@ -170,6 +180,7 @@ const relevantEvidence =
       context.stepOutputs,
       toolResults,
       context.memory,
+      context.handoffs,
       relevantEvidence,
       context.mode
     ),
@@ -290,6 +301,7 @@ for (const toolOutputs of Object.values(toolResults)) {
           context.stepOutputs,
           toolResults,
           context.memory,
+          context.handoffs,
           relevantEvidence,
           context.mode
         ) +
@@ -367,6 +379,7 @@ toolRequestsは必ず空配列にしてください。
       context.stepOutputs,
       toolResults,
       context.memory,
+      context.handoffs,
       relevantEvidence,
       context.mode
     ),
@@ -400,6 +413,16 @@ context.stepOutputs[step.id] = {
   output: parsed,
 
 };
+
+// ===============================
+// Handoff 保存
+// ===============================
+
+if (parsed.handoff) {
+
+  context.handoffs[agent.id] = parsed.handoff;
+
+}
 
 if (agent.id === "reviewer") {
   context.reviewHistory.push(parsed);
@@ -526,6 +549,8 @@ if (
         createdAt: Date.now(),
 
         tags: [category],
+
+        references: [],
 
       });
 
