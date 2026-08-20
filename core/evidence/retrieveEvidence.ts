@@ -45,7 +45,7 @@ function queryTokens(query: string) {
   );
 }
 
-function inferSourceType(source?: string) {
+export function inferSourceType(source?: string) {
 
   if (!source) return "unknown";
 
@@ -104,6 +104,15 @@ function inferSourceType(source?: string) {
 function sourceTypeWeight(type: string) {
 
   switch (type) {
+
+    // STEP35: ユーザーが今回のために直接提供した一次資料
+    // (core/fileAnalysis/buildAttachmentEvidence.tsが生成)。
+    // 以前はdefaultの0点(=communityの10点より低い)しか付与されず、
+    // Web由来Evidenceに比べて上位limit件から外れやすいという
+    // 構造的な問題があった。ユーザーが今回のタスクのために
+    // 選んで添付した資料であるため、government(55)より高く扱う。
+    case "user_file":
+      return 60;
 
     case "government":
       return 55;

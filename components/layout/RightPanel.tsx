@@ -9,12 +9,23 @@ type Props = {
   result: any;
   agentOutputs: any;
   thinking: any;
+  runStatus: "idle" | "running" | "completed" | "error";
+  agentTimeline: {
+    agent: string;
+    status: "running" | "completed" | "failed";
+  }[];
+
+  // STEP17: 変更箇所ハイライト対象の章見出し一覧。
+  changedHeadings: string[];
 };
 
 export default function RightPanel({
-  workflow,
   result,
+  agentOutputs,
   thinking,
+  runStatus,
+  agentTimeline,
+  changedHeadings,
 }: Props) {
 
   return (
@@ -37,7 +48,9 @@ export default function RightPanel({
       >
 
         <TeamStatus
-          status={workflow?.status}
+          runStatus={runStatus}
+          agentOutputs={agentOutputs}
+          agentTimeline={agentTimeline}
         />
 
       </div>
@@ -84,6 +97,8 @@ export default function RightPanel({
 
         <OutputViewer
           result={result}
+          runStatus={runStatus}
+          changedHeadings={changedHeadings}
         />
 
       </div>

@@ -3,6 +3,7 @@
 import LeftPanel from "./LeftPanel";
 import RightPanel from "./RightPanel";
 import Sidebar from "./Sidebar";
+import type { WorkflowEvent } from "@/core/context/types";
 
 type Props = {
   messages: any[];
@@ -24,6 +25,37 @@ type Props = {
   setAgentOutputs: any;
 
   setThinking: any;
+
+  conversationId: string | null;
+
+  setConversationId: (id: string | null) => void;
+
+  onToggleConversationList?: () => void;
+
+  runStatus: "idle" | "running" | "completed" | "error";
+
+  onProcessingChange: (
+    status: "running" | "completed" | "error"
+  ) => void;
+
+  agentTimeline: {
+    agent: string;
+    status: "running" | "completed" | "failed";
+  }[];
+
+  onAgentEvent: (event: WorkflowEvent) => void;
+
+  // STEP17: 直前のTurnから今回のTurnで実際に変更・追加された
+  // 章見出し一覧(表示のハイライト専用、DB/APIには関与しない)。
+  changedHeadings: string[];
+
+  // STEP24: 空状態の提案ボタンから入力欄への橋渡し。
+  suggestedInput?: string | null;
+
+  onSuggestionSelect?: (text: string) => void;
+
+  // STEP30: βアンケートの表示条件判定用。
+  onArtifactCompleted?: (conversationId: string) => void;
 };
 
 export default function Workspace({
@@ -37,6 +69,17 @@ export default function Workspace({
   setResult,
   setAgentOutputs,
   setThinking,
+  conversationId,
+  setConversationId,
+  onToggleConversationList,
+  runStatus,
+  onProcessingChange,
+  agentTimeline,
+  onAgentEvent,
+  changedHeadings,
+  suggestedInput,
+  onSuggestionSelect,
+  onArtifactCompleted,
 }: Props) {
 
   return (
@@ -60,7 +103,9 @@ export default function Workspace({
         "
       >
 
-        <Sidebar />
+        <Sidebar
+          onToggleConversationList={onToggleConversationList}
+        />
 
       </div>
 
@@ -83,6 +128,14 @@ export default function Workspace({
           setResult={setResult}
           setAgentOutputs={setAgentOutputs}
           setThinking={setThinking}
+          conversationId={conversationId}
+          setConversationId={setConversationId}
+          runStatus={runStatus}
+          onProcessingChange={onProcessingChange}
+          onAgentEvent={onAgentEvent}
+          suggestedInput={suggestedInput}
+          onSuggestionSelect={onSuggestionSelect}
+          onArtifactCompleted={onArtifactCompleted}
         />
 
       </main>
@@ -106,6 +159,9 @@ export default function Workspace({
           result={result}
           agentOutputs={agentOutputs}
           thinking={thinking}
+          runStatus={runStatus}
+          agentTimeline={agentTimeline}
+          changedHeadings={changedHeadings}
         />
 
       </aside>

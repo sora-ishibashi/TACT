@@ -37,6 +37,7 @@ export function getTeam(category: string) {
       return [
         "queryBuilder",
         "researcher",
+        "analyst",
         "stakeholder",
         "reviewer",
         "writer",
@@ -47,6 +48,16 @@ export function getTeam(category: string) {
       return [
         "queryBuilder",
         "researcher",
+        "reviewer",
+        "writer",
+      ];
+
+
+    case "research":
+      return [
+        "queryBuilder",
+        "researcher",
+        "analyst",
         "reviewer",
         "writer",
       ];

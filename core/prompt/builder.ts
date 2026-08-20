@@ -1,5 +1,5 @@
 import { tools } from "../tools";
-import { Evidence } from "../context/types";
+import { Evidence, BrainRule } from "../context/types";
 import { AgentId } from "../agents/types";
 import { responsibilities } from "./responsibilities";
 import { formatBrainMemory } from "../brain/memory";
@@ -10,6 +10,7 @@ const availableAgents = [
   "planner",
   "queryBuilder",
   "researcher",
+  "analyst",
   "designer",
   "engineer",
   "stakeholder",
@@ -26,6 +27,152 @@ ${tool.description}
 `
   )
   .join("\n\n");
+
+
+// Tool Results（生データ）をPromptへ埋め込むための整形。
+// 検索結果のtitle/url/contentをそのまま渡すと長すぎるため、
+// contentのみ一定文字数で要約（切り詰め）する。
+const TOOL_RESULT_SNIPPET_LENGTH = 400;
+
+function buildToolOutput(
+  toolResults?: Record<string, unknown>
+) {
+
+  if (!toolResults || Object.keys(toolResults).length === 0) {
+    return "None";
+  }
+
+  const lines: string[] = [];
+
+  for (const results of Object.values(toolResults)) {
+
+    if (!Array.isArray(results)) continue;
+
+    for (const result of results as any[]) {
+
+      const rawItems = result?.data?.raw;
+
+      if (!Array.isArray(rawItems)) continue;
+
+      for (const item of rawItems) {
+
+        const title = item?.title ?? "";
+        const url = item?.url ?? "";
+        const content =
+          typeof item?.content === "string"
+            ? item.content
+            : "";
+
+        const snippet =
+          content.length > TOOL_RESULT_SNIPPET_LENGTH
+            ? content.slice(0, TOOL_RESULT_SNIPPET_LENGTH) + "..."
+            : content;
+
+        lines.push(`
+Title: ${title}
+URL: ${url}
+Snippet: ${snippet}
+`);
+
+      }
+
+    }
+
+  }
+
+  return lines.length > 0
+    ? lines.join("\n")
+    : "None";
+
+}
+
+
+// =========================
+// buildEvidenceSummary (STEP35)
+// =========================
+//
+// 背景: STEP32でuser_file(添付ファイル由来)Evidenceを既存の
+// Evidence poolへ合流させたが、Shared Evidenceは常にフラットな
+// 一覧としてPromptへ渡されており、AgentからはWeb由来Evidenceと
+// 添付ファイル由来Evidenceを区別できなかった。実機テストで、
+// Evidenceとして保持されてはいてもWriterが本文へ十分反映しない
+// ケースが確認されたため、「ユーザーが今回のために直接提供した
+// 一次資料」であることをテキスト上で明示する。
+//
+// 新しいEvidence種別・新しいスキーマは追加せず、既存の
+// Evidence.sourceType(STEP32で追加済みの"user_file")で
+// 分類するだけ。添付ファイルが存在しない場合(fileEvidenceが
+// 空)は、従来と同じフラットな一覧表示のままとし、既存の
+// 挙動・既存Prompt構造への影響を最小化する。
+
+const EVIDENCE_SNIPPET_LENGTH = 500;
+
+function formatEvidenceItem(e: Evidence): string {
+
+  const body =
+    typeof e.evidence === "string"
+      ? e.evidence
+      : "";
+
+  const snippet =
+    body.length > EVIDENCE_SNIPPET_LENGTH
+      ? body.slice(0, EVIDENCE_SNIPPET_LENGTH) + "..."
+      : body;
+
+  return `
+ID: ${e.id}
+Claim: ${e.claim}
+Source: ${e.source ?? "Unknown"}
+Evidence: ${snippet || "（本文なし）"}
+`;
+
+}
+
+function buildEvidenceSummary(
+  evidence: Evidence[]
+): string {
+
+  const fileEvidence =
+    evidence.filter(
+      (e) => e.sourceType === "user_file"
+    );
+
+  const otherEvidence =
+    evidence.filter(
+      (e) => e.sourceType !== "user_file"
+    );
+
+  // 添付ファイルが存在しない場合は、従来どおりのフラットな一覧。
+  if (fileEvidence.length === 0) {
+
+    return evidence
+      .map(formatEvidenceItem)
+      .join("\n");
+
+  }
+
+  const parts: string[] = [];
+
+  parts.push(
+    `--- ユーザー添付資料由来のEvidence(${fileEvidence.length}件) ---\n` +
+    "ユーザーが今回の作業のために直接提供した一次資料です。" +
+    "今回の依頼に関連する内容であれば、成果物へ積極的に反映して" +
+    "ください(資料に存在しない情報を追加することは禁止)。\n" +
+    fileEvidence.map(formatEvidenceItem).join("\n")
+  );
+
+  if (otherEvidence.length > 0) {
+
+    parts.push(
+      `--- Web検索・その他由来のEvidence(${otherEvidence.length}件) ---\n` +
+      otherEvidence.map(formatEvidenceItem).join("\n")
+    );
+
+  }
+
+  return parts.join("\n\n");
+
+}
 
 
 
@@ -45,7 +192,14 @@ export function buildPrompt(
   memory?: Record<string, string[]>,
   handoffs?: Record<string, unknown>,
   evidence: Evidence[] = [],
-  mode: "quick" | "think" | "deep" = "think"
+  mode: "quick" | "think" | "deep" = "think",
+  currentOutput?: unknown,
+  // STEP147: 呼び出し元(core/workflow/runAgent.ts)が
+  // WorkflowContext.brainMemory(このWorkflow専用のスナップショット、
+  // core/workflow/index.tsのrefreshRelevantBrainMemory()戻り値)を
+  // 明示的に渡す。省略時は空配列扱い(Brain Memoryなしでプロンプトを
+  // 組み立てる。既存呼び出し元がまだ対応していない場合の後方互換)。
+  brainMemoryEntries: BrainRule[] = []
 ) {
 
 
@@ -154,10 +308,35 @@ ${JSON.stringify(output, null, 2)}
     : "None";
 
 
-const toolOutput =
-  toolResults && Object.keys(toolResults).length > 0
-    ? "[Tool Results Available]"
+// STEP12-A: 各Agentが生成したhandoff(次のAgentへの申し送り事項)を、
+// 現在のAgentから見える範囲(visibleOutputsと同じ可視範囲)でPromptへ
+// 反映する。handoffsの意味・型(Record<string, unknown>)・
+// Workflow構造は変更せず、既に収集済みの値をテンプレートへ
+// 差し込むだけの最小修正。
+const previousHandoffs =
+  handoffs
+    ? visibleOutputs[agentId]
+        .map((id) => {
+
+          const handoff = handoffs[id];
+
+          if (!handoff) return null;
+
+          return `
+========================
+${id.toUpperCase()} Handoff
+========================
+
+${JSON.stringify(handoff, null, 2)}
+`;
+
+        })
+        .filter(Boolean)
+        .join("\n")
     : "None";
+
+
+const toolOutput = buildToolOutput(toolResults);
 
 
 
@@ -170,21 +349,88 @@ const toolOutput =
 
 
 
+  // STEP4(Optimizer→Workflow接続): targetAgent付きの記憶は該当Agentの
+  // プロンプトにだけ表示する(formatBrainMemory側のfilter)。
+  // STEP147: formatBrainMemory()はもう共有状態を読まない純粋関数の
+  // ため、このWorkflow用のスナップショット(brainMemoryEntries)を
+  // 明示的に渡す。
   const brainMemory =
-    formatBrainMemory();
+    formatBrainMemory(brainMemoryEntries, agentId);
 
 
 
+// STEP35: フラット一覧の組み立ては、user_file/その他の区別を
+// 明示するbuildEvidenceSummary()(このファイル冒頭で定義)へ集約した。
 const evidenceSummary =
-  evidence
-    .map(
-      (e) => `
-ID: ${e.id}
-Claim: ${e.claim}
-Source: ${e.source ?? "Unknown"}
+  buildEvidenceSummary(evidence);
+
+
+// Conversationの2ターン目以降に渡される、直前のWriter出力(現在の成果物)。
+// PlannerとWriterだけに見せる。ここでは新しい判断ロジックは実装せず、
+// 「編集対象である」という位置づけをテキストで明示するのみ。
+const currentOutputSection =
+  (agentId === "planner" ||
+    agentId === "writer") &&
+  currentOutput
+    ? `
+========================
+Current Output(現在の成果物・編集対象)
+========================
+
+${JSON.stringify(currentOutput, null, 2)}
+
+重要:
+
+これは過去の参考資料ではありません。
+
+これはユーザーが現在作成中の成果物そのものです。
+
+今回のユーザーの指示は、
+この成果物をゼロから作り直すためのものではなく、
+この内容を基準に必要な部分だけを更新するためのものです。
+
+Plannerは、
+今回の指示が「新規作成」なのか「既存成果物の更新」なのかを、
+Current Outputの有無から判断してください。
+Current Outputが存在する場合は「既存成果物の更新」として扱ってください。
+
+Writerは、
+Current Outputが存在する場合、
+その内容を土台として更新後の完成版を作成してください。
+Current Outputに含まれる情報を不必要に失わないでください。
+ゼロから別の成果物を作らないでください。
 `
-    )
-    .join("\n");
+    : "";
+
+
+// STEP12-B: Writerが「現在の成果物を編集する」という責務を、
+// JSON生成の直前(Prompt末尾)でも見失わないようにするための
+// 補強セクション。currentOutputSection自体の位置・内容は変更せず、
+// Writerにのみ、末尾で今回の具体的な要求とCurrent Outputへの
+// 反映を改めて結びつける。Current Outputが存在しない初回Turnでは
+// 空文字のままとし、不自然な編集指示にならないようにする。
+const writerCurrentOutputReminder =
+  agentId === "writer" && currentOutput
+    ? `
+========================
+今回の編集指示(必ず反映)
+========================
+
+今回のユーザー要求:
+${userInput}
+
+この要求を、先に示したCurrent Output(現在の成果物・編集対象)へ
+具体的に反映した上で、最終成果物のJSONを作成してください。
+
+・要求に該当する箇所は、要求どおりに変更されているか
+  出力前に必ず確認してください。
+・要求されていない箇所は、Current Outputの内容をむやみに
+  作り変えず維持してください。
+・Current Outputが存在するにもかかわらず、
+  無関係な新しい成果物を作ってはいけません。
+`
+    : "";
+
 
 
 const agentRules: Record<AgentId, string> = {
@@ -221,7 +467,7 @@ analyst: `
 `,
 
 designer: `
-・分析結果をUI・UXへ落とし込む
+・Analystが整理した分析結果・方針をUI・UXへ落とし込む
 ・Evidenceを優先する
 ・設計のみ担当する
 `,
@@ -461,6 +707,22 @@ ${previousOutputs}
 
 
 ========================
+Handoffs from Other Agents
+========================
+
+${previousHandoffs}
+
+重要:
+
+Handoffsは、各Agentが次のAgentへ向けて
+明示的にまとめた申し送り事項です。
+
+Outputs from Other Agentsの生データと合わせて、
+次に何をすべきかの参考にしてください。
+
+
+
+========================
 QueryBuilder Search Strategy
 ========================
 
@@ -534,7 +796,7 @@ Tool実行は完了しています。
 Tool Resultsを利用して
 最終JSONを完成してください。
 
-
+${currentOutputSection}
 
 ========================
 Agent Rules
@@ -562,6 +824,8 @@ Handoff
 handoff
 
 を出力してください。
+
+${writerCurrentOutputReminder}
 
 ${outputFormat}`;
 

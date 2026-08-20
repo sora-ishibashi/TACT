@@ -2,6 +2,7 @@
 
 import Conversation from "../Conversation";
 import InputBar from "../InputBar";
+import type { WorkflowEvent } from "@/core/context/types";
 
 type Props = {
   messages: any[];
@@ -17,16 +18,45 @@ type Props = {
   setAgentOutputs: any;
 
   setThinking: any;
+
+  conversationId: string | null;
+
+  setConversationId: (id: string | null) => void;
+
+  runStatus: "idle" | "running" | "completed" | "error";
+
+  onProcessingChange: (
+    status: "running" | "completed" | "error"
+  ) => void;
+
+  onAgentEvent: (event: WorkflowEvent) => void;
+
+  // STEP24: 空状態の提案ボタン(Conversation)から入力欄(InputBar)へ
+  // 叩き台の文章を渡すための最小限の橋渡し。
+  suggestedInput?: string | null;
+
+  onSuggestionSelect?: (text: string) => void;
+
+  // STEP30: Workflowが正常完了したTurnをTactInterfaceへ中継する
+  // (βアンケートの表示条件判定に使う)。
+  onArtifactCompleted?: (conversationId: string) => void;
 };
 
 export default function LeftPanel({
   messages,
-  workflow,
   addMessage,
   setWorkflow,
   setResult,
   setAgentOutputs,
   setThinking,
+  conversationId,
+  setConversationId,
+  runStatus,
+  onProcessingChange,
+  onAgentEvent,
+  suggestedInput,
+  onSuggestionSelect,
+  onArtifactCompleted,
 }: Props) {
 
   return (
@@ -39,7 +69,8 @@ export default function LeftPanel({
 
         <Conversation
           messages={messages}
-          workflow={workflow}
+          runStatus={runStatus}
+          onSuggestionSelect={onSuggestionSelect}
         />
 
       </div>
@@ -54,6 +85,12 @@ export default function LeftPanel({
           setResult={setResult}
           setAgentOutputs={setAgentOutputs}
           setThinking={setThinking}
+          conversationId={conversationId}
+          setConversationId={setConversationId}
+          onProcessingChange={onProcessingChange}
+          onAgentEvent={onAgentEvent}
+          prefill={suggestedInput}
+          onArtifactCompleted={onArtifactCompleted}
         />
 
       </div>

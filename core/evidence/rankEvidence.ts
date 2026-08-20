@@ -21,47 +21,20 @@ function calculateScore(
   evidence: Evidence
 ) {
 
-  let score = 0;
+  // sourceType / confidence / publishedAt由来の鮮度は
+  // scoreEvidence()がevidence.score算出時に既に評価済みのため、
+  // ここで同じ軸を再評価すると二重加点になる。
+  // ここではevidence.scoreに含まれていない軸
+  // （一次情報かどうか・freshnessScore）だけを追加で評価する。
 
-  switch (evidence.sourceType) {
-
-    case "official":
-      score += 100;
-      break;
-
-    case "government":
-      score += 95;
-      break;
-
-    case "paper":
-      score += 90;
-      break;
-
-    case "news":
-      score += 70;
-      break;
-
-    case "media":
-      score += 50;
-      break;
-
-    case "community":
-      score += 30;
-      break;
-
-    default:
-      score += 10;
-
-  }
+  let score =
+    evidence.score ?? 0;
 
   if (evidence.isPrimarySource)
     score += 20;
 
   score +=
     evidence.freshnessScore ?? 0;
-
-  score +=
-    evidence.score ?? 0;
 
   return score;
 

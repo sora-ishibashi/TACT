@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 
 import {
   LLMRequest,
@@ -21,6 +22,30 @@ export async function runOpenAI(
 
   try {
 
+    // STEP28: responseFormatが明示的に"text"の場合のみプレーンテキスト
+    // 応答にする。省略時(undefined)を含め、それ以外は既存どおり
+    // JSON modeを維持する(全既存Agent・Task Reconstructionの挙動を
+    // 変えないため)。
+    //
+    // STEP32: imagesが指定された場合のみ、userメッセージを
+    // マルチモーダル(text + image_url)なcontent配列にする。
+    // 省略時(undefined、既存の全呼び出し)は従来どおり文字列のまま。
+    const userContent: string | ChatCompletionContentPart[] =
+      request.images && request.images.length > 0
+        ? [
+            {
+              type: "text",
+              text: request.userPrompt,
+            },
+            ...request.images.map((image) => ({
+              type: "image_url" as const,
+              image_url: {
+                url: image.dataUrl,
+              },
+            })),
+          ]
+        : request.userPrompt;
+
     const response =
       await client.chat.completions.create({
 
@@ -33,13 +58,14 @@ export async function runOpenAI(
           },
           {
             role: "user",
-            content: request.userPrompt,
+            content: userContent,
           },
         ],
 
-        response_format: {
-          type: "json_object",
-        },
+        response_format:
+          request.responseFormat === "text"
+            ? { type: "text" }
+            : { type: "json_object" },
 
       });
 

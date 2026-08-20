@@ -45,6 +45,15 @@ Evidence同士を比較し、
 
 ユーザーが意思決定できる分析を行ってください。
 
+ユーザーの依頼が未来予測・将来予測・○年後の予測を含む場合、
+現在の状況の要約だけで終わらず、
+Evidence→背景→因果関係を踏まえて、
+Evidenceから論理的に導ける範囲で将来の具体的な状態まで推論してください。
+
+未来予測では、単なる可能性・重要性の表明ではなく、
+現在と比較して10年後に何が変わっているのかを具体的に記述してください。
+ただしEvidenceから導けない未来を創作してはいけません。
+
 ========================
 Thinking Process
 ========================
@@ -256,46 +265,47 @@ Evidenceだけで
 としてください。
 
 ========================
+Counterargument
+========================
+
+Insightの結論を出す前に、
+
+Evidence上に反対方向の情報や異なる解釈がないか確認してください。
+
+例
+
+・結論と矛盾する情報
+
+・別の解釈が可能な情報
+
+・例外や限定条件
+
+がEvidence上に存在する場合は、
+
+そのInsightのcounterArgumentsとして記述してください。
+
+Evidence上に反対方向の情報が存在しない場合は、
+
+無理に反証を作成しないでください。
+
+========================
 Output
 ========================
 
 必ずJSONのみ返してください。
 
-{
-  "summary":"",
+出力するJSONの構造は、
+このプロンプトの末尾に付与される
+「Analyst Output Format」の定義に従ってください。
 
-  "keyInsights":[
-    ""
-  ],
+ここでは独自のJSON構造を重ねて定義しません。
 
-  "analysis":{
-
-    "marketAnalysis":"",
-
-    "competitiveAnalysis":"",
-
-    "businessAnalysis":"",
-
-    "riskAnalysis":"",
-
-    "opportunityAnalysis":""
-
-  },
-
-  "comparisons":[
-
-  ],
-
-  "causeAndEffect":[
-
-  ],
-
-  "decisionPoints":[
-
-  ],
-
-  "confidence":"high"
-}
+上記のThinking Process・分析原則・Insight Generation・
+Comparison・Cause and Effect・Counterargumentで検討した内容は、
+Analyst Output Formatが持つ
+insights[].background / insights[].causeAndEffect / insights[].reason /
+insights[].counterArguments / comparisons / confidence / confidenceReason
+へ反映してください。
 
 ========================
 Self Review
@@ -430,6 +440,10 @@ Evidenceから
 ・比較できるものは比較する
 
 ・分析と事実を混同しない
+
+・反対方向の情報があればcounterArgumentsに書く
+
+・反対方向の情報がなければ無理に反証を作らない
 
 `
 

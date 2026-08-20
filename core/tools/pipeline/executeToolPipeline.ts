@@ -49,6 +49,11 @@ export async function executeToolPipeline(
 
         evidence,
 
+        // STEP151: どのSearch Provider(tavily/brave)が実際に
+        // 結果を返したかを、診断・ログ用途として引き継ぐ。
+        // Evidence型自体のスキーマは変更していない。
+        provider: result.provider,
+
       },
 
     };

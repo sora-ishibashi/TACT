@@ -1,6 +1,12 @@
 "use client";
 
-export default function Sidebar() {
+type Props = {
+  onToggleConversationList?: () => void;
+};
+
+export default function Sidebar({
+  onToggleConversationList,
+}: Props) {
 
   return (
 
@@ -55,6 +61,8 @@ export default function Sidebar() {
       >
 
         <button
+          onClick={onToggleConversationList}
+          title="Conversation一覧"
           className="
             flex
             h-10
@@ -71,17 +79,25 @@ export default function Sidebar() {
         </button>
 
 
+        {/*
+          STEP24: 押しても何も起きないボタンはユーザーを迷わせるため、
+          未実装であることが分かるようdisabled + 低opacity + title
+          で明示する(機能自体は今回追加しない)。
+        */}
+
         <button
+          disabled
+          title="準備中"
           className="
             flex
             h-10
             w-10
+            cursor-not-allowed
             items-center
             justify-center
             rounded-lg
             text-xl
-            transition
-            hover:bg-gray-100
+            opacity-30
           "
         >
           📁
@@ -89,16 +105,18 @@ export default function Sidebar() {
 
 
         <button
+          disabled
+          title="準備中"
           className="
             flex
             h-10
             w-10
+            cursor-not-allowed
             items-center
             justify-center
             rounded-lg
             text-xl
-            transition
-            hover:bg-gray-100
+            opacity-30
           "
         >
           ⚙️

@@ -8,6 +8,11 @@ export interface ToolResult<T = unknown> {
 
   error?: string;
 
+  // STEP151: web-search Toolが、複数Search Provider
+  // (core/tools/search/)のうちどれが実際に結果を返したかを
+  // 保持するための任意フィールド。web-search以外のToolは設定しない。
+  provider?: string;
+
 }
 
 export interface ToolProperty {

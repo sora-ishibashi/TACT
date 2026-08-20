@@ -3,6 +3,7 @@ import { Evidence } from "@/core/context/types";
 import { removeDuplicates } from "./removeDuplicates";
 import { autoTag } from "./autoTag";
 import { scoreEvidence } from "@/core/evidence/scoreEvidence";
+import { inferSourceType } from "@/core/evidence/retrieveEvidence";
 
 export function executeEvidencePipeline(
   results: any[],
@@ -58,7 +59,10 @@ export function buildEvidence(
 
       publishedAt: undefined,
 
-      sourceType: "unknown",
+      sourceType:
+        inferSourceType(
+          normalized.source
+        ),
 
       createdBy,
 
