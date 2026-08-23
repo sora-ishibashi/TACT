@@ -1026,6 +1026,12 @@ export interface TaskReconstructionResult {
   // (UI表示・ログ参照等)のために構造化した値としても返す。
   outputSpec: OutputSpec;
 
+  // STEP159: Task Reconstruction自体のLLM呼び出し(runLLM())で発生した
+  // コスト。core/context/types.tsのExecutionRecord.costと同じ形状を
+  // 再利用する(新しいcost型は作らない)。usage/pricingが取得できな
+  // かった場合はundefinedのまま(呼び出し元はcost欠落を前提に扱う)。
+  cost?: { tokens: number; estimatedUSD: number };
+
 }
 
 export async function reconstructCurrentTask(
@@ -1319,6 +1325,9 @@ export async function reconstructCurrentTask(
     // 構造化した値としても返す(artifactType/conversationModeと
     // 同じ位置づけ)。
     outputSpec,
+    // STEP159: このTask Reconstruction呼び出し分のcost。usage/pricing
+    // が取得できなかった場合はundefinedのまま。
+    cost: response.cost,
   };
 
 }

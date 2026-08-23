@@ -111,7 +111,9 @@ class TavilyProvider implements SearchProvider {
 
       result = await client.search(request.query, {
 
-        searchDepth: "advanced",
+        // STEP158: Search Strategyが解決したsearchDepthを使う。
+        // 省略時(taskProfile未接続の呼び出し元等)は既存どおり"advanced"。
+        searchDepth: request.searchDepth ?? "advanced",
 
         maxResults: request.maxResults ?? DEFAULT_MAX_RESULTS,
 

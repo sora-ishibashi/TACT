@@ -9,8 +9,9 @@ import { WorkflowEvent, Evidence, ArtifactType, Destination } from "../context/t
 import { checkEvidence } from "../evidence/checkEvidence";
 import { optimizeExecution} from "../optimizer/optimizer";
 import { getExecutionHistory, saveExecutionRecord} from "../brain/history";
-import { analyzePatterns} from "../brain/pattern";
-import { optimizeWorkflow} from "../brain/optimizer";
+import { analyzePatterns, analyzeModelTierPatterns} from "../brain/pattern";
+import { optimizeWorkflow, recommendModelTier} from "../brain/optimizer";
+import { resolveEffectiveModelTier } from "../brain/effectiveModelTier";
 import { analyzeExecution } from "../brain";
 import {saveBrainMemory, refreshRelevantBrainMemory, saveImprovementProposals} from "../brain/memory";
 
@@ -61,7 +62,13 @@ export async function runWorkflow(
   // 最速実装モード STEP2: Brain Memory/Execution Historyを
   // Conversationへ紐付けて永続化するための任意ID。未指定の場合は
   // nullのまま保存する(既存呼び出し元の挙動は変えない)。
-  conversationId?: string | null
+  conversationId?: string | null,
+  // STEP159: Conversation層(runConversationTurn())がTask
+  // Reconstructionで既に消費したLLMコスト。未指定(Conversation層を
+  // 経由しない呼び出し、またはTask Reconstruction失敗時)の場合は
+  // createContext()側が{tokens:0, estimatedUSD:0}から開始する
+  // (既存呼び出し元の挙動は変えない)。
+  taskReconstructionCost?: { tokens: number; estimatedUSD: number }
 ) {
 
 
@@ -74,7 +81,8 @@ export async function runWorkflow(
       artifactType,
       destination,
       rawUserInput,
-      userId
+      userId,
+      taskReconstructionCost
     );
 
 // ==========================
@@ -107,6 +115,18 @@ context.brainMemory =
 
 const patterns =
   analyzePatterns(
+    history
+  );
+
+
+// STEP160: TaskProfile(category/evidenceMode/qualityProfile/
+// modelTier)とExecutionRecord.costを軸としたPattern分析。この時点
+// ではまだcontext.taskProfileが未確定(Planner未実行)のため、
+// Recommendationの算出自体はPlanner実行後(下のdynamicPlanループ内、
+// context.taskProfile確定直後)まで行わない。ここではhistory
+// (既に取得済み)からPatternの集計だけを済ませておく。
+const modelTierPatterns =
+  analyzeModelTierPatterns(
     history
   );
 
@@ -409,6 +429,56 @@ if(
 
         context.qualityProfile =
           plannerResult.qualityProfile;
+
+      }
+
+
+      // STEP156: handlePlanner()が算出したTaskProfileをcontextへ
+      // 保持する。現時点ではLLM選択・Search実行の分岐には使わず、
+      // 実行履歴(ExecutionRecord)への記録のみを目的とする。
+      if (plannerResult.taskProfile) {
+
+        context.taskProfile =
+          plannerResult.taskProfile;
+
+        // STEP160: TaskProfileが確定した直後に、過去実績から
+        // modelTierのRecommendationを算出する。ここではログ・
+        // ExecutionRecordへの記録のみを行い、
+        // context.taskProfile.modelTier自体は書き換えない
+        // (絶対条件: BrainRecommendation→TaskProfile.modelTier変更の
+        // 実接続はSTEP160では行わない)。過去データが不十分な場合は
+        // recommendModelTier()自体がnullを返す(無理な推奨をしない)。
+        const modelTierRecommendation =
+          recommendModelTier(
+            context.taskProfile,
+            modelTierPatterns
+          );
+
+        if (modelTierRecommendation) {
+
+          context.modelTierRecommendation =
+            modelTierRecommendation;
+
+        }
+
+        // STEP161: Base Model Tier(context.taskProfile.modelTier)・
+        // Brain Recommendation・安全制約を踏まえたEffective Model
+        // Tierを決定する。context.taskProfile.modelTier自体は
+        // 一切書き換えない(絶対条件11)。recommendModelTier()が
+        // nullを返した場合(データ不足等)、resolveEffectiveModelTier()
+        // 内部でBase Model Tierへフォールバックする。
+        //
+        // STEP163: この値はcore/workflow/runAgent.tsの各
+        // resolveExecutionStrategy()呼び出しで実際に使用される
+        // (context.effectiveModelTier ?? context.taskProfile?.modelTier)。
+        // Brainの生Recommendationを直接渡すことはなく、必ず
+        // resolveEffectiveModelTier()の安全制約を経由した値のみが
+        // 実行へ反映される。
+        context.effectiveModelTier =
+          resolveEffectiveModelTier(
+            context.taskProfile,
+            context.modelTierRecommendation
+          );
 
       }
 
@@ -816,6 +886,48 @@ context.executionRecord = {
   // (上のqualityProfileConfig算出)で既に行われている。
   qualityProfile:
     context.qualityProfile,
+
+  // STEP156: 同上の位置づけ(記録専用)。将来Optimizer/Brainが
+  // category・modelTier・searchIntensity単位の実行パターンを
+  // 分析できるようにするために保持する。Workflow分岐にはまだ
+  // 使わない。
+  taskProfile:
+    context.taskProfile,
+
+  // STEP160: 過去実績から算出したmodelTierの推奨(生の値)。
+  // この値自体が直接実行へ渡ることはなく、必ずresolveEffectiveModelTier()
+  // (STEP161)の安全制約を経由したeffectiveModelTierが実行へ使われる
+  // (STEP163絶対条件2)。過去データ不足等でRecommendationが
+  // 得られなかった場合はundefinedのまま。
+  modelTierRecommendation:
+    context.modelTierRecommendation,
+
+  // STEP161: Base(taskProfile.modelTier)・Recommendation
+  // (modelTierRecommendation.modelTier)・Effectiveの3値を区別して
+  // 記録する(絶対条件11)。STEP163でこの値が実際にrunAgent.tsの
+  // resolveExecutionStrategy()へ渡るようになったため、通常は
+  // 「今回のRunで実際に使用されたmodelTier」と一致する。
+  effectiveModelTier:
+    context.effectiveModelTier,
+
+  // STEP159: Workflow実行中に発生した全LLM呼び出し(Task
+  // Reconstruction・Planner・Researcher・Analyst・Reviewer・Writer・
+  // Revision・HoldConclusion等)のusage/costを積算した合計値。
+  // usage/pricingが取得できなかった呼び出しは単に加算されていない
+  // ため、一部の呼び出しのコストが不明でもWorkflow全体は必ず完走する
+  // (絶対条件)。
+  cost:
+    context.costAccumulator,
+
+  // STEP168: core/llm/runLLMWithFallback.tsが実際に呼び出した
+  // Provider/Model。context.actualExecution(参照渡しで各LLM呼び出し
+  // 直後に上書きされる)の、このWorkflow実行終了時点での値を
+  // そのまま複製する。Fallbackが一度も発生しなければ常にopenai。
+  actualProvider:
+    context.actualExecution?.provider,
+
+  actualModel:
+    context.actualExecution?.model,
 
   critiqueExecuted:
     Boolean(context.writerCritique),

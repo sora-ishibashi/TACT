@@ -1,6 +1,7 @@
 import { getTeam } from "../planner/getTeam";
 import { detectEvidenceMode, EvidenceMode } from "../evidence/evidenceMode";
 import { detectQualityProfile, QualityProfile } from "./qualityProfile";
+import { buildTaskProfile } from "./taskProfile";
 
 // STEP70: EvidenceMode=noneのとき、team(getTeam()の戻り値)から
 // 除外するAgent。Researcher/QueryBuilderは指示通り必須の除外対象。
@@ -140,6 +141,29 @@ export function handlePlanner(
   console.log(
     "[QualityProfile]",
     qualityProfile
+  );
+
+
+
+  // ==========================
+  // TaskProfile算出 (STEP156)
+  // ==========================
+  //
+  // 新しい判定ロジックは追加せず、直前に算出済みのcategory
+  // (parsed.category)・evidenceMode・qualityProfileを束ねるだけ。
+  // modelTier/searchIntensityはbuildTaskProfile()内部で決定論的に
+  // 導出される(STEP156時点ではLLM選択・Search実行には未接続。
+  // context/ExecutionRecordへの記録のみ)。
+  const taskProfile =
+    buildTaskProfile(
+      parsed.category,
+      evidenceMode,
+      qualityProfile
+    );
+
+  console.log(
+    "[TaskProfile]",
+    taskProfile
   );
 
 
@@ -335,6 +359,8 @@ export function handlePlanner(
     evidenceMode,
 
     qualityProfile,
+
+    taskProfile,
 
   };
 

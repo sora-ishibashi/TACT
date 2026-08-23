@@ -130,6 +130,34 @@ export async function POST(
               body.title
             );
 
+          // STEP153: 非StreamのPOST /api/tact/conversation
+          // (app/api/tact/conversation/route.ts、STEP141)と同じ
+          // 事前save処理。新規Conversationはこの時点ではメモリ上にしか
+          // 存在しない(createConversation()はDBへ書き込まない)。
+          // runConversationTurn()内部のrunWorkflow()は、Brain
+          // (tact_execution_history / tact_memory)へconversation_idを
+          // 外部キーとして保存するため、Workflow実行前に
+          // conversationsテーブルへ先に存在させておく必要がある
+          // (未挿入のままWorkflowを実行すると、外部キー制約違反で
+          // Brainの永続化だけが失敗していた。STEP152/153で発見)。
+          // saveConversation()はidを基準にupsertする既存関数のため、
+          // ここで呼んでも後段の最終saveConversation()と重複更新には
+          // ならない(同じ行を最新状態で上書きするだけ)。
+          try {
+
+            await saveConversation(
+              conversation
+            );
+
+          } catch (saveError) {
+
+            console.error(
+              "Failed to pre-save new conversation before workflow:",
+              saveError
+            );
+
+          }
+
         }
 
         send({

@@ -34,6 +34,14 @@ export interface SearchRequest {
   // 省略時は各Provider実装側のデフォルト値を使う。
   maxResults?: number;
 
+  // STEP158: Search Strategy(core/tools/search/searchStrategy.ts)が
+  // TaskProfile.searchIntensityから解決する検索深度。Tavilyのみが
+  // 対応するパラメータで、Brave Search APIには深度の概念が存在しない
+  // ため、BraveProviderはこのフィールドを単に無視する(型エラーには
+  // ならない。SearchProviderインターフェース自体は変更していない)。
+  // 省略時は各Provider実装側の既存デフォルト値を使う。
+  searchDepth?: "basic" | "advanced";
+
 }
 
 // Providerの失敗理由。executeToolCalls()側のログ・フォールバック判定

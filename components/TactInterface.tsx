@@ -6,6 +6,7 @@ import Header from "./Header";
 import Workspace from "./layout/Workspace";
 import ConversationList from "./ConversationList";
 import BetaFeedbackCard from "./beta/BetaFeedbackCard";
+import ResearchPanel from "./ResearchPanel";
 import { useAuth } from "@/components/auth/AuthProvider";
 import type { WorkflowEvent } from "@/core/context/types";
 import { diffSections } from "@/core/conversation/mergeWriterOutput";
@@ -83,6 +84,11 @@ export default function TactInterface() {
 
   // Conversation一覧オーバーレイの開閉状態(STEP9)。
   const [showConversationList, setShowConversationList] =
+    useState(false);
+
+  // STEP202: TACT Research(POST /api/tact/research)パネルの開閉状態。
+  // 既存のTurn/Conversation状態機械とは無関係な、独立した最小トグル。
+  const [showResearchPanel, setShowResearchPanel] =
     useState(false);
 
   // STEP24: 空状態の提案ボタン(Conversation)から入力欄(InputBar)へ
@@ -518,6 +524,30 @@ export default function TactInterface() {
           }
           onSelect={handleSelectConversation}
           onCreateNew={resetForNewConversation}
+        />
+
+      )}
+
+      {/*
+        STEP202: TACT Research(POST /api/tact/research)を開くための
+        最小限のトグル。既存のTurn送信(InputBar/Workspace)とは別の、
+        独立したボタン+パネル。STEP213でDirect Pushタブも同じパネルへ
+        追加したため、ボタンラベルを「TACT Dev」へ変更した(パネル内部の
+        構成のみの変更、開閉トグル自体のロジックは無変更)。
+      */}
+
+      <button
+        type="button"
+        onClick={() => setShowResearchPanel((prev) => !prev)}
+        className="fixed bottom-6 right-6 z-40 rounded-full bg-black px-4 py-2 text-sm text-white shadow-lg hover:bg-gray-800"
+      >
+        {showResearchPanel ? "閉じる" : "TACT Dev"}
+      </button>
+
+      {showResearchPanel && (
+
+        <ResearchPanel
+          onClose={() => setShowResearchPanel(false)}
         />
 
       )}

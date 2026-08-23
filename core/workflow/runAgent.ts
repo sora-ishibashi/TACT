@@ -1,5 +1,7 @@
 import { buildPrompt } from "../prompt/builder";
-import { runLLM } from "../llm";
+import { runLLMWithFallback } from "../llm/runLLMWithFallback";
+import { resolveExecutionStrategy } from "../llm/executionStrategy";
+import { TaskProfile, ModelTier } from "./taskProfile";
 import { executeToolCalls } from "../tools/executeToolCalls";
 import { retrieveEvidence } from "../evidence/retrieveEvidence";
 import { selectEvidence } from "../evidence/selectEvidence";
@@ -13,8 +15,10 @@ import {
 } from "../evidence/evidenceGuard";
 import { detectResearchRequirement } from "../evidence/researchRequirement";
 import { Agent } from "../agents/types";
+import type { Provider } from "../agent/types";
 import { WorkflowStep } from "./types";
 import { WorkflowContext, Evidence } from "../context/types";
+import { accumulateLLMCost, recordActualExecution } from "../context";
 import { IDEA_MODE_MARKER } from "./ideaMode";
 import {
   resolveConclusionState,
@@ -101,6 +105,18 @@ async function retryResearcherSearch(
     "[ResearchGuard] search-required request but no toolRequests. retrying once."
   );
 
+  // STEP163: Base(context.taskProfile.modelTier)とBrain Recommendation
+  // をresolveEffectiveModelTier()(core/brain/effectiveModelTier.ts)で
+  // 調停済みのcontext.effectiveModelTierを優先する。未確定の場合
+  // (taskProfile自体が未確定な場合を含む)はcontext.taskProfile?.modelTier
+  // へ、それも無ければresolveExecutionStrategy()内部の既定動作
+  // (economy相当)へフォールバックする。Brainの生Recommendationを
+  // 直接渡さない(STEP163絶対条件2)。
+  const executionStrategy =
+    resolveExecutionStrategy(
+      context.effectiveModelTier ?? context.taskProfile?.modelTier
+    );
+
   // buildPrompt()のmemory引数はRecord<string, string[]>だが、
   // WorkflowContext.memoryはBrainRuleも許容する(既存の型不一致。
   // runAgent()本体はcontext: anyのため表面化していなかった)。
@@ -140,12 +156,26 @@ async function retryResearcherSearch(
 いけません。
 `;
 
-  const retryResponse =
-    await runLLM({
-      provider: agent.provider,
+  const retryResult =
+    await runLLMWithFallback({
+      provider: executionStrategy.provider,
+      model: executionStrategy.model,
       systemPrompt: agent.systemPrompt,
       userPrompt: retryPrompt,
     });
+
+  const retryResponse = retryResult.response;
+
+  // STEP159: Workflow全体のコスト集計へ加算する。
+  accumulateLLMCost(context.costAccumulator, retryResponse.cost);
+
+  // STEP168: 実際に使用されたProvider/Modelを記録する
+  // (Fallback発生時はSecondary側の値になる)。
+  recordActualExecution(
+    context.actualExecution,
+    retryResult.actualProvider,
+    retryResult.actualModel
+  );
 
   const retryCleaned =
     cleanJSON(retryResponse.content ?? "");
@@ -178,7 +208,8 @@ async function retryResearcherSearch(
   const toolResults =
     await executeToolCalls(
       retryParsed.toolRequests,
-      context.userInput
+      context.userInput,
+      context.taskProfile?.searchIntensity
     );
 
   for (const toolOutputs of Object.values(toolResults)) {
@@ -233,12 +264,25 @@ toolRequestsは必ず空配列にしてください。
 
 `;
 
-  const finalResponse =
-    await runLLM({
-      provider: agent.provider,
+  const finalResult =
+    await runLLMWithFallback({
+      provider: executionStrategy.provider,
+      model: executionStrategy.model,
       systemPrompt: agent.systemPrompt,
       userPrompt: finalPrompt,
     });
+
+  const finalResponse = finalResult.response;
+
+  // STEP159: Workflow全体のコスト集計へ加算する。
+  accumulateLLMCost(context.costAccumulator, finalResponse.cost);
+
+  // STEP168: 実際に使用されたProvider/Modelを記録する。
+  recordActualExecution(
+    context.actualExecution,
+    finalResult.actualProvider,
+    finalResult.actualModel
+  );
 
   const finalCleaned =
     cleanJSON(finalResponse.content ?? "");
@@ -297,6 +341,14 @@ export async function reviewWriterOutput(
   reviewerAgent: Agent,
   context: WorkflowContext
 ): Promise<unknown | null> {
+
+  // STEP163: context.effectiveModelTier(Brain Recommendationを
+  // resolveEffectiveModelTier()で調停済みの値)を優先し、未確定なら
+  // context.taskProfile?.modelTierへフォールバックする。
+  const executionStrategy =
+    resolveExecutionStrategy(
+      context.effectiveModelTier ?? context.taskProfile?.modelTier
+    );
 
   const writerOutput = context.outputs.writer;
 
@@ -473,12 +525,25 @@ Writerを再実行することはありません。retryは必ず空配列 [] �
 
   try {
 
-    response =
-      await runLLM({
-        provider: reviewerAgent.provider,
+    const result =
+      await runLLMWithFallback({
+        provider: executionStrategy.provider,
+        model: executionStrategy.model,
         systemPrompt: reviewerAgent.systemPrompt,
         userPrompt: criticPrompt,
       });
+
+    response = result.response;
+
+    // STEP159: Workflow全体のコスト集計へ加算する。
+    accumulateLLMCost(context.costAccumulator, response.cost);
+
+    // STEP168: 実際に使用されたProvider/Modelを記録する。
+    recordActualExecution(
+      context.actualExecution,
+      result.actualProvider,
+      result.actualModel
+    );
 
   } catch (error) {
 
@@ -563,6 +628,13 @@ export async function reviseWriterOutput(
   context: WorkflowContext,
   critique: unknown
 ): Promise<unknown | null> {
+
+  // STEP163: context.effectiveModelTierを優先し、未確定なら
+  // context.taskProfile?.modelTierへフォールバックする。
+  const executionStrategy =
+    resolveExecutionStrategy(
+      context.effectiveModelTier ?? context.taskProfile?.modelTier
+    );
 
   const currentWriterOutput = context.outputs.writer;
 
@@ -787,12 +859,25 @@ ${structuralRevisionBlock}
 
   try {
 
-    response =
-      await runLLM({
-        provider: writerAgent.provider,
+    const result =
+      await runLLMWithFallback({
+        provider: executionStrategy.provider,
+        model: executionStrategy.model,
         systemPrompt: writerAgent.systemPrompt,
         userPrompt: revisionPrompt,
       });
+
+    response = result.response;
+
+    // STEP159: Workflow全体のコスト集計へ加算する。
+    accumulateLLMCost(context.costAccumulator, response.cost);
+
+    // STEP168: 実際に使用されたProvider/Modelを記録する。
+    recordActualExecution(
+      context.actualExecution,
+      result.actualProvider,
+      result.actualModel
+    );
 
   } catch (error) {
 
@@ -892,8 +977,36 @@ export async function generateHoldConclusion(
   phase1ExecutiveSummary: string,
   analystOutput: unknown,
   conclusionState: ConclusionState,
-  evidence: Evidence[]
+  evidence: Evidence[],
+  // STEP157: 呼び出し元のcontext.taskProfileをそのまま受け取るだけ
+  // (この関数自体はWorkflowContextを持たないため、必要な値だけを
+  // 引数として渡す)。省略時はresolveExecutionStrategy()が
+  // economy相当へフォールバックする。
+  taskProfile?: TaskProfile,
+  // STEP159: 呼び出し元のcontext.costAccumulatorをそのまま受け取り、
+  // このLLM呼び出し分のcostを加算するためだけに使う。この関数自体は
+  // WorkflowContextを持たないため(STEP157の設計を踏襲)、戻り値の
+  // 契約(Promise<string|null>)は変更せず、参照渡しの累積器へ直接
+  // 加算する。
+  costAccumulator?: { tokens: number; estimatedUSD: number },
+  // STEP163: 呼び出し元のcontext.effectiveModelTier(Brain
+  // Recommendationをresolve EffectiveModelTier()で調停済みの値)を
+  // そのまま受け取るだけ。省略時はtaskProfile?.modelTierへ、
+  // それも無ければresolveExecutionStrategy()の既定動作
+  // (economy相当)へフォールバックする。
+  effectiveModelTier?: ModelTier,
+  // STEP168: 呼び出し元のcontext.actualExecutionをそのまま受け取り、
+  // 実際に使用されたProvider/Modelを記録するためだけに使う
+  // (costAccumulatorと同じ「参照渡しの保持先」パターン)。
+  actualExecution?: { provider?: Provider; model?: string }
 ): Promise<string | null> {
+
+  // STEP163: effectiveModelTierを優先し、未確定ならtaskProfile?.modelTier
+  // へフォールバックする。
+  const executionStrategy =
+    resolveExecutionStrategy(
+      effectiveModelTier ?? taskProfile?.modelTier
+    );
 
   const evidenceSummary =
     evidence
@@ -962,12 +1075,25 @@ ${evidenceSummary}
 
   try {
 
-    response =
-      await runLLM({
-        provider: writerAgent.provider,
+    const result =
+      await runLLMWithFallback({
+        provider: executionStrategy.provider,
+        model: executionStrategy.model,
         systemPrompt: writerAgent.systemPrompt,
         userPrompt: prompt,
       });
+
+    response = result.response;
+
+    // STEP159: Workflow全体のコスト集計へ加算する。
+    accumulateLLMCost(costAccumulator, response.cost);
+
+    // STEP168: 実際に使用されたProvider/Modelを記録する。
+    recordActualExecution(
+      actualExecution,
+      result.actualProvider,
+      result.actualModel
+    );
 
   } catch (error) {
 
@@ -1075,6 +1201,19 @@ export async function runAgent(
   console.log(`${agent.name} START`);
   console.log(`Task : ${step.task}`);
   console.log("====================================");
+
+  // STEP163: context.effectiveModelTier(Brain Recommendationを
+  // resolveEffectiveModelTier()で調停済みの値)を優先し、未確定なら
+  // context.taskProfile?.modelTierへ、それも無ければ
+  // resolveExecutionStrategy()内部の既定動作(economy相当)へ
+  // フォールバックする。Planner自身の実行時点ではtaskProfile/
+  // effectiveModelTierとも未確定のため、常にeconomy相当
+  // (既存のgpt-4o-mini)になる(Plannerのモデル選択を無理に変更
+  // しない、というSTEP157の方針を維持)。
+  const executionStrategy =
+    resolveExecutionStrategy(
+      context.effectiveModelTier ?? context.taskProfile?.modelTier
+    );
 
 let toolResults: Record<string, unknown> = {};
 
@@ -1787,16 +1926,30 @@ recommendationsを生成する際は、以下の優先順位を厳守してく�
   // Tool Requestsが発生した場合、下の2回目の呼び出しで再代入される。
   let finalUserPrompt = userPrompt1;
 
-  let response = await runLLM({
+  const result1 = await runLLMWithFallback({
 
 
-    provider: agent.provider,
+    provider: executionStrategy.provider,
+
+    model: executionStrategy.model,
 
     systemPrompt: agent.systemPrompt,
 
     userPrompt: userPrompt1,
 
   });
+
+  let response = result1.response;
+
+  // STEP159: Workflow全体のコスト集計へ加算する。
+  accumulateLLMCost(context.costAccumulator, response.cost);
+
+  // STEP168: 実際に使用されたProvider/Modelを記録する。
+  recordActualExecution(
+    context.actualExecution,
+    result1.actualProvider,
+    result1.actualModel
+  );
 
 
   console.log("====================================");
@@ -1865,7 +2018,8 @@ recommendationsを生成する際は、以下の優先順位を厳守してく�
     toolResults =
       await executeToolCalls(
         parsed.toolRequests,
-        context.userInput
+        context.userInput,
+        context.taskProfile?.searchIntensity
       );
 
 
@@ -1931,15 +2085,29 @@ toolRequestsは必ず空配列にしてください。
 
     finalUserPrompt = userPrompt2;
 
-    response = await runLLM({
+    const result2 = await runLLMWithFallback({
 
-      provider: agent.provider,
+      provider: executionStrategy.provider,
+
+      model: executionStrategy.model,
 
       systemPrompt: agent.systemPrompt,
 
       userPrompt: userPrompt2,
 
     });
+
+    response = result2.response;
+
+    // STEP159: Workflow全体のコスト集計へ加算する。
+    accumulateLLMCost(context.costAccumulator, response.cost);
+
+    // STEP168: 実際に使用されたProvider/Modelを記録する。
+    recordActualExecution(
+      context.actualExecution,
+      result2.actualProvider,
+      result2.actualModel
+    );
 
 
     console.log("====================================");
@@ -2406,7 +2574,18 @@ toolRequestsは必ず空配列にしてください。
           parsed.executiveSummary,
           context.outputs.analyst,
           context.conclusionState,
-          relevantEvidence
+          relevantEvidence,
+          // STEP157: 同一Workflow実行のExecutionStrategyを一貫させる
+          // ため、context.taskProfileをそのまま渡す。
+          context.taskProfile,
+          // STEP159: この関数内のLLM呼び出し分のcostをWorkflow全体の
+          // 集計へ加算するため、context.costAccumulatorをそのまま渡す。
+          context.costAccumulator,
+          // STEP163: context.effectiveModelTierをそのまま渡す。
+          context.effectiveModelTier,
+          // STEP168: 実際に使用されたProvider/Modelを記録するため、
+          // context.actualExecutionをそのまま渡す。
+          context.actualExecution
         );
 
       if (completedSummary) {
@@ -2471,7 +2650,20 @@ if (
 
 for (const improvement of parsed.improvements) {
 
-  const lower = improvement.toLowerCase();
+  // STEP157: gpt-4o-mini以外のモデル(standard/premium tier)を
+  // 初めて実運用したところ、Reviewerのparsed.improvementsの要素が
+  // 常に文字列とは限らない(オブジェクトが返るケースを実機で確認)
+  // ことが判明し、improvement.toLowerCase()がTypeErrorで
+  // Workflow全体を停止させていた。BrainRule.rule(下記)は既存の型
+  // どおりstringである必要があるため、文字列以外の場合は
+  // JSON.stringify()で安全に文字列化する(既存のstring要素に対する
+  // 挙動は一切変えない)。
+  const improvementText =
+    typeof improvement === "string"
+      ? improvement
+      : JSON.stringify(improvement);
+
+  const lower = improvementText.toLowerCase();
 
   let target = "reviewer";
 
@@ -2502,7 +2694,7 @@ for (const improvement of parsed.improvements) {
   context.memory[target] ??= [];
 
   context.memory[target].push({
-    rule: improvement,
+    rule: improvementText,
     reason: "Generated by Reviewer",
     priority: "medium",
     createdAt: Date.now(),

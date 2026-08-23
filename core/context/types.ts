@@ -1,6 +1,8 @@
 import { EvidenceMode } from "../evidence/evidenceMode";
 import { QualityProfile } from "../workflow/qualityProfile";
 import { ConclusionState } from "../workflow/conclusionState";
+import { TaskProfile, ModelTier } from "../workflow/taskProfile";
+import type { Provider } from "../agent/types";
 
 // =========================
 // Artifact Type / Destination (STEP74)
@@ -124,6 +126,52 @@ export interface ExecutionRecord {
   // context.qualityProfileを見て行われるが、ここには実行後の
   // 記録として複製するだけ)。
   qualityProfile?: QualityProfile;
+
+  // STEP156: 今回のRunで算出されたTaskProfile(category/evidenceMode/
+  // qualityProfileの束ね + modelTier/searchIntensity)。evidenceMode/
+  // qualityProfileと同じ「記録専用フィールド」の位置づけで、将来
+  // Optimizer/Brainがcategory・modelTier・searchIntensity単位の
+  // 実行パターンを分析できるようにするために保持する
+  // (STEP156時点ではOptimizerとの実接続は行わない)。
+  taskProfile?: TaskProfile;
+
+  // STEP160: core/brain/optimizer.tsのrecommendModelTier()が算出した
+  // modelTierの推奨。記録専用フィールドであり、Workflowの分岐には
+  // まだ使わない(TaskProfile.modelTierへの実接続はSTEP161以降)。
+  // 過去データが不足している場合はundefinedのまま。
+  modelTierRecommendation?: {
+    modelTier?: ModelTier;
+    confidence?: number;
+    reason: string;
+  };
+
+  // STEP161: core/brain/effectiveModelTier.tsのresolveEffectiveModelTier()
+  // が、TaskProfile(Base)・modelTierRecommendation(Brain推薦)・
+  // 安全制約を踏まえて決定した、今回実際にLLM実行へ使用するTier。
+  // taskProfile.modelTier(Base)は一切書き換えないため、両者を区別
+  // して記録できる(STEP161絶対条件11)。taskProfile未確定の場合は
+  // undefinedのまま。
+  effectiveModelTier?: ModelTier;
+
+  // STEP168: 実際にこのWorkflow実行で最後に使用されたProvider/Model。
+  // modelTier/effectiveModelTierは「どのTierを使うべきか」という
+  // 抽象的な判断結果であるのに対し、こちらは
+  // core/llm/runLLMWithFallback.tsが実行した結果、実際にどの
+  // Provider/Modelが応答を返したか(Fallback発生時はSecondary側)を
+  // 記録する。
+  //
+  // 既知の制約: 1回のWorkflow実行内で複数Agentが複数回LLMを呼び出す
+  // ため、途中でFallbackが発生/解消するとこの値は呼び出しごとに
+  // 上書きされる。したがってここに残るのは「このWorkflow実行における
+  // “最後の”LLM呼び出しで実際に使われたProvider/Model」であり、
+  // 実行全体を通して単一のProviderだけが使われたことを保証する値
+  // ではない(ただし実際には、OpenAI障害は通常Workflow実行の期間中
+  // 持続するため、同一Run内で混在するケースは稀と想定される)。
+  // より厳密な呼び出し単位の追跡が必要になった場合は、既存の
+  // costAccumulatorと同様に呼び出しごとの配列へ拡張する余地を残す。
+  actualProvider?: Provider;
+
+  actualModel?: string;
 
   // STEP71: Writer Critique(STEP67)/Writer Revision(STEP68)が
   // 実際に実行されたかどうか。新しいログ構造は増やさず、
@@ -393,6 +441,93 @@ evidenceMode?: EvidenceMode;
 // まま(その場合core/workflow/index.ts側で既存のSTEP67/68挙動
 // (常にCritique実行)を維持する安全側のデフォルトを使う)。
 qualityProfile?: QualityProfile;
+
+// =====================
+// Task Profile (STEP156)
+// =====================
+//
+// handlePlanner.tsがevidenceMode/qualityProfileと同時に一度だけ
+// 算出する、今回のRunのTaskProfile(core/workflow/taskProfile.ts)。
+// category(Planner判定)・evidenceMode・qualityProfileを束ね、
+// modelTier(推論能力の必要度)・searchIntensity(検索強度の必要度)を
+// 決定論的に導出したものであり、新しい判定ロジックは持たない。
+//
+// STEP156時点では、この値は「実行判断の材料としてcontextへ保持する」
+// ところまでが目的であり、実際のLLM選択(core/llm/index.ts)や
+// Search実行(core/tools/search/)の分岐には一切使われない
+// (将来のExecution Strategy設計で接続する)。team構築自体が
+// 行われなかった場合はundefinedのまま。
+taskProfile?: TaskProfile;
+
+// =====================
+// Model Tier Recommendation (STEP160)
+// =====================
+//
+// core/brain/optimizer.tsのrecommendModelTier()が、過去の
+// ExecutionRecord(TaskProfile・cost・quality)から算出した
+// modelTierの推奨。core/brain/optimizer.tsのBrainRecommendation型と
+// 構造的に同じ形状を持つが、ここでは直接importしない
+// (core/brain/optimizer.ts → core/brain/pattern.ts →
+// core/context/types.tsという既存の依存方向があるため、ここで
+// optimizer.tsをimportすると循環参照になる。ExecutionRecord.cost
+// (STEP159)と同じく「値レベルで同じ形状を使うだけ」の方針を踏襲する)。
+//
+// STEP160時点では記録専用であり、TaskProfile.modelTierを実際に
+// 書き換える接続は行わない(絶対条件)。過去データが不足している
+// 場合はundefinedのまま。
+modelTierRecommendation?: {
+  modelTier?: ModelTier;
+  confidence?: number;
+  reason: string;
+};
+
+// STEP161: core/brain/effectiveModelTier.tsのresolveEffectiveModelTier()
+// が、TaskProfile(Base)・modelTierRecommendation(Brain推薦)・安全
+// 制約を踏まえて決定した、今回実際にLLM実行へ使用するTier。
+// taskProfile.modelTier(Base)は一切書き換えないため、両者を区別
+// して保持できる(STEP161絶対条件11)。taskProfile未確定の場合は
+// undefinedのまま。
+effectiveModelTier?: ModelTier;
+
+// =====================
+// LLM Cost (STEP159)
+// =====================
+//
+// このWorkflow実行中に発生した全LLM呼び出し(Planner・Researcher・
+// Analyst・Reviewer・Writer・Revision・HoldConclusion等)のusage/costを
+// 積算するための累積器。新しいコスト管理基盤を作るのではなく、既存の
+// ExecutionRecord.cost(core/context/types.ts、STEP155調査で既存確認
+// 済み)と全く同じ形状({tokens, estimatedUSD})を、Workflow実行中は
+// 「これまでの合計値」として保持するだけ。
+//
+// createContext()がTask Reconstruction(runWorkflow()呼び出し前、
+// Conversation層で実行される)分のcostを初期値として設定し(存在
+// しない場合は{tokens:0, estimatedUSD:0}から開始)、以降は各
+// runLLM()呼び出し直後にcore/context/index.tsのaccumulateLLMCost()が
+// response.costを加算する。usage/pricingが取得できなかった呼び出しは
+// 単に加算されない(絶対条件: コスト計算失敗でWorkflowを失敗させない)。
+costAccumulator: {
+  tokens: number;
+  estimatedUSD: number;
+};
+
+// =====================
+// Actual LLM Execution (STEP168)
+// =====================
+//
+// core/llm/runLLMWithFallback.tsが実際に呼び出したProvider/Modelを
+// 記録するための、書き換え可能な保持先(costAccumulatorと同じ
+// 「参照を渡してその場で書き換える」設計)。generateHoldConclusion()
+// のようにWorkflowContext自体を持たない関数からも、この
+// オブジェクト参照だけを渡せば更新できる。
+//
+// 実行のたびに上書きされるため、最終的に残るのは「このWorkflow
+// 実行における最後のLLM呼び出しで実際に使われたProvider/Model」。
+// Fallbackが発生しなかった場合は常にprovider:"openai"のまま。
+actualExecution: {
+  provider?: Provider;
+  model?: string;
+};
 
 // =====================
 // Artifact Type / Destination (STEP74)

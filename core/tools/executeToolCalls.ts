@@ -1,9 +1,15 @@
 import { TactToolRequest } from "./types";
 import { executeToolPipeline } from "./pipeline/executeToolPipeline";
+import { SearchIntensity } from "../workflow/taskProfile";
 
 export async function executeToolCalls(
   toolRequests: TactToolRequest[],
-  userInput: string
+  userInput: string,
+  // STEP158: context.taskProfile.searchIntensityをそのまま受け取り、
+  // executeToolPipeline()へ引き継ぐだけ。呼び出し元(runAgent.ts)が
+  // taskProfileを持たない場合はundefinedのまま渡り、既存動作を
+  // 維持するfallbackへ委ねる。
+  searchIntensity?: SearchIntensity
 ) {
   const results: Record<string, unknown[]> = {};
 
@@ -11,7 +17,8 @@ export async function executeToolCalls(
     try {
       const result = await executeToolPipeline(
         request,
-        userInput
+        userInput,
+        searchIntensity
       );
 
       if (!results[request.tool]) {

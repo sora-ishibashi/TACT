@@ -1,4 +1,5 @@
 import { WorkflowContext, Evidence, ArtifactType, Destination } from "./types";
+import type { Provider } from "../agent/types";
 
 export function createContext(
   userInput: string,
@@ -25,7 +26,12 @@ export function createContext(
   // 確定したuserId(core/auth/getAuthenticatedUser.ts)。未指定
   // (未認証、またはConversation層を経由しない呼び出し)の場合は
   // undefinedのまま(既存呼び出し元の挙動は変えない)。
-  userId?: string | null
+  userId?: string | null,
+  // STEP159: Task Reconstruction(runWorkflow()呼び出し前、Conversation
+  // 層で実行される)分のLLMコスト。未指定(Conversation層を経由しない
+  // 呼び出し、またはTask Reconstruction失敗時)の場合は{tokens:0,
+  // estimatedUSD:0}から開始する(既存呼び出し元の挙動を変えない)。
+  initialCost?: { tokens: number; estimatedUSD: number }
 ): WorkflowContext {
 
   return {
@@ -59,6 +65,21 @@ export function createContext(
     destination: destination ?? "tact",
 
     rawUserInput,
+
+    // =========================
+    // LLM Cost (STEP159)
+    // =========================
+
+    costAccumulator: {
+      tokens: initialCost?.tokens ?? 0,
+      estimatedUSD: initialCost?.estimatedUSD ?? 0,
+    },
+
+    // =========================
+    // Actual LLM Execution (STEP168)
+    // =========================
+
+    actualExecution: {},
 
     // =========================
     // Agent Outputs
@@ -112,5 +133,54 @@ handoffs: {},
     events: [],
 
   };
+
+}
+
+// =========================
+// accumulateLLMCost (STEP159)
+// =========================
+//
+// context.costAccumulator(またはgenerateHoldConclusion()のように
+// contextを持たない関数向けに、その参照だけを受け取ったaccumulator)へ、
+// 1回のLLM呼び出し分のcostを加算するだけの純粋な副作用関数。
+// accumulator・costのいずれかが欠けている場合は何もしない
+// (絶対条件: コスト計算失敗でWorkflowを失敗させない)。
+export function accumulateLLMCost(
+  accumulator: { tokens: number; estimatedUSD: number } | undefined,
+  cost?: { tokens: number; estimatedUSD: number }
+): void {
+
+  if (!accumulator || !cost) {
+    return;
+  }
+
+  accumulator.tokens += cost.tokens;
+
+  accumulator.estimatedUSD += cost.estimatedUSD;
+
+}
+
+// =========================
+// recordActualExecution (STEP168)
+// =========================
+//
+// accumulateLLMCost()と同じ「参照を受け取ってその場で書き換える」
+// 設計。context.actualExecution(またはgenerateHoldConclusion()のように
+// contextを持たない関数向けに、その参照だけを受け取ったsink)へ、
+// core/llm/runLLMWithFallback.tsが実際に使用したProvider/Modelを
+// 記録する。sinkが無い場合は何もしない。
+export function recordActualExecution(
+  sink: { provider?: Provider; model?: string } | undefined,
+  provider: Provider,
+  model: string
+): void {
+
+  if (!sink) {
+    return;
+  }
+
+  sink.provider = provider;
+
+  sink.model = model;
 
 }

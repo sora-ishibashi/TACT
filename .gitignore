@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# runtime execution logs (Legacy Workflow debug dumps; can contain real
+# user prompt content, not source code — excluded from Phase 1-10
+# orchestration commit per explicit user decision)
+/logs/
+
+# Supabase CLI local state (project-ref, pooler-url, etc.) — not source
+# code, machine-local tool state
+/supabase/.temp/

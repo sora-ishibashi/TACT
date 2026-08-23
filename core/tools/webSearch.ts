@@ -60,8 +60,24 @@ export const webSearch: Tool = {
 
     }
 
+    // STEP158: maxResults/searchDepthはLLMのtoolRequests引数ではなく、
+    // 呼び出し元(core/tools/pipeline/executeToolPipeline.ts)が
+    // Search Strategy(TaskProfile.searchIntensity由来)から解決して
+    // inputへ注入する。Tool自身の parameters スキーマ(query必須のみ)
+    // は変更していないため、LLM側がこれらの値を意識する必要はない。
+    const maxResults =
+      typeof input.maxResults === "number"
+        ? input.maxResults
+        : undefined;
+
+    const searchDepth =
+      input.searchDepth === "basic" ||
+      input.searchDepth === "advanced"
+        ? input.searchDepth
+        : undefined;
+
     const { results, provider, attempts } =
-      await searchWithFallback({ query });
+      await searchWithFallback({ query, maxResults, searchDepth });
 
     if (results.length === 0) {
 

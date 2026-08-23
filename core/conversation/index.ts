@@ -214,6 +214,10 @@ export async function runConversationTurn(
   // IDEA_MODE_MARKERとして既に埋め込まれているため、別途渡す
   // 必要はない)。
   let conversationMode: "evidence" | "idea" = "evidence";
+  // STEP159: Task Reconstruction自体のLLMコスト。失敗時
+  // (catchブロック)はundefinedのまま(既存のフォールバック挙動を
+  // 変えない)。
+  let taskReconstructionCost: { tokens: number; estimatedUSD: number } | undefined;
 
   try {
 
@@ -234,6 +238,7 @@ export async function runConversationTurn(
     requestType = reconstruction.requestType;
     artifactType = reconstruction.artifactType;
     conversationMode = reconstruction.conversationMode;
+    taskReconstructionCost = reconstruction.cost;
 
   } catch (error) {
 
@@ -362,7 +367,10 @@ export async function runConversationTurn(
         authenticatedUserId,
         // 最速実装モード STEP2: Brain Memory/Execution Historyを
         // Conversationへ紐付けて永続化するため。
-        conversation.id
+        conversation.id,
+        // STEP159: Task ReconstructionのLLMコストをWorkflow全体の
+        // 集計へ含めるため、初期値として渡す。
+        taskReconstructionCost
       );
 
     // STEP31: context.evidence(このRunの最終的なEvidence pool。

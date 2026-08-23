@@ -1,36 +1,16 @@
-import TactInterface from "../components/TactInterface";
-import { supabase } from "@/core/database/supabase";
+// =========================
+// TACT — 既定の入口 (STEP215)
+// =========================
+//
+// STEP215で、新TACT(Persistent Core / Research / Direct Push)を
+// 通常利用経路(ルート"/")にした。旧TACT(複数Agent Legacy Workflow)
+// は削除しておらず、"/legacy"(app/legacy/page.tsx)からFrozen Legacy
+// として引き続きアクセスできる。
 
-export default async function Home() {
+import TactShell from "@/components/tact/TactShell";
 
-  const { data, error } = await supabase
-    .from("users")
-    .select("*")
-    .limit(1);
+export default function Home() {
 
+  return <TactShell />;
 
-  console.log(
-    "Supabase Test:",
-    data,
-    error
-  );
-
-
-  return (
-    <main className="flex h-screen bg-white">
-
-      <div className="flex h-full w-full flex-col overflow-hidden">
-
-        {/*
-          STEP24: Headerの状態表示(🟢 Ready等)を実際のTurn実行状態
-          (runStatus)と連動させるため、runStatusを保持する
-          TactInterface側でHeaderをレンダリングする。
-        */}
-
-        <TactInterface />
-
-      </div>
-
-    </main>
-  );
 }
