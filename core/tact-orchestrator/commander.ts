@@ -6,10 +6,12 @@ import { aggregateResults } from "./aggregator";
 import { buildMemoryCandidates } from "./memoryCandidateBuilder";
 import { writeMemoryCandidates } from "./memoryWriter";
 import { createConcurrencyGovernor, resolveMaxAgents } from "./concurrencyGovernor";
+import { detectAmbiguity } from "./ambiguityDetector";
 import type { OrchestrationRequest, OrchestrationResult } from "./types";
 
 // =========================
-// runOrchestration (Phase 3, Commander入口。Phase 4でTaskContext対応)
+// runOrchestration (Phase 3, Commander入口。Phase 4でTaskContext対応、
+// Phase 15でAmbiguity Detectionを追加)
 // =========================
 //
 // 絶対条件11: 呼び出し側は常にrunOrchestration(request)だけを呼べば
@@ -54,6 +56,46 @@ export async function runOrchestration(
 ): Promise<OrchestrationResult> {
 
   const startedAt = Date.now();
+
+  // Phase 15: Task分解・Capability呼び出し・Memory retrievalのいずれも
+  // 行う前に、決定論的なAmbiguity判定を1回だけ行う(絶対条件2: LLM
+  // 呼び出しは追加しない、絶対条件9: LLM callを増やさない)。曖昧と
+  // 判定された場合は、bootstrap・Core接続・Decomposer・Executor・
+  // Memory pipelineのいずれにも到達せず、質問だけを返して停止する
+  // (絶対条件5: Clarificationは「Taskの失敗」ではない。tasks=[]の
+  // ままであり、failed/cancelledなTaskExecutionSummaryを一切生成
+  // しない)。
+  const ambiguity = detectAmbiguity(request.input);
+
+  if (ambiguity.ambiguous && ambiguity.question) {
+
+    return {
+
+      answer: ambiguity.question,
+
+      executionId: crypto.randomUUID(),
+
+      tasks: [],
+
+      memoryUsed: [],
+
+      toolsUsed: [],
+
+      clarification: { question: ambiguity.question },
+
+      memoryWrites: [],
+
+      metadata: {
+
+        executionMode: "clarification-needed",
+
+        durationMs: Date.now() - startedAt,
+
+      },
+
+    };
+
+  }
 
   // core/tact-bootstrap.ts(STEP176/178)は"research"/"design"を
   // 既にregisterCapability済み。bootstrapTactCapabilities()は

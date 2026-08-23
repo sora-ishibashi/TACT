@@ -182,6 +182,19 @@ import type { MemoryWriteOutcome } from "./memoryWriter";
 // Task中心にする。各TaskExecutionSummaryが「どのAgent/Provider/Model
 // が割り当てられたか」を保持するため、Agent単位の情報が失われる
 // わけではない。
+// Phase 15: ambiguityDetector.tsが「対象が完全に不明」と判定した場合に
+// 返す、最小限のClarification要求。Task失敗(failed/cancelled)とは
+// 明確に区別する(絶対条件5: Clarificationは「Taskの失敗」ではない)。
+// 既存の戻り値型(TaskExecutionSummary等)では自然に表現できない
+// 新しい概念(「そもそも実行前で停止した」)であるため、最小限の新型
+// として定義する(絶対条件: 将来のためだけの抽象化はしない、
+// questionの1フィールドのみ)。
+export interface ClarificationRequest {
+
+  question: string;
+
+}
+
 export interface OrchestrationResult {
 
   answer: string;
@@ -195,6 +208,13 @@ export interface OrchestrationResult {
   toolsUsed: ToolExecutionSummary[];
 
   verification?: VerificationSummary;
+
+  // Phase 15: 設定されている場合、Task分解・実行は一切行われて
+  // いない(tasks=[]・memoryUsed=[]・memoryWrites=[]のまま)。answerには
+  // question文字列をそのまま複製する(既存のresult.answerだけを見る
+  // 呼び出し元が更新無しでも自然に質問を表示できるようにするため、
+  // 後方互換性を優先した設計)。
+  clarification?: ClarificationRequest;
 
   // Phase 5: Task結果から生成・評価・(採用された場合)実際に書き込んだ
   // Memory Candidateの一覧。書き込みに失敗しても本体のtasks[].status
