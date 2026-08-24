@@ -44,7 +44,7 @@ interface AuthContextValue {
   signUp: (
     email: string,
     password: string
-  ) => Promise<{ error: string | null }>;
+  ) => Promise<{ error: string | null; sessionCreated: boolean }>;
 
   signOut: () => Promise<void>;
 
@@ -126,16 +126,22 @@ export function AuthProvider(
   async function signUp(
     email: string,
     password: string
-  ): Promise<{ error: string | null }> {
+  ): Promise<{ error: string | null; sessionCreated: boolean }> {
 
-    const { error } =
+    const { data, error } =
       await supabase.auth.signUp({
         email,
         password,
       });
 
+    // Phase72 Section5: Signup成功=即ログイン成功とは仮定しない。
+    // Supabaseの設定でEmail確認が必須の場合、data.sessionはnullのまま
+    // 返る(signUp自体はerrorなしで成功する)。呼び出し元(app/login/
+    // page.tsx)はこのsessionCreatedを見て、即TACTへ遷移してよいか、
+    // 確認メール待ちの状態を表示すべきかを判断する。
     return {
       error: error?.message ?? null,
+      sessionCreated: data.session !== null,
     };
 
   }

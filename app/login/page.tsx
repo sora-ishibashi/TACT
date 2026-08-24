@@ -6,12 +6,54 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 // =========================
-// /login (STEP132)
+// /login (STEP132、Phase72でBeta Entry品質に改善)
 // =========================
 //
 // 最小限のSign in / Sign up フォーム。デザインは作り込まず、
 // TACT本体(app/page.tsx・TactInterface)のUI・レイアウト・テーマには
 // 影響しない、完全に独立したページとする。
+//
+// Phase72 Section4/5: エラーメッセージはSupabaseの内部エラー詳細を
+// そのまま出さず、ユーザーが理解できる文言へ変換する。また、Signup
+// 成功=即ログイン成功とは仮定せず、AuthProvider.signUp()が返す
+// sessionCreated(実際のsession状態)を見て遷移か確認メール表示かを
+// 決める。
+
+// Supabase Authの標準エラーメッセージ(英語)を、内部詳細を含まない
+// 範囲でユーザーに理解できる表現へ変換する。一致しないメッセージは
+// そのまま表示する(Supabaseの標準メッセージ自体が既に内部実装の詳細を
+// 含まないため、フォールバックとして安全)。
+function describeAuthError(raw: string): string {
+
+  const lower = raw.toLowerCase();
+
+  if (lower.includes("invalid login credentials")) {
+    return "メールアドレスまたはパスワードが正しくありません。";
+  }
+
+  if (lower.includes("email not confirmed")) {
+    return "メールアドレスの確認が完了していません。届いた確認メール内のリンクを開いてください。";
+  }
+
+  if (lower.includes("already registered")) {
+    return "このメールアドレスは既に登録されています。ログインをお試しください。";
+  }
+
+  if (lower.includes("password") && lower.includes("least")) {
+    return "パスワードは6文字以上で入力してください。";
+  }
+
+  if (
+    lower.includes("failed to fetch") ||
+    lower.includes("network") ||
+    lower.includes("load failed")
+  ) {
+    return "通信エラーが発生しました。ネットワーク接続をご確認のうえ、もう一度お試しください。";
+  }
+
+  return raw;
+
+}
 
 export default function LoginPage() {
 
@@ -47,34 +89,55 @@ export default function LoginPage() {
     setMessage(null);
     setSubmitting(true);
 
-    const result =
-      mode === "signin"
-        ? await signIn(email, password)
-        : await signUp(email, password);
+    if (mode === "signin") {
+
+      const result = await signIn(email, password);
+
+      setSubmitting(false);
+
+      if (result.error) {
+
+        // STEP132: password自体はエラーメッセージに含まれないため
+        // (Supabase Authの標準エラーメッセージのみ)、そのまま表示可能。
+        // Phase72: ユーザーが理解できる表現へ変換してから表示する。
+        setError(describeAuthError(result.error));
+
+        return;
+
+      }
+
+      router.push("/");
+
+      return;
+
+    }
+
+    const result = await signUp(email, password);
 
     setSubmitting(false);
 
     if (result.error) {
 
-      // STEP132: password自体はエラーメッセージに含まれないため
-      // (Supabase Authの標準エラーメッセージのみ)、そのまま表示可能。
-      setError(result.error);
+      setError(describeAuthError(result.error));
 
       return;
 
     }
 
-    if (mode === "signup") {
+    // Phase72 Section5: Signup成功=即ログイン成功とは仮定しない。
+    // sessionCreated(Supabaseの実際のsession状態)がtrueの場合のみ
+    // (Email確認が不要な設定の場合)、そのままTACTへ遷移する。
+    if (result.sessionCreated) {
 
-      setMessage(
-        "サインアップしました。確認メールの設定によっては、メール内リンクの確認が必要な場合があります。"
-      );
+      router.push("/");
 
       return;
 
     }
 
-    router.push("/");
+    setMessage(
+      "確認メールを送信しました。メール内のリンクを確認してください。"
+    );
 
   }
 
@@ -107,6 +170,7 @@ export default function LoginPage() {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
+          disabled={submitting}
           style={inputStyle}
         />
 
@@ -117,6 +181,7 @@ export default function LoginPage() {
           onChange={(e) => setPassword(e.target.value)}
           required
           minLength={6}
+          disabled={submitting}
           style={inputStyle}
         />
 
@@ -133,7 +198,11 @@ export default function LoginPage() {
           disabled={submitting}
           style={buttonStyle}
         >
-          {mode === "signin" ? "Sign in" : "Sign up"}
+          {submitting
+            ? "送信中..."
+            : mode === "signin"
+              ? "Sign in"
+              : "Sign up"}
         </button>
 
       </form>
