@@ -56,6 +56,18 @@ export interface ResearchOptions {
   // そのままcore/llmへ受け渡すだけ(llmProviderと同じ絶対条件3)。
   llmModel?: string;
 
+  // Phase90(Structured Research Dataset Section4〜6): Table要求を
+  // 事前検知できた場合の列構成・要求件数。設定されている場合、
+  // assembleResearchContext()(contextAssembly.ts)がRESEARCH_LLM_
+  // SYSTEM_PROMPTへ「指定した列・件数で構造化して回答せよ」という
+  // 追加指示を注入する(新しいLLM呼び出しは発生しない、既存の1回の
+  // LLM呼び出しのPromptを変えるだけ)。省略時は既存(Phase1〜89)と
+  // 完全に同じPrompt・挙動になる。
+  tableSchema?: {
+    columns: string[];
+    requestedRowCount?: number;
+  };
+
 }
 
 export interface ResearchParams {
@@ -238,6 +250,26 @@ export interface ResearchResult {
   metadata: ResearchMetadata;
 
   errorMessage?: string;
+
+  // Phase 21: llmAnswer.tsのgenerateLLMAnswer()が既に生成している
+  // LLMAnswerSuccess.uncertainty(contextAssembly.tsの指示に基づき、
+  // 確認できなかった点・限界をLLM自身が申告した自然文)をそのまま
+  // 透過する。新しい判定・新しいLLM呼び出しではない(絶対条件2)。
+  // web-research経路でのみ設定されうる(core-only経路はLLMを呼ばない
+  // ためundefinedのまま)。Evidence単体のconfidence(ResearchEvidenceItem.
+  // confidence)とは別の概念であり、混同しないこと(絶対条件5)。
+  uncertainty?: string;
+
+  // Phase76(Repository Evidence): llmAnswer.tsのgenerateLLMAnswer()が
+  // web-research経路で既に生成しているLLMAnswerSuccess.keyFindings
+  // (「回答の根拠となった重要な事実を短く列挙」、STEP180の
+  // contextAssembly.tsプロンプト仕様で確立済み)を、これまで
+  // runResearch.ts側が一切拾わずに破棄していたことが判明した。新しい
+  // LLM呼び出しは追加せず、既に生成済みの値をそのまま透過するだけ
+  // (uncertaintyと同じ扱い)。core-only経路(LLM 0回)はkeyFindings
+  // 自体が存在しないためundefinedのまま。TACT Artifact
+  // (core/tact-artifact/*)のFinding Block構築に利用する。
+  keyFindings?: string[];
 
 }
 

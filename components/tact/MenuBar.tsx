@@ -1,7 +1,7 @@
 "use client";
 
 // =========================
-// MenuBar (STEP215)
+// MenuBar (STEP215、Phase74でConversationセクションを廃止)
 // =========================
 //
 // 新TACT UIの左端ナビゲーション。将来のTACT派生機能
@@ -9,6 +9,12 @@
 // 今回実装するのはResearch/Coreの2セクションのみ(絶対条件:
 // 未実装機能を無理に作らない)。無効項目はクリックできない
 // 「coming soon」表示に留める。
+//
+// Phase74 Section3: Phase70で追加した"conversation"独立Sectionは廃止
+// した。「Conversationをトップレベルの独立機能として扱わない」という
+// Phase74の方針により、Conversation機能はResearch Workspace
+// (ResearchWorkspace.tsx)内の中央パネルとして再配置されている
+// (components/tact/ResearchWorkspace.tsx参照)。
 
 export type TactSection = "research" | "core";
 

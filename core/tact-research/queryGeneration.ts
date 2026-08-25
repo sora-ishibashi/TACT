@@ -48,12 +48,42 @@ const QUERY_CATEGORIES: QueryCategory[] = [
 
   {
     name: "competitor",
-    keywords: ["競合", "比較"],
+    // Phase88(Repository Evidence: Phase87投資調査): 以前は「比較」も
+    // このカテゴリのkeywordに含めていたが、「数字で比較できる情報」
+    // 「5件を比較」「比較表にしてください」のような、Comparison Table
+    // 生成の文脈で自然に使われる表現まで誤って"competitor"へ分類され、
+    // 無関係な検索接尾辞(「競合」「価格 比較」)が付加されていた。
+    // 本当の競合調査(「競合サービスを比較して」「競合他社の価格を
+    // 比較して」)は必ず「競合」という語自体を伴うため、「比較」単体は
+    // このカテゴリの対象から外す(「競合」のみで判定する、既存の
+    // 真の競合クエリは影響を受けない最小修正)。
+    keywords: ["競合"],
     suffixes: ["競合", "価格 比較"],
   },
 
 ];
 
+// Phase92(Repository Evidence: Phase91 Reality Test): 該当カテゴリが
+// 無いqueryは、これまでqueryそのものをそのままSearch Providerへ渡して
+// いた。しかし実Reality Testで、複数文にまたがる依頼(例:「愛知県内で
+// 、大学生が参加しやすいインターンシップ・キャリアイベントについて
+// 調査してください。2026年8月〜10月に開催されるものを中心に…確認
+// できない情報は推測せず、確認できないものとして扱ってください。」)を
+// そのままTavilyへ渡すと、「確認できない情報は推測せず」のような
+// メタ指示文までもが検索語に混入し、個別イベントページではなく
+// キーワードが広く一致するポータル/一覧ページばかりが上位に来ることが
+// コードレベルで確認された(buildGapResearchQueries()→
+// buildResearchQueries(requirement.query)→本関数、requirement.query=
+// 生の複数文入力そのもの、Phase92投資調査)。
+//
+// 修正: queryが複数文(「。」を含む)にまたがる場合のみ、既存の
+// extractResearchTopic()(Phase88、最初の文から依頼動詞句を除去する
+// だけの決定論的処理、新しいNLUは追加しない)で得た核心トピックを
+// 「追加の」検索語として使う。既存のqueryそのものは削除せず必ず残す
+// (Section12絶対条件・既存Regression Testの「queries.length===1」
+// 「queries.includes(query)」という契約を壊さないため)。単一文の
+// queryや、条件抽出後にqueryと変わらない場合は従来通り[query]のまま
+// (無関係な検索呼び出しを増やさない、既存挙動を尊重する)。
 export function buildResearchQueries(
   query: string
 ): string[] {
@@ -63,6 +93,16 @@ export function buildResearchQueries(
   );
 
   if (!matchedCategory) {
+
+    if (query.includes("。")) {
+
+      const condensedTopic = extractResearchTopic(query);
+
+      if (condensedTopic && condensedTopic !== query) {
+        return Array.from(new Set([condensedTopic, query]));
+      }
+
+    }
 
     // 該当カテゴリが無い場合は、queryそのものを唯一の検索語とする
     // (存在しないカテゴリへ無理に当てはめない)。
@@ -76,6 +116,54 @@ export function buildResearchQueries(
 
   // 元のqueryそのものも検索対象に含め、重複は除去する。
   return Array.from(new Set([query, ...generatedQueries]));
+
+}
+
+// =========================
+// extractResearchTopic (Phase88)
+// =========================
+//
+// Root Cause(Phase87投資調査): 複数ターン会話で「さっき調べた内容に、
+// 〜をさらに5件ほど追加で確認してください」のような追加調査要求が
+// あった場合、この文自体には核心トピック(例:「愛知県」「スポーツ
+// イベント」)が含まれない——「さっき調べた内容」という指示語で前Turn
+// を参照しているだけであり、実際の検索クエリ(composeInputWithDependencies()
+// → ResearchParams.query → buildResearchQueries())はこの文をそのまま
+// 使うため、Search Providerへ渡るクエリから核心トピックが失われて
+// いた。
+//
+// 修正方針: 前Turnのuser発言(OrchestrationRequest.previousUserInput、
+// Phase86で追加済み)から、決定論的にトピック部分だけを抽出する
+// (前Turn全文をそのまま検索語へ連結しない、絶対条件)。
+//
+// 依存方向の制約: core/tact-researchはcore/tact-conversationに依存
+// できない(逆方向のみが許可された既存の一方向依存、Repository
+// Evidenceで確認済み)。そのため、core/tact-conversation/
+// artifactMutation.tsのderiveArtifactTitle()と同じ「最初の文から
+// 依頼動詞句を取り除く」という考え方を、tact-research層で独立して
+// 再実装する(コードの共有ではなく、同じ決定論的な技法を踏襲する
+// だけ——新しいLLM呼び出し・新しいContext Architectureは追加しない)。
+const TRAILING_RESEARCH_REQUEST_CLAUSE_PATTERN =
+  /(?:について|を)?(?:調査し|調べ|確認し|探し|見つけ|整理し|まとめ|教え)(?:て|てください|てほしい|てもらえる)[^。]*$/;
+
+export function extractResearchTopic(text: string): string {
+
+  const trimmed = text.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  // 最初の文だけを対象にする(複数文にまたがる依頼の後半は「目的の
+  // 説明」であることが多く、調査対象そのものではないため、
+  // deriveArtifactTitle()と同じ判断)。
+  const firstSentenceEnd = trimmed.indexOf("。");
+  const firstSentence =
+    firstSentenceEnd === -1 ? trimmed : trimmed.slice(0, firstSentenceEnd);
+
+  const stripped = firstSentence.replace(TRAILING_RESEARCH_REQUEST_CLAUSE_PATTERN, "").trim();
+
+  return stripped || firstSentence.trim();
 
 }
 
@@ -106,5 +194,37 @@ export function buildGapResearchQueries(
   );
 
   return Array.from(new Set(queries));
+
+}
+
+// =========================
+// buildDeepeningQueries (Phase93 Section8)
+// =========================
+//
+// Discoveryで見つかったCandidate Entity(個別の調査対象らしいもの、
+// candidateDiscovery.ts)について、不足Attributeを埋めるための検索語を
+// 決定論的に生成する。LLMにQueryを自由生成させない(絶対条件、
+// Section8「LLMに自由にSearch Queryを作らせることを第一選択に
+// しない」)。「{entityName} {attribute1} {attribute2} ...」という
+// 単純な連結のみ(新しいQuery文法・テンプレートエンジンは作らない、
+// buildResearchQueries()と同じ「シンプルな文字列組み立てのみ」という
+// 既存方針を踏襲する)。
+// candidateDiscovery.tsのneedsDeepening()/selectDeepeningCandidates()も
+// 同じ既定Attribute一覧を参照する(検索語生成と対象選定で語彙が
+// 食い違わないよう、この配列を単一の情報源として共有する)。
+export const DEFAULT_DEEPENING_ATTRIBUTES = ["開催日", "参加費", "定員"];
+
+export function buildDeepeningQueries(
+  candidateNames: string[],
+  attributes?: string[]
+): string[] {
+
+  const attrs =
+    attributes && attributes.length > 0 ? attributes : DEFAULT_DEEPENING_ATTRIBUTES;
+
+  return candidateNames
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0)
+    .map((name) => `${name} ${attrs.join(" ")}`);
 
 }

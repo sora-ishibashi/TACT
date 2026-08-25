@@ -26,7 +26,7 @@
 
 import type { CoreContext, CoreMemory, KnowledgeItem } from "../tact-core";
 import { scoreRelevance } from "./relevance";
-import { MIN_RELEVANCE_SCORE, hasTimeSensitiveSignal } from "./answerability";
+import { MIN_RELEVANCE_SCORE, hasTimeSensitiveSignal, isVolatileResearchKnowledge } from "./answerability";
 import { decomposeIntoRequirements } from "./requirementDecomposition";
 import {
   checkRequirementSafety,
@@ -87,8 +87,11 @@ function classifyRequirement(
   context: CoreContext
 ): ResearchRequirement {
 
+  // Phase94: assessAnswerability()と同じ理由で、Requirementを
+  // "covered"にできる根拠からvolatileなResearch由来Knowledgeを除外する
+  // (isVolatileResearchKnowledge()、core/tact-research/answerability.ts参照)。
   const scoredKnowledge = scoreItems<KnowledgeItem>(
-    context.knowledge,
+    context.knowledge.filter((item) => !isVolatileResearchKnowledge(item)),
     (item) => `${item.title} ${item.description ?? ""} ${item.content}`,
     requirementQuery
   );

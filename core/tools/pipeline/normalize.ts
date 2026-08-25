@@ -8,6 +8,11 @@ export interface NormalizedEvidence {
 
   score?: number;
 
+  // Phase43: SearchResult.publishedAt(Provider側で取得できた場合のみ
+  // 設定される、core/search/types.ts参照)をそのまま素通しする。
+  // ここでは正規化・推測を行わない(既にProvider側で正規化済みのため)。
+  publishedAt?: string;
+
 }
 
 export function normalizeResult(
@@ -33,6 +38,9 @@ export function normalizeResult(
 
     score:
       item.score,
+
+    publishedAt:
+      item.publishedAt,
 
   };
 

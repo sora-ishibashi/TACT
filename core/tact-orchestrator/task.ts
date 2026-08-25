@@ -26,6 +26,8 @@
 import type { Provider } from "../agent/types";
 import type { LLMUsage, LLMCost } from "../llm/types";
 import type { MemoryReference, ToolExecutionSummary } from "./types";
+import type { AnswerConfidence } from "./confidence";
+import type { ResearchEvidenceItem } from "../tact-research/types";
 
 // =========================
 // Task
@@ -70,6 +72,14 @@ export interface Task {
   assignedModel?: string;
 
   assignedProvider?: Provider;
+
+  // Phase90: decomposeTask()がOrchestrationRequest.tableSchemaから
+  // 引き継ぐ(assignedCapability==="research"のTaskにのみ設定)。
+  // executor.tsがResearchOptions.tableSchemaへそのまま橋渡しする。
+  tableSchema?: {
+    columns: string[];
+    requestedRowCount?: number;
+  };
 
 }
 
@@ -118,6 +128,17 @@ export interface TaskExecutionSummary {
   // 場合はundefinedのまま。
   output?: string;
 
+  // Phase 19: chat/その他Capability実行がLLMProviderErrorの一時的な
+  // 理由(quota_exceeded/rate_limited/network_error)で失敗し、
+  // Executorが最大1回まで自動的に再試行して成功した場合のみtrueに
+  // なる。永続的な失敗判定・DB永続化のためのフィールドではなく、
+  // 「この成功はretryを経たものである」ことを呼び出し元(ログ・UI)が
+  // 追跡できるようにするための最小限の観測用フィールド。retryが
+  // 発生しなかった場合(通常の成功・失敗いずれも)はundefinedのまま
+  // (絶対条件: 新しい永続schemaを作らない、既存の成功/失敗の意味を
+  // 変えない)。
+  retried?: boolean;
+
   // Phase 5で判明した不足フィールド: Memory Candidate Builder
   // (memoryCandidateBuilder.ts)が「このResearch結果はCoreに既に
   // あった情報の再掲か、Web検索で得た新しい情報か」を区別する必要が
@@ -132,5 +153,33 @@ export interface TaskExecutionSummary {
   // 昇格させない(絶対条件9)ための判定材料として使う。research以外の
   // Taskではundefinedのまま。
   evidenceCount?: number;
+
+  // Phase76(Repository Evidence): ResearchResult.evidence自体
+  // (id/claim/source/confidence/snippet)。これまでevidenceCount
+  // (件数のみ)へ潰されて実データが破棄されていたことが判明した
+  // (core/tact-orchestrator/executor.tsのexecuteTask())。TACT Artifact
+  // (core/tact-artifact/*)のEvidence Block構築に使う。research以外の
+  // Task、またはTask失敗時はundefinedのまま。
+  evidence?: ResearchEvidenceItem[];
+
+  // Phase76: ResearchResult.keyFindings(web-research経路でのみ、
+  // LLMが既に生成済みの重要事実リスト)をそのまま透過する。新しいLLM
+  // 呼び出しは発生しない。research以外のTask、core-only経路、
+  // Task失敗時はundefinedのまま。
+  keyFindings?: string[];
+
+  // Phase 21: confidence.tsのderiveAnswerConfidence()が
+  // ResearchResultから決定論的に算出した、この回答がEvidence全体に
+  // よってどの程度裏付けられているかの離散Signal。研究Taskが失敗した
+  // 場合(status !== "completed")、またはresearch以外のTaskでは
+  // undefinedのまま(絶対条件5: Task実行成否(status)や個々のEvidence
+  // confidenceと混同しない、独立したフィールドとして扱う)。
+  answerConfidence?: AnswerConfidence;
+
+  // Phase 21: ResearchResult.uncertainty(Research LLMが既に生成して
+  // いた、確認できなかった点の自然文申告)をそのまま透過する。新しい
+  // LLM呼び出しではない。web-research経路でLLMがuncertaintyを申告した
+  // 場合のみ設定され、それ以外はundefinedのまま。
+  uncertaintyNote?: string;
 
 }

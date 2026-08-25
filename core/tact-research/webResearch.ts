@@ -24,7 +24,9 @@ import { executeEvidencePipeline } from "../tools/pipeline/evidence";
 import { selectEvidence } from "../evidence/selectEvidence";
 import type { Evidence } from "../context/types";
 
-const DEFAULT_MAX_EVIDENCE = 10;
+// Phase93: Discovery/Deepeningの統合Evidence Pool(runResearch.ts)が、
+// 同じ既定値を新しい定数として重複定義せずそのまま参照できるようexportする。
+export const DEFAULT_MAX_EVIDENCE = 10;
 
 export interface WebResearchResult {
 

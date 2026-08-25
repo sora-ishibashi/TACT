@@ -37,7 +37,9 @@ import {
 // DB row 型(このファイル内部でのみ使用)
 // =========================
 
-interface ConversationRow {
+// Phase55: exportする理由はtoConversation()/toConversationMessage()と
+// 同じ(Testability、STEP20以来の既存パターン)。
+export interface ConversationRow {
   id: string;
   user_id: string | null;
   title: string | null;
@@ -45,14 +47,19 @@ interface ConversationRow {
   current_output: unknown;
   created_at: string;
   updated_at: string;
+  // Phase55
+  pending_clarification_message_id: string | null;
+  pending_clarification_answered_at: string | null;
 }
 
-interface ConversationMessageRow {
+export interface ConversationMessageRow {
   id: string;
   conversation_id: string;
   role: "user" | "assistant";
   content: string;
   created_at: string;
+  // Phase55
+  message_type: "clarification_question" | null;
 }
 
 interface WorkflowRunRow {
@@ -70,7 +77,12 @@ interface WorkflowRunRow {
 // DB row -> ドメイン型 変換
 // =========================
 
-function toConversationMessage(
+// Phase55: exportする理由は既存のcore/tact-orchestrator/executor.tsの
+// isTemporaryFailure()等と同じ(Testabilityのための最小変更)。挙動自体は
+// 変更していない。row↔domain変換ロジックをEvaluation Harnessから
+// 直接検証できるようにする(実Supabase接続を伴わずに、message_type/
+// pendingClarification*の往復変換を確認するため)。
+export function toConversationMessage(
   row: ConversationMessageRow
 ): ConversationMessage {
 
@@ -79,6 +91,8 @@ function toConversationMessage(
     role: row.role,
     content: row.content,
     createdAt: row.created_at,
+    // Phase55: DBのNULLはmessageType未設定(通常メッセージ)を表す。
+    messageType: row.message_type ?? undefined,
   };
 
 }
@@ -97,7 +111,7 @@ function toWorkflowRun(row: WorkflowRunRow): WorkflowRun {
 
 }
 
-function toConversation(
+export function toConversation(
   row: ConversationRow,
   messages: ConversationMessage[],
   workflowRuns: WorkflowRun[]
@@ -115,6 +129,11 @@ function toConversation(
     currentOutput: row.current_output,
     messages,
     workflowRuns,
+    // Phase55
+    pendingClarificationMessageId:
+      row.pending_clarification_message_id ?? undefined,
+    pendingClarificationAnsweredAt:
+      row.pending_clarification_answered_at ?? undefined,
   };
 
 }
@@ -139,7 +158,7 @@ export async function getConversation(
     await supabase
       .from("conversations")
       .select(
-        "id, user_id, title, current_task, current_output, created_at, updated_at"
+        "id, user_id, title, current_task, current_output, created_at, updated_at, pending_clarification_message_id, pending_clarification_answered_at"
       )
       .eq("id", id)
       .maybeSingle();
@@ -155,7 +174,7 @@ export async function getConversation(
   const { data: messageRows, error: messagesError } =
     await supabase
       .from("conversation_messages")
-      .select("id, conversation_id, role, content, created_at")
+      .select("id, conversation_id, role, content, created_at, message_type")
       .eq("conversation_id", id)
       .order("created_at", { ascending: true });
 
@@ -205,6 +224,18 @@ export async function saveConversation(
   conversation: Conversation
 ): Promise<void> {
 
+  // Phase55: pending_clarification_message_idは、まだこの時点では
+  // 保存されていないかもしれないconversation_messages行を参照しうる
+  // (例: 今回のTurnでClarification質問が新規発生した場合、参照先の
+  // message行はこの後のmessages upsertで初めて作られる)。そのため
+  // conversations本体の保存では、この2フィールドを一旦含めない
+  // (INSERT時はデフォルトNULL、UPDATE時は既存値を変更しない
+  // ——payloadに含めないキーはPostgRESTのUPSERT ON CONFLICTで
+  // 更新対象に含まれないため)。実際の設定/クリアは、
+  // conversation_messagesの保存が完了した後の別UPDATEで行う
+  // (Phase54で発見したFK順序問題への対応、絶対条件: 新しい
+  // transaction機構は導入しない、最小限の順序変更のみ)。
+
   const { error: conversationError } = await supabase
     .from("conversations")
     .upsert(
@@ -235,6 +266,8 @@ export async function saveConversation(
           role: message.role,
           content: message.content,
           created_at: message.createdAt,
+          // Phase55
+          message_type: message.messageType ?? null,
         })),
         { onConflict: "id" }
       );
@@ -243,6 +276,25 @@ export async function saveConversation(
       throw messagesError;
     }
 
+  }
+
+  // Phase55: conversation_messagesの保存が完了した今、
+  // pending_clarification_message_idが指す行(存在する場合)は
+  // 必ず存在するため、安全にconversationsへ反映できる。
+  // pendingが無い(undefined)場合はNULLへ明示的にクリアする
+  // (Execution成功時の"cleared"遷移も、このUPDATEが担う)。
+  const { error: pendingError } = await supabase
+    .from("conversations")
+    .update({
+      pending_clarification_message_id:
+        conversation.pendingClarificationMessageId ?? null,
+      pending_clarification_answered_at:
+        conversation.pendingClarificationAnsweredAt ?? null,
+    })
+    .eq("id", conversation.id);
+
+  if (pendingError) {
+    throw pendingError;
   }
 
   if (conversation.workflowRuns.length > 0) {

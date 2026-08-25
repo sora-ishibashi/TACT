@@ -22,6 +22,12 @@ export interface UserContext {
   userId: string | null;
   email: string | null;
 
+  // Phase 31: getAuthenticatedUser()の検証結果をそのまま透過する
+  // (新しい検証ロジックではない)。core/tact-project/store.tsが
+  // Supabase RLS(auth.uid()、Phase30)を機能させるper-requestクライアント
+  // を構築するためだけに使う。
+  accessToken: string | null;
+
   // 将来拡張用(STEP145時点では未実装)。
   organizationId?: string;
   workspaceId?: string;
@@ -31,12 +37,13 @@ export async function getCurrentUserContext(
   request: Request
 ): Promise<UserContext> {
 
-  const { userId, email } =
+  const { userId, email, accessToken } =
     await getAuthenticatedUser(request);
 
   return {
     userId,
     email,
+    accessToken,
   };
 
 }

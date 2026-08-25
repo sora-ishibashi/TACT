@@ -1,0 +1,85 @@
+# =========================
+# TACT Evaluation Harness CI (Phase 22)
+# =========================
+#
+# 目的: Phase 20で構築したtests/tact/(Evaluation Harness)を
+# GitHub Actions上で自動実行し、Phase 1〜21で積み上げたCapability
+# (Intent Routing / Ambiguity Detection / Decomposition /
+# Failure Recovery / Aggregator / Episode / Model Router /
+# TaskContext / Executor / Confidence Signal)が壊れていないことを、
+# 人間が毎回手動でnpm testを実行しなくても検知できるようにする。
+#
+# 絶対条件: LLM call = 0 / Search API call = 0。tests/tact/配下は
+# Phase 20〜21を通じて一貫してMock(core/tact-core/mockCoreCapability.ts)
+# ・純粋関数・constructされたテストデータのみで検証する設計になって
+# おり、実際に外部ネットワークへ到達するコードは含まない
+# (Phase22 Step2で.envもAPI Keyの実値も無い状態で84件全PASSすることを
+# 実測済み)。
+#
+# OPENAI_API_KEY / ANTHROPIC_API_KEYについて: 本物の資格情報ではない。
+# core/llm/providers/openai.ts・claude.tsが、モジュール読み込み時点
+# (importした瞬間、実際にAPIを呼ぶかどうかとは無関係)にSDKクライアント
+# を構築しており、環境変数が存在しないだけでimportが例外を投げる
+# (Phase22 Step1で実測確認)。tests/tact/配下の全Testはこれらの値を
+# 実際に使って外部へ通信することはない(mock/pure functionのみ)ため、
+# ここではダミー文字列を直接指定する(GitHub Secretsとしては登録しない
+# ——絶対条件10: secrets/API key/.env/credentialをCIへ持ち込まない)。
+
+name: TACT Evaluation Harness
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+
+    # ダミー値(実際のAPI呼び出しには一切使われない、Step1参照)。
+    env:
+      OPENAI_API_KEY: ci-placeholder-not-a-real-key
+      ANTHROPIC_API_KEY: ci-placeholder-not-a-real-key
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # package.jsonのdevDependencies(@types/node: ^20)に合わせる
+          # (Phase22 Step5: 他にNode versionを示す既存の指定
+          # (.nvmrc/.node-version/engines)が無いため、これを唯一の
+          # 明示的な根拠とする)。
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TACT Evaluation Harness (npm test)
+        run: npm test
+
+      - name: TypeScript check
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: ESLint (TACT scope only)
+        # 絶対条件: 既存のnpm run lint(プロジェクト全体)は、TACTの
+        # 変更範囲外であるLegacy側(core/workflow/*等)の既存any使用
+        # (Phase22 Step1実測: 59 errors、TACT開発の既定方針として
+        # 「今回の変更範囲外なら修正しない」対象)により恒常的に
+        # failureになるため、CIへそのまま組み込まない。ここではTACT
+        # (core/tact-*・core/llm・tests/tact)の範囲だけをlintする
+        # (Phase22 Step2実測: 同じ範囲で0 errors)。npm run lint自体は
+        # 変更していない(絶対条件11)。
+        run: >
+          npx eslint
+          "core/tact-orchestrator/**/*.ts"
+          "core/tact-intent/**/*.ts"
+          "core/tact-research/**/*.ts"
+          "core/tact-core/**/*.ts"
+          "core/tact-design/**/*.ts"
+          "core/llm/**/*.ts"
+          "tests/tact/**/*.ts"

@@ -113,14 +113,39 @@ export async function writeMemoryCandidates(
         // 既存recordKnowledge()(core/tact-core/supabaseCoreCapability.ts、
         // app/api/tact/core/push/route.tsのpushKnowledge()と同じ呼び出し
         // 契約)をそのまま再利用する。
+        //
+        // Phase36: candidate.description(質問文等、Phase36で追加)が
+        // あればtitle/descriptionの両方へ反映する。既存フィールド
+        // (KnowledgeItem.description、DB schema変更不要)を使うだけで、
+        // 呼び出し契約自体は変更していない。descriptionが無い候補
+        // (research由来以外)は、既存どおりcontentの先頭からtitleを
+        // 作る。
+        //
+        // Phase94(Repository Evidence: Phase91〜93投資調査): candidate.freshness
+        // ("durable"|"volatile"、memoryCandidateBuilder.tsのbuildResearchCandidate()が
+        // 既に算出済み)がこれまでrecordKnowledge()へ一切渡っておらず、
+        // Web Research由来の"volatile"なKnowledgeも"durable"なKnowledgeと
+        // 区別なく永続化されていた。その結果、あるConversationのResearch
+        // 結果が"knowledge_memory"としてscope:"user"へ永続化された後、
+        // 全く別のConversationのTurnがこの古いKnowledgeをCore-only
+        // Answerability(LLM 0回・Search 0回)の根拠として誤って再利用し、
+        // 生のUser Input(title由来)・古いtask ID(source由来)がそのまま
+        // Evidenceとして混入する現象を実Reality Testで確認した(詳細は
+        // supabaseCoreCapability.tsのisVolatileResearchKnowledge()参照)。
+        // KnowledgeItem.metadata(STEP177、Capability固有の付加情報用に
+        // 既に開かれている領域、DB schema変更不要)へfreshnessを記録する
+        // ことで、既存のisLegacyResearchKnowledge()と同じ場所
+        // (selectKnowledgeByOwner())で一貫して除外できるようにする。
         const item = await core.recordKnowledge({
           scope: "user",
           ownerId: candidate.ownerId!,
           source: candidate.source,
           tags: [],
           kind: "reference",
-          title: candidate.content.slice(0, 60),
+          title: (candidate.description ?? candidate.content).slice(0, 60),
+          description: candidate.description,
           content: candidate.content,
+          metadata: { freshness: candidate.freshness },
         });
 
         outcomes.push({ candidate, status: "written", itemId: item.id });

@@ -7,6 +7,7 @@ import { buildMemoryCandidates } from "./memoryCandidateBuilder";
 import { writeMemoryCandidates } from "./memoryWriter";
 import { createConcurrencyGovernor, resolveMaxAgents } from "./concurrencyGovernor";
 import { detectAmbiguity } from "./ambiguityDetector";
+import { evaluateTaskExecution } from "./evaluation";
 import type { OrchestrationRequest, OrchestrationResult } from "./types";
 
 // =========================
@@ -85,6 +86,13 @@ export async function runOrchestration(
 
       memoryWrites: [],
 
+      // Phase 28: Clarification経路はTaskExecutionSummaryを1件も
+      // 生成しないため(既存Phase15設計)、tasks.map()では自然に
+      // 導出できない。evaluateTaskExecution()自身もclarification:true
+      // 指定時は入力summaryの中身に関わらず"clarification_required"を
+      // 返す設計(Phase27)のため、ここでは同じ結論を直接記述する。
+      learningSignals: ["clarification_required"],
+
       metadata: {
 
         executionMode: "clarification-needed",
@@ -141,6 +149,14 @@ export async function runOrchestration(
 
   const memoryWrites = await writeMemoryCandidates(memoryCandidates, core);
 
+  // Phase 28: Phase27のevaluateTaskExecution()をtasks[]の各要素へ
+  // 適用するだけの、単純な派生値(絶対条件: LLM/DB呼び出みを増やさない、
+  // 判断には使わない)。summariesと同じ順序・同じ長さを保つ
+  // (memoryUsed/toolsUsedと同じ既存規約)。
+  const learningSignals = summaries.map((summary) =>
+    evaluateTaskExecution(summary)
+  );
+
   const executionMode =
     tasks.length === 1
       ? "single-execution"
@@ -161,6 +177,8 @@ export async function runOrchestration(
     toolsUsed,
 
     memoryWrites,
+
+    learningSignals,
 
     metadata: {
 

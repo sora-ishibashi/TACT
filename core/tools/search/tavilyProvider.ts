@@ -17,6 +17,30 @@ import {
 
 const DEFAULT_MAX_RESULTS = 8;
 
+// Phase43: Tavilyが返すpublishedDateの表記揺れ(RFC2822形式等)を、
+// Evidence.publishedAt(string、フォーマット規定なし)に対して既存の
+// 消費者(core/evidence/scoreEvidence.ts・retrieveEvidence.tsの
+// freshnessWeight()、いずれもnew Date(publishedAt)でパースする)が
+// 一貫して扱えるよう、ISO 8601形式へ正規化する。パース不能・空文字列の
+// 場合はundefinedを返し、無効な日時文字列を生成しない(絶対条件Rule12)。
+function normalizePublishedDate(
+  raw: string | undefined
+): string | undefined {
+
+  if (!raw) {
+    return undefined;
+  }
+
+  const date = new Date(raw);
+
+  if (isNaN(date.getTime())) {
+    return undefined;
+  }
+
+  return date.toISOString();
+
+}
+
 function classifyTavilyError(
   error: unknown
 ): { reason: import("./types").SearchProviderFailureReason; message: string } {
@@ -152,6 +176,14 @@ class TavilyProvider implements SearchProvider {
 
       score:
         item.score ?? 0,
+
+      // Phase43: Tavily SDKのTavilySearchResult.publishedDateは型上は
+      // 必須文字列だが、実際には日時が不明な結果に対して空文字列を
+      // 返すことがあるため、空文字列はundefined相当として扱う
+      // (絶対条件Rule2: 推測しない)。取得できた場合のみ、既存Evidence型
+      // (string)に合わせてISO 8601へ正規化する(絶対条件Rule6)。
+      // パース不能な値だった場合も、無理に文字列化せずundefinedにする。
+      publishedAt: normalizePublishedDate(item.publishedDate),
 
     }));
 

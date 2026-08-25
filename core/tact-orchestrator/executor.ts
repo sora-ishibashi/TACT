@@ -2,12 +2,109 @@ import { invokeCapability } from "../tact-core/capabilities/registry";
 import { runChat } from "../tact-intent/chatHandler";
 import { buildTaskContext } from "./taskContext";
 import { resolveModelRouting } from "./modelRouter";
+import { deriveAnswerConfidence } from "./confidence";
+import { LLMProviderError } from "../llm/types";
+import type { LLMProviderFailureReason } from "../llm/types";
 import type { CoreCapability, LoadContextParams } from "../tact-core/types";
 import type { ResearchResult, ResearchParams } from "../tact-research/types";
 import type { Task, TaskExecutionSummary } from "./task";
 import type { MemoryReference } from "./types";
 import type { TaskContext } from "./taskContext";
 import type { ConcurrencyGovernor } from "./concurrencyGovernor";
+
+// =========================
+// 一時的失敗の最小限のRetry (Phase 19)
+// =========================
+//
+// 対象範囲: chat経路・research以外のCapability経路(いずれもExecutor
+// から見て「単発の外部呼び出し1回」であり、Retryのコスト増加が
+// 呼び出し1回分に限定できる)。research経路は対象外とする——
+// invokeCapability("research", ...)はSearch(既に自前でTavily→Brave
+// fallbackを持つ、STEP151)+LLM 1回という複数ステップの内部パイプ
+// ラインであり、Task全体をRetryするとSearch呼び出しごと再実行され、
+// 「一時的失敗1回につき最大+1 call」という絶対条件(Step6)を満たせない
+// ため(Research内部のLLM呼び出し1回だけを個別にRetryするには
+// core/tact-research側の変更が必要になり、Step5の「Executor/
+// Capability境界付近の最小変更」を超える)。ResearchResult.metadata.
+// llmFailureReason(STEP184で既に構造化済み)は将来Research自身が
+// 内部Retryを持つ場合の判定材料として使えるが、今回は変更しない。
+//
+// core/llm/runLLMWithFallback.ts(STEP168、Legacy Workflow向けの
+// Provider横断フォールバック層)とは意図的に依存しない
+// (core/tact-intent/chatHandler.ts・core/tact-research/llmAnswer.tsが
+// 既に確立した「TACT新系列はLegacy向けFallback層を経由しない」という
+// 方針をExecutorでも踏襲する)。対象理由の集合(quota_exceeded/
+// rate_limited/network_error)はrunLLMWithFallback.tsのFALLBACK_REASONSと
+// 同じ判断基準だが、独立した定数として保持する。
+const TEMPORARY_LLM_FAILURE_REASONS: ReadonlySet<LLMProviderFailureReason> =
+  new Set(["quota_exceeded", "rate_limited", "network_error"]);
+
+// 認証エラー・不正なリクエスト(モデル名不正等)・分類不能な例外
+// (Capability未登録等の設定ミス)はRetryしても回復しないため対象外
+// (絶対条件: 「何でもRetry」ではない、Step8 False Recovery対策)。
+// LLMProviderErrorでない例外(捕捉できない未知のエラー)も、回復可能かどうか
+// 判断できないため保守的にRetryしない。
+//
+// Phase 20: exportする理由(Step10: Testabilityのための最小変更)。
+// この判定ロジック自体がPhase19の中核(「どのFailureをRetryすべきで
+// どれをすべきでないか」)であり、Evaluation Harness側でこの関数を
+// 再実装して検証すると、実装と検証がズレた場合に気づけない
+// (Step9: 実装詳細の複製ではなく実際の振る舞いを検証すべき)。
+// 挙動そのものは一切変更していない(exportキーワードの追加のみ)。
+export function isTemporaryFailure(error: unknown): boolean {
+
+  return (
+    error instanceof LLMProviderError &&
+    TEMPORARY_LLM_FAILURE_REASONS.has(error.reason)
+  );
+
+}
+
+// 最大1回だけRetryする汎用ラッパー。無限Retry・指数バックオフは
+// 実装しない(絶対条件、必要性が実証されていない)。1回目が一時的
+// 失敗でなければ即座にthrow(Retryしない)。1回目が一時的失敗で
+// 2回目も失敗した場合、両方の失敗理由を1つのエラーメッセージへ
+// 保持したままthrowする(絶対条件: 失敗を隠さない)。
+//
+// Phase 20: isTemporaryFailure()と同じ理由でexportする(Step10)。
+export async function withTemporaryFailureRetry<T>(
+  attempt: () => Promise<T>
+): Promise<{ result: T; retried: boolean }> {
+
+  try {
+
+    const result = await attempt();
+    return { result, retried: false };
+
+  } catch (firstError) {
+
+    if (!isTemporaryFailure(firstError)) {
+      throw firstError;
+    }
+
+    try {
+
+      const result = await attempt();
+      return { result, retried: true };
+
+    } catch (secondError) {
+
+      const firstMessage =
+        firstError instanceof Error ? firstError.message : String(firstError);
+
+      const secondMessage =
+        secondError instanceof Error ? secondError.message : String(secondError);
+
+      throw new Error(
+        `temporary failure persisted after 1 retry ` +
+        `(1st attempt: ${firstMessage}; 2nd attempt: ${secondMessage})`
+      );
+
+    }
+
+  }
+
+}
 
 // =========================
 // executeTask / runTasks (Phase 3、Phase 4でTaskContext対応)
@@ -37,7 +134,12 @@ import type { ConcurrencyGovernor } from "./concurrencyGovernor";
 // (「Taskに提示された=関連候補として渡した」)とは別物で、「Researchが
 // 実際に回答へ使った」実データ(ResearchMetadata.usedKnowledgeIds等)
 // から作る。「渡した」と「使った」を混同しない(STEP195以来の既存方針)。
-function buildMemoryReferencesFromResearch(
+//
+// Phase 20: isTemporaryFailure()と同じ理由でexportする(Step10)。
+// Research Evidence flow(ResearchResult.metadata.used*Ids →
+// MemoryReference[])をEvaluation Harnessが実LLM/Search無しで検証
+// できるようにするための最小限の変更。
+export function buildMemoryReferencesFromResearch(
   result: ResearchResult
 ): MemoryReference[] {
 
@@ -158,7 +260,11 @@ export async function executeTask(
         {
           query: input,
           context: taskContext.coreContext,
-          options: { llmProvider: provider, llmModel: model },
+          // Phase90: task.tableSchema(Table要求を事前検知できた場合の
+          // 列構成・要求件数)をResearchOptionsへそのまま橋渡しする。
+          // 省略時(既存Phase1〜89のTask)はundefinedのまま、既存挙動を
+          // 維持する。
+          options: { llmProvider: provider, llmModel: model, tableSchema: task.tableSchema },
         },
         core
       );
@@ -189,6 +295,22 @@ export async function executeTask(
 
         evidenceCount: result.evidence.length,
 
+        // Phase76: これまでevidenceCountのみが転記され、実際の
+        // Evidence配列自体は破棄されていた(Repository Evidence)。
+        // TACT Artifact Mutation(core/tact-conversation/orchestration.ts)
+        // がEvidence Blockを構築できるよう、result.evidenceをそのまま
+        // 透過する(新しいRetrieval/LLM呼び出しは発生しない)。
+        evidence: result.evidence,
+
+        keyFindings: result.keyFindings,
+
+        // Phase 21: confidence.tsのderiveAnswerConfidence()(純粋関数、
+        // 新しいLLM呼び出し無し)。result.success===falseの場合は
+        // undefinedを返す(Execution confidenceとの混同を避ける)。
+        answerConfidence: deriveAnswerConfidence(result),
+
+        uncertaintyNote: result.uncertainty,
+
       };
 
     }
@@ -204,10 +326,14 @@ export async function executeTask(
       // 経路(Decomposerがresearch以外を割り当てないため)だが、
       // Task.assignedCapabilityが将来他の値を持つ場合に備えて
       // Capability Registry経由の呼び出し自体は塞がない。
-      const result = await invokeCapability<unknown, unknown>(
-        task.assignedCapability,
-        { query: input, context: taskContext.coreContext },
-        core
+      // Phase 19: 単発の外部呼び出しであるため(research経路とは異なり
+      // 内部に複数ステップを持たない)、一時的失敗のRetry対象にする。
+      const { result, retried } = await withTemporaryFailureRetry(() =>
+        invokeCapability<unknown, unknown>(
+          task.assignedCapability!,
+          { query: input, context: taskContext.coreContext },
+          core
+        )
       );
 
       return {
@@ -221,6 +347,8 @@ export async function executeTask(
         provider,
 
         model,
+
+        retried: retried || undefined,
 
         durationMs: Date.now() - startedAt,
 
@@ -240,11 +368,16 @@ export async function executeTask(
     // されるよう変更した)をrunChat()へ渡す。Chat Handler自身は
     // retrievalを一切行わない(options.contextをsystem promptへ整形
     // するだけ、絶対条件8)。依存Taskの結果(input)は引き続き反映する。
-    const answer = await runChat(input, {
-      provider,
-      model,
-      context: taskContext.coreContext,
-    });
+    // Phase 19: chatはLLM呼び出し1回だけの単発経路のため、一時的失敗
+    // (rate limit/network error等)のRetry対象にする。成功時
+    // (retried===false)は既存(Phase18まで)と全く同じ経路・同じコスト。
+    const { result: answer, retried } = await withTemporaryFailureRetry(() =>
+      runChat(input, {
+        provider,
+        model,
+        context: taskContext.coreContext,
+      })
+    );
 
     return {
 
@@ -255,6 +388,8 @@ export async function executeTask(
       provider,
 
       model,
+
+      retried: retried || undefined,
 
       // Phase 9: chatはResearchのようなusedKnowledgeIds等の「実際に
       // 引用したか」の検証機構を持たない(LLM応答テキストからの

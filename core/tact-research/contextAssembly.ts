@@ -105,6 +105,30 @@ missingなRequirementについて、対応するWeb Evidenceが0件の場合は�
 記載する等)。存在しない事実を推測で補ってはいけません。
 
 ========================
+具体的な事例・固有名詞を挙げる場合について(Phase83)
+========================
+
+イベント名・企業名・大会名・施設名・商品名・人名等の具体的な固有名詞を
+挙げる場合は、以下を厳守してください。
+
+・固有名詞は、渡されたWeb Evidenceに実際に登場するものだけを使って
+  ください。もっともらしい名称を新しく作ってはいけません。
+・地域・対象者・日時・参加条件等の属性は、Evidenceの記述と照合し、
+  Evidenceに書かれている内容だけを使ってください。
+・「参加しやすい理由」のような、Evidenceに明記されていない場合に
+  一般論から推測しやすい属性は、Evidenceに根拠が無い限り書かないで
+  ください。書けない場合は「確認できない」と明記してください。
+・推測・一般論と、Evidenceで確認済みの事実は明確に区別してください。
+・ユーザーが件数を指定した場合でも、Evidenceで確認できた件数だけを
+  挙げてください。指定件数に満たない場合、無理に件数を満たすために
+  架空の事例を作ってはいけません。件数が不足する場合は、その旨を
+  answerまたはuncertaintyに明記してください。
+
+なお、あなたが挙げた固有名詞・属性がEvidenceに実在するかどうかは、
+このあとコード側でも機械的に照合されます。Evidenceに存在しない
+内容は、たとえここで書いてもArtifactへは採用されません。
+
+========================
 出力形式
 ========================
 
@@ -120,6 +144,66 @@ missingなRequirementについて、対応するWeb Evidenceが0件の場合は�
 evidenceIdsには、渡されたWeb Evidence一覧に実在するIDのみを
 含めてください。存在しないIDを作成してはいけません。
 `.trim();
+
+// =========================
+// Table-aware Prompt Addition (Phase90 Section6〜7)
+// =========================
+//
+// Root Cause(Phase89投資調査): Researchには「何を埋めるべきか」が
+// 一切伝わっておらず、回答が地の文に収束し、Row Entity化できる
+// 構造化データが生成されていなかった。ここでは新しいLLM呼び出しを
+// 追加せず、既存の1回のLLM呼び出しのPrompt(systemPrompt)だけを、
+// Table要求を事前検知できた場合に限り動的に拡張する
+// (core/tact-intent/chatHandler.tsのformatCoreContextForChat()と
+// 同じ「静的なsystem promptへ、ある場合だけ追記する」という既存の
+// 設計パターンを踏襲する)。
+//
+// 出力契約は変更しない: JSON形式(answer/keyFindings/evidenceIds/
+// uncertainty)は既存のまま。指示するのは「answerフィールドの中身を
+// Markdown Table形式で構造化すること」のみであり、
+// parseStructuredEntitiesFromText()(既存、Phase79)がそのまま解析
+// できる形式を狙う——新しいParser・新しい出力Schemaは追加しない。
+function buildTableSchemaSystemPromptAddition(tableSchema: {
+  columns: string[];
+  requestedRowCount?: number;
+}): string {
+
+  const { columns, requestedRowCount } = tableSchema;
+
+  const rowCountInstruction = requestedRowCount
+    ? `対象は${requestedRowCount}件を目標に探してください。ただし確認できた件数だけを載せ、件数を満たすために架空の対象を作ってはいけません。`
+    : "確認できた対象だけを載せてください。件数を無理に増やさないでください。";
+
+  return `
+
+========================
+比較表(Comparison Table)としての回答形式について(重要)
+========================
+
+今回の調査結果は、複数の対象(Entity)を比較する表として使われます。
+以下を厳守してください。
+
+・「一覧ページを見つけた」だけでは1件の対象とみなさず、個別の対象
+  (例: 個別のイベント名・企業名・商品名)を特定できた場合のみ1件として
+  扱ってください。
+・${rowCountInstruction}
+・確認できた対象ごとに1行、Markdown Table形式で構造化してください。
+  列は必ず次の通りにしてください: ${columns.join(" / ")}
+・各列の値は、Evidenceに明記されている内容だけを書いてください。
+  確認できない値は「確認できず」と書いてください。推測で埋めては
+  いけません。
+・JSON全体の形式(answer/keyFindings/evidenceIds/uncertainty)は
+  変更しません。上記のMarkdown Tableは、answerフィールドの中に
+  そのまま含めてください。
+
+例(この通りの内容にする必要はありません、形式の例です):
+
+| ${columns.join(" | ")} |
+|${columns.map(() => "---").join("|")}|
+| (確認できた対象の値) | ... |
+`;
+
+}
 
 function formatKnowledgeBlock(
   items: CoreContext["knowledge"]
@@ -328,9 +412,19 @@ export function assembleResearchContext(params: {
   // (runResearch.ts参照)。
   requirements: ResearchRequirement[];
 
+  // Phase90(Structured Research Dataset Section4〜7): Table要求を
+  // 事前検知できた場合の列構成・要求件数(ResearchOptions.tableSchema
+  // をそのまま透過、runResearch.ts参照)。設定されている場合のみ
+  // Table-aware Promptを追加する。省略時は既存(Phase1〜89)と完全に
+  // 同じPromptになる(後方互換)。
+  tableSchema?: {
+    columns: string[];
+    requestedRowCount?: number;
+  };
+
 }): AssembledResearchContext {
 
-  const { query, context, evidence, requirements } = params;
+  const { query, context, evidence, requirements, tableSchema } = params;
 
   // ---- 既存の「query全体に対する関連度選定」(General Context) ----
   // STEP186絶対条件: 既存の関連度選定ロジックを捨てない。
@@ -375,11 +469,19 @@ export function assembleResearchContext(params: {
       ? `\n\n========================\nOther Web Evidence(特定のRequirementに紐付かなかったもの)\n========================\n${formatEvidenceList(unassigned)}`
       : "";
 
+  // Phase90: Table Schemaが分かっている場合、具体的な列名・要求件数を
+  // userPromptにもデータとして明示する(systemPromptの指示と、実際の
+  // 列名リストを分離することで、LLMが取り違えにくくする)。
+  const tableSchemaBlock = tableSchema
+    ? `\n\n========================\nTable Schema(比較表の列構成)\n========================\n比較対象の件数目標: ${tableSchema.requestedRowCount ?? "未指定(確認できた分だけ)"}\n列: ${tableSchema.columns.join(", ")}`
+    : "";
+
   const userPrompt = `
 ========================
 User Query
 ========================
 ${query}
+${tableSchemaBlock}
 
 ========================
 Requirement Breakdown(Knowledge Gap Detection結果)
@@ -424,8 +526,14 @@ ${formatExampleBlock(selectedExamples)}
 
   const usedExampleIds = selectedExamples.map((item) => item.id);
 
+  // Phase90: Table Schemaが無い場合は既存Phase1〜89と完全に同じ
+  // systemPrompt文字列になる(後方互換)。
+  const systemPrompt = tableSchema
+    ? RESEARCH_LLM_SYSTEM_PROMPT + buildTableSchemaSystemPromptAddition(tableSchema)
+    : RESEARCH_LLM_SYSTEM_PROMPT;
+
   return {
-    systemPrompt: RESEARCH_LLM_SYSTEM_PROMPT,
+    systemPrompt,
     userPrompt,
     usedKnowledgeIds,
     usedMemoryIds,

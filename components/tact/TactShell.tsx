@@ -1,7 +1,7 @@
 "use client";
 
 // =========================
-// TactShell (STEP215、Phase72でBeta Entry UXを追加)
+// TactShell (STEP215、Phase74でResearch Workspaceへ再構成)
 // =========================
 //
 // 新TACT UIのトップレベル構造。app/page.tsxから描画される、
@@ -9,8 +9,7 @@
 //
 // 基本レイアウト(STEP215で指定された必須ルール):
 //   - 左端: メニューバー(MenuBar) — 将来のTACT派生機能への導線
-//   - 中央: TACTとの対話(ResearchSection/CoreSectionの左半分)
-//   - 右: TACTが生み出したもの(同・右半分)
+//   - 中央: TACTとの対話(ResearchWorkspace/CoreSectionの領域)
 //
 // 重要: このコンポーネント自体はcore/agents・core/workflow・
 // core/planner・core/conversationのいずれにも依存しない
@@ -20,21 +19,25 @@
 // Phase72 Section3/6/7: 認証状態に応じたUI表示として、既存
 // AuthProvider(STEP132)のuser/signOutをヘッダーへ表示するだけの
 // 最小Entry制御を追加した(新しいAuthentication Contextは作らない)。
-// また、Betaでは既存のCanonical Conversation Architecture
-// (ConversationSection)を主要な入口として扱うため、既定表示Sectionを
-// "conversation"にした(Research/Coreの実装・挙動は無変更)。
+//
+// Phase74 Section3/16: 「Conversationをトップレベルの独立機能として
+// 扱わない」方針により、Phase70で追加した独立"conversation"Sectionを
+// 廃止し、Research Workspace(ResearchWorkspace.tsx、Project=Folder・
+// Chat History・Conversation Panel・Research Result/Knowledge Panelを
+// 統合)を既定表示Sectionとして復元した。ConversationSection.tsx自体は
+// 削除していない(認証・エラー処理・メッセージ表示ロジックは
+// ResearchWorkspace.tsxへ移植・再利用済み)。
 
 import { useState } from "react";
 
 import MenuBar, { TactSection } from "./MenuBar";
-import ResearchSection from "./ResearchSection";
+import ResearchWorkspace from "./ResearchWorkspace";
 import CoreSection from "./CoreSection";
-import ConversationSection from "./ConversationSection";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 export default function TactShell() {
 
-  const [section, setSection] = useState<TactSection>("conversation");
+  const [section, setSection] = useState<TactSection>("research");
 
   const { user, signOut } = useAuth();
 
@@ -97,9 +100,8 @@ export default function TactShell() {
 
         <div className="flex min-h-0 flex-1">
 
-          {section === "research" && <ResearchSection />}
+          {section === "research" && <ResearchWorkspace />}
           {section === "core" && <CoreSection />}
-          {section === "conversation" && <ConversationSection />}
 
         </div>
 

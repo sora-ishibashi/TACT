@@ -148,6 +148,36 @@ export interface OrchestrationRequest {
 
   conversationId?: string;
 
+  // Phase86: 直前Turnのuser発言(存在する場合のみ)。decomposeTask()が
+  // classifyIntent()へ渡し、「具体例を5件追加で確認してください」の
+  // ような、単独では研究/雑談どちらとも解釈できる追加調査要求を、
+  // 直前Turnが実際にResearchだった場合に限りResearchとして扱うために
+  // 使う(Section3「Conversation Contextを利用する」)。新しいMemory/
+  // Context Architectureは追加しない——呼び出し元(core/tact-conversation/
+  // orchestration.tsのrunNormalTurn())が既存のgetConversationMessages()/
+  // findPrecedingUserInput()(Phase68で確立済み)で取得した値をそのまま
+  // 詰めるだけの、単純な文字列受け渡し。省略時は既存(Phase1〜85)と
+  // 完全に同じ挙動になる(後方互換)。
+  previousUserInput?: string;
+
+  // Phase90(Structured Research Dataset Section4〜6): Table要求を
+  // 事前検知できた場合の列構成・要求件数。呼び出し元
+  // (core/tact-conversation/orchestration.tsのrunNormalTurn()/
+  // runSupplementalResearchForArtifact())が既存のhasTableIntent()・
+  // classifyTablePurpose()・parseComparisonColumns()・
+  // parseRequestedRowCount()(core/tact-conversation/artifactMutation.ts、
+  // Phase79〜85で確立済み)を合成したbuildResearchTableSchema()の
+  // 結果をそのまま渡す。tact-orchestrator/tact-researchはtact-conversation
+  // に依存できない(既存の一方向依存)ため、型はここで独立して同じ
+  // 形を宣言するだけで、ロジックの共有・importは行わない。
+  // decomposeTask()がcapability="research"のTaskにのみ引き継ぎ、
+  // Research Prompt(assembleResearchContext())へ注入される。省略時は
+  // 既存(Phase1〜89)と完全に同じ挙動(後方互換)。
+  tableSchema?: {
+    columns: string[];
+    requestedRowCount?: number;
+  };
+
   constraints?: {
 
     maxAgents?: number;
@@ -171,6 +201,7 @@ export interface OrchestrationRequest {
 // importしない)。
 import type { TaskExecutionSummary } from "./task";
 import type { MemoryWriteOutcome } from "./memoryWriter";
+import type { LearningSignal } from "./evaluation";
 
 // =========================
 // Orchestration Result
@@ -222,6 +253,24 @@ export interface OrchestrationResult {
   // 構造的に保証している)。Candidateが1件も生成されなかった場合は
   // 空配列(undefinedにはしない、「何も対象が無かった」ことを明示する)。
   memoryWrites: MemoryWriteOutcome[];
+
+  // Phase 28: Phase27のevaluateTaskExecution()(evaluation.ts)を
+  // tasks[]の各要素へ適用した結果。commander.tsが実行結果を確定させた
+  // 直後にmap()するだけの、単純な派生値(絶対条件: DB永続化しない、
+  // 新しいEvaluationオブジェクトを作らない)。tasksと同じ順序・同じ
+  // 長さを保つ(既存のtasks/summariesの対応関係と同じ規約)。
+  // Clarification経路(tasks=[]のまま)では、Task単位のSignalモデルが
+  // 適用できないため、["clarification_required"]という1要素配列を
+  // 特別に設定する(Phase15の既存設計上、Clarification自体は
+  // TaskExecutionSummaryを1件も生成しないため、tasks.map()では
+  // 自然には導出できない、絶対条件: Clarificationのためだけに大規模な
+  // 型変更をしない、という制約の範囲内での最小対応)。
+  //
+  // 重要: この配列はruntimeで観測可能にするためだけの値であり、
+  // Commander/Executor/Model Router/Retry/Memory Retrieval/Memory
+  // Write/Aggregationのいずれの判断にも一切使用しない(絶対条件、
+  // Reflection/Learning Policyは今回実装しない)。
+  learningSignals: LearningSignal[];
 
   metadata: {
 

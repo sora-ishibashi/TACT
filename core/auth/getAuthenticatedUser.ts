@@ -28,11 +28,20 @@ import { supabase } from "../database/supabase";
 export interface AuthenticatedUser {
   userId: string | null;
   email: string | null;
+
+  // Phase 31: 検証済みのaccess_token本体。core/tact-project/store.tsが
+  // RLS(auth.uid()ベースの所有者チェック、Phase30)を実際に機能させる
+  // ためのper-request Supabaseクライアント構築にのみ使う
+  // (絶対条件: 新しい認証ユーティリティを作らず、既存の検証結果を
+  // 追加でそのまま公開するだけに留める)。ログには出力しないこと
+  // (既存のtoken非ログ出力方針、STEP131を維持)。
+  accessToken: string | null;
 }
 
 const UNAUTHENTICATED: AuthenticatedUser = {
   userId: null,
   email: null,
+  accessToken: null,
 };
 
 export async function getAuthenticatedUser(
@@ -66,6 +75,7 @@ export async function getAuthenticatedUser(
     return {
       userId: data.user.id,
       email: data.user.email ?? null,
+      accessToken: token,
     };
 
   } catch {

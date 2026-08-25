@@ -35,6 +35,21 @@
 //
 // Evidence ID・snippetはAPIから返された値をそのまま表示するだけで、
 // UI側で生成・変更・要約し直すことはしない。
+//
+// Phase46: Clarification UX(Option B)のための第3タブ「Orchestrate」を
+// 同じ枠へ追加した。POST /api/tact/orchestrate(Phase33、無変更)→
+// runOrchestration()を呼ぶ。Clarificationが返ってきた場合は、UI側が
+// 保持するoriginalInputと回答を結合し(components/orchestrateClarification.ts、
+// 絶対条件Rule2/Rule6: 新しいAPI schemaは作らず、既存のinput: stringの
+// ままpayloadを組み立てる)、同じ/api/tact/orchestrateへ再送信するだけで
+// Option Bを実現する(絶対条件Rule1/Rule3: Clarification専用の新しい
+// 実行経路は作らない)。TactInterface.tsx(Legacy WorkflowのTurn/
+// Conversation状態機械)には一切触れていない(STEP202の判断をそのまま
+// 踏襲: 複雑な既存状態機械へ無理に混ぜ込まず、この独立パネルの中で
+// 完結させる)。/api/tact/orchestrateは認証必須(Phase33)のため、
+// TactInterface.tsxが既に使っているuseAuth().getAccessToken()
+// (STEP145-G以来の既存パターン)をこのタブの呼び出しにのみ付与する
+// (research/pushタブは従来どおり未認証のまま、無変更)。
 
 import { useState } from "react";
 
@@ -42,8 +57,11 @@ import type {
   ResearchResult,
   ResearchEvidenceItem,
 } from "@/core/tact-research/types";
+import type { OrchestrationResult } from "@/core/tact-orchestrator/types";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { buildClarificationResendInput } from "./orchestrateClarification";
 
-type PanelTab = "research" | "push";
+type PanelTab = "research" | "push" | "orchestrate";
 
 type PanelStatus = "idle" | "loading" | "success" | "failure";
 
@@ -152,6 +170,10 @@ export default function ResearchPanel({
   onClose,
 }: Props) {
 
+  // Phase46: /api/tact/orchestrateは認証必須のため、Orchestrateタブの
+  // 呼び出しにのみ使う(research/pushタブは従来どおり未認証のまま)。
+  const { getAccessToken } = useAuth();
+
   const [tab, setTab] =
     useState<PanelTab>("research");
 
@@ -181,6 +203,32 @@ export default function ResearchPanel({
 
   const [pushResult, setPushResult] =
     useState<PushResultState | null>(null);
+
+  // Phase46: Orchestrate tab用のstate。research/pushタブのstateとは
+  // 完全に分離する(タブを切り替えても互いの入力・結果を消さないため、
+  // 既存2タブと同じ方針)。
+  const [orchestrateInput, setOrchestrateInput] =
+    useState("");
+
+  const [orchestrateStatus, setOrchestrateStatus] =
+    useState<PanelStatus>("idle");
+
+  const [orchestrateResult, setOrchestrateResult] =
+    useState<OrchestrationResult | null>(null);
+
+  const [orchestrateApiError, setOrchestrateApiError] =
+    useState<ApiError | null>(null);
+
+  // Phase46 Rule2: Clarification発生時、元のユーザー入力(originalInput)
+  // をここへ保持する。二重Clarification(絶対条件セクション6)が発生
+  // した場合も、常に最初のoriginalInputを保持し続ける(結合済みの
+  // 再送信文字列で上書きしない)ことで、何度Clarificationが往復しても
+  // 元の依頼が失われないようにする。
+  const [pendingClarification, setPendingClarification] =
+    useState<{ originalInput: string; question: string } | null>(null);
+
+  const [clarificationAnswer, setClarificationAnswer] =
+    useState("");
 
   async function handlePushSubmit() {
 
@@ -321,6 +369,140 @@ export default function ResearchPanel({
 
   }
 
+  // Phase46 Rule1/Rule3: Clarification専用の実行経路は作らず、既存の
+  // /api/tact/orchestrate(Phase33、無変更)を毎回同じ形で呼ぶだけの
+  // 単一の送信関数。初回送信・Clarification回答後の再送信のどちらも
+  // ここを通る(絶対条件Rule7: 新しいstate machineを作らない)。
+  //
+  // originalInputForClarification: 万一この呼び出しの結果が再び
+  // Clarificationだった場合(二重Clarification)に、pendingClarification
+  // へ保持すべき「元の依頼」。初回送信時は今回の入力そのもの、
+  // 回答再送信時は直前のpendingClarification.originalInputを
+  // そのまま引き継ぐ(呼び出し元が渡す)。
+  async function submitOrchestrate(
+    input: string,
+    originalInputForClarification: string
+  ) {
+
+    setOrchestrateStatus("loading");
+    setOrchestrateApiError(null);
+
+    try {
+
+      const accessToken = getAccessToken();
+
+      // Phase46: /api/tact/orchestrateは認証必須(Phase33絶対条件2)。
+      // 既存のTactInterface.tsxと同じ、Authorization: Bearerヘッダーを
+      // 付与するパターンをそのまま再利用する(新しい認証方式は作らない)。
+      const response = await fetch("/api/tact/orchestrate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken
+            ? { Authorization: `Bearer ${accessToken}` }
+            : {}),
+        },
+        body: JSON.stringify({ input }),
+      });
+
+      const body = await response.json();
+
+      if (!response.ok) {
+
+        // Phase46 Section7: 通常のAPIエラーUIをそのまま使う。
+        // Clarification待ち状態(pendingClarification)はここでは
+        // クリアしない(絶対条件: エラー時もoriginalInputを失わず、
+        // ユーザーが同じ回答で再試行できるようにするため)。
+        setOrchestrateApiError({
+          message:
+            typeof body.error === "string"
+              ? body.error
+              : `リクエストに失敗しました(HTTP ${response.status})`,
+        });
+
+        setOrchestrateStatus("failure");
+
+        return;
+
+      }
+
+      const orchestrationResult = body as OrchestrationResult;
+
+      if (orchestrationResult.clarification) {
+
+        // Phase46 Section6: 二重Clarificationが発生した場合も、新しい
+        // 高度な機構(ループ防止等)は作らず、既存のOrchestration挙動
+        // (detectAmbiguity()の判定結果)をそのまま尊重して次の質問を
+        // 表示するだけに留める。
+        setPendingClarification({
+          originalInput: originalInputForClarification,
+          question: orchestrationResult.clarification.question,
+        });
+
+        setClarificationAnswer("");
+        setOrchestrateResult(null);
+        setOrchestrateStatus("idle");
+
+        return;
+
+      }
+
+      // Phase46 Section5: Clarification専用の結果画面は作らず、通常の
+      // Orchestration結果表示(このタブの既存result表示)をそのまま使う。
+      setPendingClarification(null);
+      setOrchestrateResult(orchestrationResult);
+      setOrchestrateStatus("success");
+
+    } catch (error) {
+
+      console.error(
+        "TACT Orchestrate API call failed:",
+        error
+      );
+
+      setOrchestrateApiError({
+        message: "TACT Orchestratorとの通信に失敗しました",
+      });
+
+      setOrchestrateStatus("failure");
+
+    }
+
+  }
+
+  async function handleOrchestrateSubmit() {
+
+    if (!orchestrateInput.trim()) {
+      return;
+    }
+
+    await submitOrchestrate(orchestrateInput, orchestrateInput);
+
+  }
+
+  // Phase46 Rule2: 元入力(pendingClarification.originalInput)と
+  // Clarification回答を結合し(components/orchestrateClarification.ts、
+  // 新しいAPI schemaは作らない)、既存の/api/tact/orchestrateへ
+  // 同じ形(input: stringのみ)で再送信する。
+  async function handleClarificationAnswerSubmit() {
+
+    if (!pendingClarification || !clarificationAnswer.trim()) {
+      return;
+    }
+
+    const resendInput = buildClarificationResendInput(
+      pendingClarification.originalInput,
+      pendingClarification.question,
+      clarificationAnswer
+    );
+
+    await submitOrchestrate(
+      resendInput,
+      pendingClarification.originalInput
+    );
+
+  }
+
   return (
 
     <div className="fixed bottom-24 right-6 z-40 flex max-h-[70vh] w-[420px] flex-col rounded-xl border border-gray-200 bg-white shadow-xl">
@@ -368,6 +550,19 @@ export default function ResearchPanel({
           }`}
         >
           Direct Push
+        </button>
+
+        {/* Phase46: Clarification UX(Option B)確認用の第3タブ。 */}
+        <button
+          type="button"
+          onClick={() => setTab("orchestrate")}
+          className={`border-b-2 px-2 py-2 text-xs font-medium ${
+            tab === "orchestrate"
+              ? "border-black text-gray-900"
+              : "border-transparent text-gray-400 hover:text-gray-600"
+          }`}
+        >
+          Orchestrate
         </button>
 
       </div>
@@ -556,6 +751,123 @@ export default function ResearchPanel({
               </p>
             )}
           </div>
+        )}
+
+        </>
+        )}
+
+        {tab === "orchestrate" && (
+        <>
+
+        {/* Phase46: Clarificationが発生していない間は通常の入力欄。 */}
+        {!pendingClarification && (
+
+          <div className="flex gap-2">
+
+            <input
+              value={orchestrateInput}
+              onChange={(e) => setOrchestrateInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  handleOrchestrateSubmit();
+                }
+              }}
+              type="text"
+              placeholder="TACTへ依頼したいことを入力してください..."
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none placeholder:text-gray-400"
+            />
+
+            <button
+              type="button"
+              onClick={handleOrchestrateSubmit}
+              disabled={orchestrateStatus === "loading"}
+              className="shrink-0 rounded-lg bg-black px-3 py-2 text-sm text-white transition hover:bg-gray-800 disabled:opacity-50"
+            >
+              {orchestrateStatus === "loading" ? "実行中..." : "実行"}
+            </button>
+
+          </div>
+
+        )}
+
+        {/* Phase46 Section4/8: Clarification発生時は、元の依頼・
+            TACTからの確認質問・回答入力欄を表示する。元の質問(通常の
+            入力欄)は隠すが、pendingClarification.originalInputとして
+            state上には保持され続けているため消えていない。 */}
+        {pendingClarification && (
+
+          <div className="space-y-2">
+
+            <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700">
+              <p className="text-xs text-gray-400">元の依頼</p>
+              <p className="whitespace-pre-wrap">{pendingClarification.originalInput}</p>
+            </div>
+
+            <div className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-900">
+              <p className="text-xs text-blue-500">TACTからの確認</p>
+              <p>{pendingClarification.question}</p>
+            </div>
+
+            <div className="flex gap-2">
+
+              <input
+                value={clarificationAnswer}
+                onChange={(e) => setClarificationAnswer(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleClarificationAnswerSubmit();
+                  }
+                }}
+                type="text"
+                placeholder="回答を入力してください..."
+                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none placeholder:text-gray-400"
+              />
+
+              <button
+                type="button"
+                onClick={handleClarificationAnswerSubmit}
+                disabled={orchestrateStatus === "loading"}
+                className="shrink-0 rounded-lg bg-black px-3 py-2 text-sm text-white transition hover:bg-gray-800 disabled:opacity-50"
+              >
+                {orchestrateStatus === "loading" ? "送信中..." : "回答する"}
+              </button>
+
+            </div>
+
+          </div>
+
+        )}
+
+        {orchestrateStatus === "loading" && (
+          <p className="mt-3 text-sm text-gray-500">
+            実行中です...
+          </p>
+        )}
+
+        {orchestrateStatus === "failure" && orchestrateApiError && (
+          <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            {orchestrateApiError.message}
+          </p>
+        )}
+
+        {/* Phase46 Section5: Clarification専用の結果画面は作らず、
+            通常のOrchestration結果(最終回答)をそのまま表示するだけ。 */}
+        {orchestrateStatus === "success" && orchestrateResult && (
+
+          <div className="mt-3 space-y-3">
+
+            <div className="flex flex-wrap gap-2 text-[10px] text-gray-400">
+              <span className="rounded bg-gray-100 px-2 py-0.5">
+                mode: {orchestrateResult.metadata.executionMode}
+              </span>
+            </div>
+
+            <p className="whitespace-pre-wrap text-sm text-gray-900">
+              {orchestrateResult.answer}
+            </p>
+
+          </div>
+
         )}
 
         </>

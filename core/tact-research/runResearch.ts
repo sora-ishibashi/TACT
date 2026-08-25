@@ -31,7 +31,13 @@
 //                          (CODE+SEARCH、LLM 0回。②がCore-only不可の
 //                          場合のみ実行)
 //   ④ Context Assembly  … assembleResearchContext()(CODE、LLM 0回)
-//   ⑤ LLM               … generateLLMAnswer()(最大1回)
+//   ⑤ LLM               … generateLLMAnswer()(最大2回。Phase24で、
+//                          一時的Failure(quota_exceeded/rate_limited/
+//                          network_error)の場合のみ最大1回Retryする
+//                          仕組みを追加した。Search/Context Assembly
+//                          はRetryの対象外——既に確定済みのassembled/
+//                          webResult.evidenceをそのまま再利用して
+//                          generateLLMAnswer()をもう一度呼ぶだけ)
 //
 // 公開関数のシグネチャ(runResearch(params, core))はSTEP176から一切
 // 変更していない。
@@ -70,21 +76,106 @@ import {
   ResearchResult,
   ResearchMetadata,
   ResearchEvidenceItem,
+  ResearchLLMFailureReason,
 } from "./types";
 import { assessAnswerability } from "./answerability";
 import {
   buildCoreOnlyAnswer,
   buildCoreOnlyAnswerFromRequirements,
 } from "./coreOnlyAnswer";
-import { buildResearchQueries, buildGapResearchQueries } from "./queryGeneration";
-import { performWebResearch } from "./webResearch";
-import { assembleResearchContext } from "./contextAssembly";
-import { generateLLMAnswer } from "./llmAnswer";
+import { buildResearchQueries, buildGapResearchQueries, buildDeepeningQueries } from "./queryGeneration";
+import { performWebResearch, WebResearchResult, DEFAULT_MAX_EVIDENCE } from "./webResearch";
+import { discoverCandidateEntities, selectDeepeningCandidates } from "./candidateDiscovery";
+import { removeDuplicates } from "../tools/pipeline/removeDuplicates";
+import { selectEvidence } from "../evidence/selectEvidence";
+import { assembleResearchContext, AssembledResearchContext } from "./contextAssembly";
+import { generateLLMAnswer, LLMAnswerOutcome } from "./llmAnswer";
 import {
   detectKnowledgeGap,
   canAnswerAllFromCoreOnly,
   ResearchRequirement,
 } from "./knowledgeGap";
+import type { Provider } from "../agent/types";
+import type { Evidence } from "../context/types";
+import { runLLM } from "../llm";
+
+// =========================
+// Research内部LLM Retry (Phase 23調査 → Phase 24実装)
+// =========================
+//
+// generateLLMAnswer()(⑤LLM、Research Pipeline全体でLLMを呼び出す
+// 唯一の場所)が一時的Failureで失敗した場合のみ、最大1回だけ
+// もう一度呼び直す。対象はPhase19のexecutor.tsが採用しているものと
+// 全く同じ3つのreasonのみ(絶対条件11: 新しいFailure分類体系を
+// 作らない)。authentication_failed/invalid_request/unknown_error、
+// および今回スコープ外としたresponse_parse_error/empty_responseは
+// 対象外(絶対条件3・4・5)。
+//
+// Search呼び出し(performWebResearch())・Context Assembly
+// (assembleResearchContext())はこのRetryの対象に含まれない
+// (絶対条件6・7)。Retryは、この呼び出し時点で既に確定済みの
+// ローカル変数(assembled・webResult.evidence)をそのまま再利用して
+// generateLLMAnswer()をもう一度呼ぶだけであり、Search/Evidence/
+// Context Assemblyを再実行する経路はコード構造上存在しない
+// (Phase23 Reality Testで実測確認済み)。
+//
+// Phase19のexecutor.tsのwithTemporaryFailureRetry()(例外を
+// catchして判定する設計)とは異なり、generateLLMAnswer()は例外を
+// 投げず判別可能Union(LLMAnswerOutcome)を返す設計(STEP184)のため、
+// ここでは戻り値のsuccess/failureReasonを見て判定する
+// (絶対条件9: Executor Retryとは独立した、二重にならない別レイヤー)。
+const TEMPORARY_LLM_RETRY_REASONS: ReadonlySet<ResearchLLMFailureReason> =
+  new Set(["quota_exceeded", "rate_limited", "network_error"]);
+
+export interface LLMAnswerRetryResult {
+
+  outcome: LLMAnswerOutcome;
+
+  // 1(通常成功、または一時的でない失敗) または 2(Retryが発生した)。
+  attempts: 1 | 2;
+
+}
+
+// runResearch()本体からRetryループを切り出した、独立してテスト可能な
+// 純粋寄りの関数(Phase20のisTemporaryFailure/withTemporaryFailureRetry
+// (core/tact-orchestrator/executor.ts、Phase19)と同じ理由でexportする
+// ——Evaluation Harnessが実装と乖離しないよう、この関数自体を直接
+// テストできるようにする)。runLLMImplはgenerateLLMAnswer()が既に
+// 持つDIパラメータをそのまま透過するだけで、新しいMock機構は作らない。
+export async function generateLLMAnswerWithRetry(
+  assembled: AssembledResearchContext,
+  evidencePool: Evidence[],
+  provider?: Provider,
+  model?: string,
+  runLLMImpl: typeof runLLM = runLLM
+): Promise<LLMAnswerRetryResult> {
+
+  const first = await generateLLMAnswer(
+    assembled,
+    evidencePool,
+    provider,
+    model,
+    runLLMImpl
+  );
+
+  if (first.success || !TEMPORARY_LLM_RETRY_REASONS.has(first.failureReason)) {
+    return { outcome: first, attempts: 1 };
+  }
+
+  // Search/Context Assemblyは再実行しない。assembled/evidencePoolは
+  // 呼び出し元から渡された同じ参照をそのまま再利用するだけ
+  // (絶対条件6・7・8)。
+  const second = await generateLLMAnswer(
+    assembled,
+    evidencePool,
+    provider,
+    model,
+    runLLMImpl
+  );
+
+  return { outcome: second, attempts: 2 };
+
+}
 
 // core.recordExecution()へ渡すscopeを、CoreContextの内容から推定する。
 // core/tact-design/runDesign.tsのinferExecutionScope()と同じロジック
@@ -236,7 +327,13 @@ export async function runResearch(
   let searchQueryCount = 0;
   let searchRequestCount = 0;
   let searchAttempts: ResearchMetadata["searchAttempts"] = [];
-  let llmAttempted = false;
+  // Phase24: 真偽値(llmAttempted)から実際の試行回数(0〜2)へ拡張した。
+  // Research内部LLM Retry(下記TEMPORARY_LLM_RETRY_REASONS参照)により
+  // generateLLMAnswer()が最大2回呼ばれうるようになったため、
+  // metadata.llmAttemptsへ正確な回数を反映する必要がある
+  // (STEP184の「試行していないのに1」「試行したのに0」を避ける、
+  // という既存原則をRetry導入後も維持する)。
+  let llmAttemptCount = 0;
 
   try {
 
@@ -424,38 +521,112 @@ export async function runResearch(
     searchAttempts = webResult.searchAttempts;
 
     // ===============================
+    // ③' Discovery → Deepening(CODE + SEARCH、LLM 0回、Phase93)
+    // ===============================
+    //
+    // Root Cause(Phase92投資調査、Repository Evidence: Phase90〜92の
+    // 3回の実Reality Test): ここまでのWeb Research(=Discovery)1回
+    // だけでは、検索結果がポータル/一覧ページに集中し、個別Entityの
+    // 属性(開催日・参加費・定員等)がEvidence本文に含まれないことが
+    // 確認された。discoverCandidateEntities()(candidateDiscovery.ts、
+    // 決定論的heuristic・LLM不使用)で「ポータルではなく個別の調査対象
+    // らしいもの」を抽出し、既に要求Attributeが揃っているCandidateを
+    // 除いた上で(selectDeepeningCandidates())、見つかった場合のみ
+    // 最大1ラウンドだけ追加Search(Deepening)を行う。Candidateが
+    // 1件も無い場合(実際にPortalしか無かった場合を含む)は、従来通り
+    // Discoveryの結果のみで進む(無駄なSearchを増やさない、Section7
+    // 「Deepeningを何度も再帰的に実行する仕組みは作らない」)。
+    const candidates = discoverCandidateEntities(webResult.evidence);
+
+    const deepeningTargets = selectDeepeningCandidates(candidates, {
+      attributes: options?.tableSchema?.columns,
+      requestedRowCount: options?.tableSchema?.requestedRowCount,
+    });
+
+    let deepeningResult: WebResearchResult | undefined;
+
+    if (deepeningTargets.length > 0) {
+
+      const deepeningQueries = buildDeepeningQueries(
+        deepeningTargets.map((c) => c.name),
+        options?.tableSchema?.columns
+      );
+
+      deepeningResult = await performWebResearch(
+        deepeningQueries,
+        query,
+        options?.maxResults
+      );
+
+      // Discovery分に加算する(既存metadata契約=「実際に行ったSearch
+      // 回数を正確に報告する」というSTEP184の原則を、Deepening導入後も
+      // そのまま維持する)。
+      searchQueryCount += deepeningResult.searchQueryCount;
+      searchRequestCount += deepeningResult.searchRequestCount;
+      searchAttempts = [...searchAttempts, ...deepeningResult.searchAttempts];
+
+    }
+
+    // Discovery/Deepening両方のEvidenceを1つのpoolへ統合する。重複排除は
+    // 既存executeEvidencePipeline()(core/tools/pipeline/evidence.ts)と
+    // 同じkey(claim+source)でremoveDuplicates()(既存汎用関数)を
+    // 再利用し、統合後は既存selectEvidence()で改めて関連度順に絞り込む
+    // (新しい重複判定・スコアリングロジックは作らない。pool肥大化を
+    // 防ぎ、既存のmaxEvidence契約を維持する)。
+    const combinedEvidence = deepeningResult
+      ? selectEvidence(
+          removeDuplicates(
+            [...webResult.evidence, ...deepeningResult.evidence],
+            (item) => `${item.claim}${item.source}`
+          ),
+          query,
+          options?.maxResults ?? DEFAULT_MAX_EVIDENCE
+        )
+      : webResult.evidence;
+
+    // ===============================
     // ④ Context Assembly(CODE、LLM 0回)
     // ===============================
     // STEP186: Knowledge Gap Detection(requirements)の判定結果を
     // Context Assemblyへ明示的に渡す。covered/partial/missingの
     // 状態と、対応するCore情報・Web Evidenceを、LLMが区別できる
     // 構造で提示する。
+    // Phase90: options.tableSchema(Table要求を事前検知できた場合の
+    // 列構成・要求件数)をそのまま透過する。undefinedの場合は既存
+    // Phase1〜89と完全に同じPromptになる。
+    // Phase93: evidenceにはDiscovery単独ではなく、Deepeningを含めた
+    // combinedEvidenceを渡す(Deepeningが発生しなかった場合は
+    // webResult.evidenceと同一のため、既存Phase1〜92の挙動と完全に
+    // 一致する)。
     const assembled = assembleResearchContext({
       query,
       context,
-      evidence: webResult.evidence,
+      evidence: combinedEvidence,
       requirements,
+      tableSchema: options?.tableSchema,
     });
 
     // ===============================
-    // ⑤ LLM(最大1回)
+    // ⑤ LLM(最大2回、Phase24: 一時的Failure時のみRetryで+1)
     // ===============================
-    // STEP184: generateLLMAnswer()を呼び出した時点で、成功・失敗に
-    // 関わらずllmAttemptsは必ず1になる(この関数はもはや例外を
-    // 投げず、判別可能Unionを返すため)。
-    llmAttempted = true;
-
     // STEP193: options.llmProviderを渡す(省略時はgenerateLLMAnswer()側の
     // デフォルト引数によりOpenAIのまま。Research層でのProvider分岐は
     // 書かない)。Phase 7: options.llmModelも同様にそのまま渡す
     // (省略時はgenerateLLMAnswer()→runLLM()→各Provider実装の既定
     // モデルへフォールバック、既存挙動と同じ)。
-    const outcome = await generateLLMAnswer(
+    // Phase24: 一時的Failure時のみ最大1回RetryするgenerateLLMAnswerWithRetry()
+    // (上で定義、Search/Context Assemblyは再実行しない)を経由する。
+    // Phase93: LLM呼び出し自体は増やさない(Section20「Candidateごとに
+    // 個別LLMを呼び出す設計は禁止」)。Discovery+DeepeningのEvidence全体
+    // に対して、従来通り1回(Retry込みで最大2回)だけLLMを呼ぶ。
+    const { outcome, attempts } = await generateLLMAnswerWithRetry(
       assembled,
-      webResult.evidence,
+      combinedEvidence,
       options?.llmProvider,
       options?.llmModel
     );
+
+    llmAttemptCount = attempts;
 
     const commonMetadataFields = {
 
@@ -497,11 +668,15 @@ export async function runResearch(
 
         ...commonMetadataFields,
 
-        llmAttempts: 1,
+        // Phase24: Retryが発生した場合(llmAttemptCount===2)、両方の
+        // 試行が失敗したことを表す(1回目の理由は保持しないが、
+        // 絶対条件5の通り新しいFailure分類体系は作らない。最終
+        // 試行のfailureReasonのみをllmFailureReasonへ反映する)。
+        llmAttempts: llmAttemptCount,
 
         llmSuccesses: 0,
 
-        llmFailures: 1,
+        llmFailures: llmAttemptCount,
 
         llmFailureReason: outcome.failureReason,
 
@@ -535,7 +710,10 @@ export async function runResearch(
 
     }
 
-    const citedEvidence = webResult.evidence.filter((item) =>
+    // Phase93: 引用対象もcombinedEvidence(Discovery+Deepening統合後)から
+    // 探す(DeepeningでのみEvidence化された項目もLLMが引用できるように
+    // なったため)。
+    const citedEvidence = combinedEvidence.filter((item) =>
       outcome.evidenceIds.includes(item.id)
     );
 
@@ -543,11 +721,14 @@ export async function runResearch(
 
       ...commonMetadataFields,
 
-      llmAttempts: 1,
+      // Phase24: Retryを経て成功した場合(llmAttemptCount===2)、
+      // 1回目は失敗・2回目で成功したことを表す
+      // (llmAttempts:2, llmSuccesses:1, llmFailures:1)。
+      llmAttempts: llmAttemptCount,
 
       llmSuccesses: 1,
 
-      llmFailures: 0,
+      llmFailures: llmAttemptCount - 1,
 
     };
 
@@ -573,6 +754,19 @@ export async function runResearch(
 
       metadata,
 
+      // Phase 21: generateLLMAnswer()(llmAnswer.ts)がcontextAssembly.tsの
+      // 指示(「missingなRequirementでWeb Evidenceが0件の場合、確認できな
+      // かったことをuncertaintyへ明記する」等)に基づき既に生成している
+      // 値をそのまま透過するだけ。新しいLLM呼び出しは発生しない
+      // (絶対条件2)。STEP186時点ではこの値はrunResearch()内で読まれず
+      // 破棄されていた(Phase21調査で確認)。
+      uncertainty: outcome.uncertainty,
+
+      // Phase76: 同じくgenerateLLMAnswer()が既に生成している
+      // outcome.keyFindingsを透過する(新しいLLM呼び出しなし、
+      // Repository Evidenceで判明した既存の未配線箇所)。
+      keyFindings: outcome.keyFindings,
+
     };
 
   } catch (error) {
@@ -582,19 +776,21 @@ export async function runResearch(
     // 失敗経路はすべてLLMAnswerOutcomeとして返るため、ここでの
     // 例外はgenerateLLMAnswer()の呼び出し以前、またはランタイムの
     // 想定外エラーに限られる)以外で発生した、真に予期しない例外の
-    // 場合のみ。llmAttemptedをここまでの実行状況から正確に反映する
-    // (「試行していないのに1」「試行したのに0」のどちらも避ける)。
+    // 場合のみ。llmAttemptCountをここまでの実行状況から正確に反映する
+    // (「試行していないのに1」「試行したのに0」のどちらも避ける。
+    // Phase24: Retryにより最大2まで取りうる値になったため、真偽値では
+    // なく実際の試行回数をそのまま使う)。
     const metadata: ResearchMetadata = {
 
       executionMode: "web-research",
 
-      llmAttempts: llmAttempted ? 1 : 0,
+      llmAttempts: llmAttemptCount,
 
       llmSuccesses: 0,
 
-      llmFailures: llmAttempted ? 1 : 0,
+      llmFailures: llmAttemptCount,
 
-      llmFailureReason: llmAttempted ? "unknown_error" : undefined,
+      llmFailureReason: llmAttemptCount > 0 ? "unknown_error" : undefined,
 
       searchQueryCount,
 

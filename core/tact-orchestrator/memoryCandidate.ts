@@ -60,7 +60,24 @@ export interface MemoryCandidateEvidence {
 
 export interface MemoryCandidate {
 
+  // Phase36絶対条件: contentには「そのままユーザーへ提示されても
+  // 自然な内容」だけを保存する。coreOnlyAnswer.tsのCore-only
+  // Answerability(STEP180)が、この値を一切加工せずそのまま回答文と
+  // して返す設計のため(絶対条件: Core-only側は変更しない)、"Q:/A:"の
+  // ような内部形式・監査用の文言をここへ混ぜない。質問文等の付随情報は
+  // 下記descriptionへ分離する。
   content: string;
+
+  // Phase36: このMemory Candidateの元になった質問・依頼文
+  // (例: Task.description)。KnowledgeItem.description(既存フィールド、
+  // DB schema変更不要)へそのまま渡される。coreOnlyAnswer.tsは
+  // この値を回答生成に使わない(contentのみを読む)ため、Core-only
+  // Answerabilityの挙動には影響しない。一方、既存のKnowledge検索
+  // (core/tact-core/supabaseCoreCapability.tsのretrieveKnowledge()が
+  // 既にtitle/description/content/tagsを結合してrelevance判定して
+  // いる、STEP208-L)には引き続き反映されるため、再検索時の一致精度は
+  // 維持される。
+  description?: string;
 
   memoryType: MemoryCandidateType;
 

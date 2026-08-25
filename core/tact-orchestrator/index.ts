@@ -42,4 +42,20 @@ export type { MemoryCandidate, MemoryCandidateType, MemoryCandidateEvidence } fr
 export type { MemoryWriteOutcome } from "./memoryWriter";
 export type { Episode, BuildEpisodeOptions } from "./episode";
 export { buildEpisode } from "./episode";
+// Phase 21: AnswerConfidence型のみを公開する(TaskExecutionSummary.
+// answerConfidenceの型として呼び出し元が参照できるようにするため、
+// ClarificationRequest型と同じ扱い)。deriveAnswerConfidence()自体は
+// detectAmbiguity()と同じくexecutor.ts内部の実装であり、意図的に
+// 再exportしない(絶対条件11、呼び出し元は常にrunOrchestration()
+// またはTaskExecutionSummaryの値だけを見る)。
+export type { AnswerConfidence } from "./confidence";
+// Phase 27: buildEpisode()(Phase11)と同じ位置づけで公開する
+// ——runOrchestration()の内部実装(detectAmbiguity()・
+// deriveAnswerConfidence()のように実行過程で自動的に呼ばれるもの)
+// ではなく、OrchestrationResult.tasksを受け取った呼び出し元が
+// 事後的に利用するための独立したユーティリティ。Evaluation Signalを
+// 「使う場所」(将来のReflection Layer)がまだ存在しないため
+// (Phase25/26で確認済み)、Commander/Executorからは呼び出さない。
+export type { LearningSignal, EvaluateTaskExecutionOptions } from "./evaluation";
+export { evaluateTaskExecution } from "./evaluation";
 export { runOrchestration } from "./commander";

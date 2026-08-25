@@ -239,6 +239,44 @@ const KNOWLEDGE_COLUMNS =
   "id, user_id, scope, kind, title, description, content, source, " +
   "reference, tags, metadata, created_at, updated_at";
 
+// =========================
+// Legacy Research Knowledge判定 (Phase38)
+// =========================
+//
+// 背景(Phase34〜37): Phase36以前は、Research由来Knowledgeの
+// contentを"Q: {質問}\nA: {回答}"という内部監査用の形式で保存
+// していた。core/tact-research/coreOnlyAnswer.ts(STEP180)は
+// Knowledge.contentを一切加工せずそのままユーザーへ返す設計のため、
+// この内部形式がそのまま回答へ漏洩する不具合をPhase34の実測で確認
+// した。Phase36で新規書き込み形式を修正済み(content=回答本文のみ、
+// description=質問文)だが、実DBにはPhase37調査で確認した通り10件の
+// 旧形式データが既に残っている。DBは変更しない方針(Phase37結論、
+// backfillはリスクが高いため不採用)のため、読み取り時にこれらを
+// 除外する。
+//
+// 判定条件(Phase37で実データの誤検出0件を確認済み):
+//   1. source が "orchestrator:research:" で始まる(Research由来と
+//      判明している場合のみ対象にする。手動Knowledge(source="upload"/
+//      "user_push"等)の自然文が偶然"Q:"で始まっても対象にしない)。
+//   2. content が "Q:" で始まる(Phase36以降の新形式は回答本文のみの
+//      ため通常この形にならない)。
+// 両方を満たす場合のみLegacyとみなす(絶対条件: content prefixだけの
+// 単純な判定にしない)。
+//
+// exportする理由(Phase38、STEP208-Tのtoexport済みtoKnowledgeItem()と
+// 同じ前例): selectKnowledgeByOwner()自体は実Supabase接続を伴うため
+// 単体テストできないが、この判定ロジック自体は決定論的な純粋関数
+// であり、実装と乖離しないようEvaluation Harnessから直接検証できる
+// ようにする。
+export function isLegacyResearchKnowledge(item: KnowledgeItem): boolean {
+
+  return (
+    item.source.startsWith("orchestrator:research:") &&
+    item.content.startsWith("Q:")
+  );
+
+}
+
 async function selectKnowledgeByOwner(
   ownerId: string,
   kind?: KnowledgeKind
@@ -260,9 +298,17 @@ async function selectKnowledgeByOwner(
     throw error;
   }
 
+  // Phase38: loadContext()・retrieveKnowledge()の両方がこの関数を
+  // 経由する(唯一の共有DB取得箇所)ため、ここで除外するだけで
+  // Research(Core-only含む)・Chat(Memory-aware Context)の両経路に
+  // 一貫して反映される。関連度スコアリング・Knowledge Gap判定より
+  // 前(呼び出し元がcontext.knowledgeを組み立てる前)に除外している
+  // ため、Legacy Knowledgeが「covered」と判定されてからWeb Researchを
+  // 省略してしまう、という別の問題は発生しない。
   return ((data ?? []) as unknown as KnowledgeRow[])
     .map(toKnowledgeItem)
-    .filter((item): item is KnowledgeItem => item !== null);
+    .filter((item): item is KnowledgeItem => item !== null)
+    .filter((item) => !isLegacyResearchKnowledge(item));
 
 }
 

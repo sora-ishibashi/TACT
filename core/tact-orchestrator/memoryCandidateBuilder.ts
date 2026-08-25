@@ -156,10 +156,17 @@ function buildResearchCandidate(
 
   return {
 
-    content: truncate(
-      `Q: ${task.description}\nA: ${summary.output}`,
-      RESEARCH_CONTENT_MAX_LENGTH
-    ),
+    // Phase36修正: 以前は"Q: {質問}\nA: {回答}"という内部形式で
+    // 保存していたが、coreOnlyAnswer.tsのCore-only Answerability
+    // (STEP180)がcontentを一切加工せずそのままユーザーへ返す設計の
+    // ため、この内部形式がそのまま回答として露出する不具合を
+    // Phase34/35のReality Testで実測確認した(coreOnlyAnswer.ts側は
+    // 変更しない、絶対条件)。回答本文のみをcontentへ保存する。
+    content: truncate(summary.output, RESEARCH_CONTENT_MAX_LENGTH),
+
+    // 質問文はcontentから分離し、description(既存KnowledgeItem
+    // フィールド、DB schema変更不要)へ保持する。
+    description: truncate(task.description, RESEARCH_CONTENT_MAX_LENGTH),
 
     memoryType: "knowledge_memory",
 

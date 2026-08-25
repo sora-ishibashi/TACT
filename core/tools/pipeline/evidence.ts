@@ -57,7 +57,21 @@ export function buildEvidence(
 
       score: 0,
 
-      publishedAt: undefined,
+      // Phase43: normalizeResult()が素通しした実データをそのまま使う。
+      // Providerが日時を返さなかった場合はundefinedのまま(推測しない、
+      // 絶対条件Rule2)。
+      publishedAt: normalized.publishedAt,
+
+      // Phase43: publishedAt(情報源が公開した時刻)とは別概念、TACTが
+      // この検索結果を実際に取得した時刻(絶対条件Rule3)。Evidence型に
+      // 既に存在していたが、これまで設定箇所が無く常にundefinedだった
+      // フィールド。createdAt(number、Date.now())と役割が重複する
+      // ように見えるが、createdAtはEvidenceオブジェクト自体の生成時刻
+      // (既存フィールド、型もnumberで別物)であり、混同しない
+      // (絶対条件Rule4/5: createdAt/updatedAtをpublishedAtの代用にしない、
+      // という制約とは別に、ここでは新たにretrievedAtへ「今」を設定する
+      // だけであり、他フィールドからの代用ではない)。
+      retrievedAt: new Date().toISOString(),
 
       sourceType:
         inferSourceType(

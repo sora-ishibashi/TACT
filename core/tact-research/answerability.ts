@@ -50,14 +50,33 @@ const TIME_SENSITIVE_PATTERNS: RegExp[] = [
   /\bcurrent\b/i,
   /\btoday\b/i,
   /\bnow\b/i,
+  // Phase42: 「〜は誰ですか/どなたですか」は、具体的な役職名(社長/CEO/
+  // 学長/市長/知事等)を列挙しなくても、「ある役職・地位に現在誰が
+  // 就いているか」を問う質問全般を包括的に捉えられる、文法的に
+  // 一般化された時間依存シグナル(役職の在任者は交代しうるため)。
+  // 特定の役職名を辞書として大量列挙する場当たり的な対応
+  // (Phase42絶対条件18で明示的に禁止)を避けつつ、Phase41で発見した
+  // 「代表者/CEO/学長等は本質的に時間依存だが明示的な時制語を伴わない」
+  // 問題の主要な形(「〜は誰ですか」という質問形)を、hasTimeSensitiveSignal()
+  // (assessAnswerability()・knowledgeGap.tsのcanAnswerAllFromCoreOnly()
+  // 両方から共有される既存の唯一の判定関数)経由でカバーする。
+  /は誰/,
+  /はどなた/,
 ];
 
 // STEP180の指示に挙げられた例(「○○とは？」「○○の所在地は？」等)を
 // そのまま反映した、意図的に狭い正規表現セット。判定を緩くしすぎない
 // ため、曖昧な質問・比較・分析を要求する質問には一致しないようにする。
+//
+// Phase42: "代表者"はSTEP180制定時からここに含まれていたが、Phase41の
+// 調査で「本質的に時間依存(在任者が交代しうる)な属性」であることが
+// 判明した(所在地/設立年/目的/定義は比較的durableなのに対し、代表者は
+// 性質が異なる)。durableな他の4語とは別カテゴリのため、この4語は
+// 維持しつつ"代表者"のみ除外する(Phase42絶対条件18: 大量のキーワード
+// 追加/削除ではなく、根拠のある1語の是正に留める)。
 const SIMPLE_FACT_PATTERNS: RegExp[] = [
   /とは[?？]?$/,
-  /の(所在地|代表者|設立年|目的|定義)は/,
+  /の(所在地|設立年|目的|定義)は/,
   /(以前|前回)決めた.*は(何|なに|どれ)/,
 ];
 
@@ -102,6 +121,69 @@ export function hasTimeSensitiveSignal(query: string): boolean {
   return TIME_SENSITIVE_PATTERNS.some((pattern) => pattern.test(query));
 }
 
+// =========================
+// Volatile Research Knowledge除外 (Phase94)
+// =========================
+//
+// Root Cause(Phase91〜93投資調査、Repository Evidence: 3回の独立した
+// 実Reality Testで再現): memoryCandidateBuilder.tsのbuildResearchCandidate()
+// は、Web Research由来のKnowledgeを"freshness: volatile"(絶対条件10
+// 「Web検索結果は将来変わりうる情報として扱う」)として区別していたが、
+// この値がPhase94まで一切recordKnowledge()へ渡っておらず、"durable"な
+// Knowledgeと区別なく永続化されていた。その結果、あるConversationの
+// Research結果がscope:"user"のKnowledgeとして永続化された後、全く
+// 別のConversationの後続Turnがそれを拾い、このassessAnswerability()や
+// knowledgeGap.tsのcanAnswerAllFromCoreOnly()がCore-only経路
+// (LLM 0回・Search 0回)へ短絡してしまうことを確認した(claim=古い
+// User Input、source=古いtask IDがそのままEvidenceとして混入)。
+//
+// hasTimeSensitiveSignal()による安全弁は、判定対象がその時点で
+// runResearch()へ渡された「query文字列そのもの」に限られる(STEP180/
+// 185の既存設計)。extractResearchTopic()(Phase88)・
+// buildSupplementalResearchQuery()(Phase78)のような、後続Turnの
+// トピック凝縮処理が「最初の文だけ」を対象とするため、元の依頼文の
+// 後半にあった時間依存語(例:「2026年8月〜10月」)が凝縮後のqueryから
+// 失われることがあり、Turn1では機能した時間依存性ガードがTurn2/Turn3
+// では機能しなくなる。トピック凝縮ロジック自体(Phase88/92)は意図通り
+// 動作しているため変更しない。
+//
+// 修正方針: core/tact-core/supabaseCoreCapability.tsのselectKnowledgeByOwner()
+// (loadContext()・retrieveKnowledge()共有の取得箇所、既存の
+// isLegacyResearchKnowledge()がここで除外を行う)では除外しない。
+// retrieveKnowledge()はapp/api/tact/knowledge/route.ts(UI「過去の
+// Research/Knowledge」タブ)からも呼ばれており、ここで一律除外すると、
+// ユーザーが過去のResearch結果を閲覧するという正当な機能まで壊して
+// しまう(isLegacyResearchKnowledge()が「内容として壊れているデータ」を
+// 除外するのに対し、こちらは「内容は正しいが、新しい質問への即答の
+// 根拠としては安全ではない」という別種の問題であり、同じ場所で同じ
+// ように除外すべきではない)。
+//
+// 代わりに、Core-only Answerability(LLM 0回・Search 0回)を判定する
+// 2箇所——このファイルのassessAnswerability()・knowledgeGap.tsの
+// classifyRequirement()——でのみ、context.knowledgeをスコアリングする
+// 直前にこの関数がtrueを返すKnowledgeItemを候補から除外する。
+// durable(継続的な事実)なKnowledge・Memory・Research以外の経路
+// (explicit_intent/preference)は対象外(絶対条件: 過剰な無効化をしない)。
+//
+// 判定条件(いずれかを満たせば除外):
+//   1. source が "orchestrator:research:" で始まる —— buildResearchCandidate()
+//      (memoryCandidateBuilder.ts)は現在の実装上、この形式のsourceを
+//      持つ候補を常にfreshness:"volatile"としてのみ生成するため
+//      (durableなResearch知識を生成する分岐は存在しない)、source自体が
+//      実質的な判定条件として十分であり、かつPhase94修正より前に
+//      書き込まれた既存の古いRow(metadataが無い)も遡って除外できる
+//      (実Reality Testで確認したPhase91起源の混入データがこれに該当する)。
+//   2. metadata.freshness === "volatile" —— 1で捕捉できない将来の
+//      Research由来source命名の変化に備えた保険。
+export function isVolatileResearchKnowledge(item: KnowledgeItem): boolean {
+
+  return (
+    item.source.startsWith("orchestrator:research:") ||
+    item.metadata?.freshness === "volatile"
+  );
+
+}
+
 function isSimpleFactPattern(query: string): boolean {
   return SIMPLE_FACT_PATTERNS.some((pattern) => pattern.test(query));
 }
@@ -141,14 +223,20 @@ export function assessAnswerability(
 
   }
 
-  const scoredKnowledge: ScoredItem[] = context.knowledge.map((item) => ({
-    type: "knowledge",
-    item,
-    score: scoreRelevance(
-      `${item.title} ${item.description ?? ""} ${item.content}`,
-      query
-    ),
-  }));
+  // Phase94: Core-only Answerabilityの根拠としては、volatileな
+  // Research由来Knowledgeを対象外とする(isVolatileResearchKnowledge()
+  // 参照)。context.knowledge自体は変更しない(このスコアリング専用の
+  // 絞り込み)。
+  const scoredKnowledge: ScoredItem[] = context.knowledge
+    .filter((item) => !isVolatileResearchKnowledge(item))
+    .map((item) => ({
+      type: "knowledge",
+      item,
+      score: scoreRelevance(
+        `${item.title} ${item.description ?? ""} ${item.content}`,
+        query
+      ),
+    }));
 
   const scoredMemories: ScoredItem[] = context.memories.map((item) => ({
     type: "memory",

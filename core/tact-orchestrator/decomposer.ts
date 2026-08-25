@@ -1,4 +1,9 @@
-import { classifyIntent } from "../tact-intent/ruleRouter";
+import {
+  classifyIntent,
+  looksLikeAdditionalResearchRequest,
+  looksLikeResearchContinuation,
+} from "../tact-intent/ruleRouter";
+import { extractResearchTopic } from "../tact-research/queryGeneration";
 import type { OrchestrationRequest } from "./types";
 import type { Task } from "./task";
 
@@ -173,11 +178,71 @@ export function decomposeTask(
   // (assignedCapability未指定 → executor.tsがChat Handlerへ
   // フォールバック)として扱う。TACT CoreへのPush判断をOrchestrator
   // が自律的に行うことはPhase 3のスコープ外。
-  const decision = classifyIntent(input);
+  // Phase86: request.previousUserInput(直前Turnのuser発言、呼び出し元が
+  // 既存のConversation履歴から渡す)をclassifyIntent()へそのまま透過
+  // する。「具体例を5件追加で確認してください」のような、直前Turnが
+  // Researchだった場合にのみResearchとして扱うべき追加調査要求を
+  // 判定するために使う(Section3)。
+  const decision = classifyIntent(input, request.previousUserInput);
 
   const assignedCapability =
     decision.intent === "research" ? "research" : undefined;
 
-  return [makeTask(input, assignedCapability)];
+  // =========================
+  // Phase88: 直前Turnの主題をTask.descriptionへ補完する
+  // =========================
+  //
+  // Root Cause(Phase87投資調査): 「さっき調べた内容に、〜をさらに
+  // 5件ほど追加で確認してください」のような追加調査要求は、
+  // Phase86によりResearch Capabilityへ正しくルーティングされるように
+  // なった(assignedCapability="research")。しかしTask.description
+  // (=このままResearchParams.queryとしてSearchへ渡る文字列、
+  // composeInputWithDependencies()→executor.ts参照)には、直前Turンで
+  // 確立された核心トピック(「愛知県」「スポーツイベント」等)が
+  // 一切含まれない——「さっき調べた内容」という指示語で前Turnを参照
+  // しているだけであり、検索クエリとしては実質的にトピックを失って
+  // いる(実Reality Testで検索結果0件を確認)。
+  //
+  // 修正: looksLikeAdditionalResearchRequest()/looksLikeResearchContinuation()
+  // (Phase86で確立済み、classifyIntent()自身がResearchかどうかを判定
+  // するために使っている決定論的パターン)を再利用し、「このTurnが
+  // 前Turnを引き継ぐ追加調査要求だ」と判定できた場合にのみ、
+  // extractResearchTopic()(Phase88新設、tact-research層で独立実装、
+  // 前Turn全文ではなくトピック部分だけを抽出)で得た前Turnの主題を
+  // Task.descriptionへ補完する。
+  //
+  // 絶対条件: 「AとBが無関係な話題」の場合は補完しない。「東京のIT
+  // 企業のインターンについて調べてください」のような、それ自体で
+  // 完結した新しい調査要求はRESEARCH_PATTERN(基本パターン)に直接
+  // 一致し、looksLikeAdditionalResearchRequest/looksLikeResearchContinuation
+  // (「追加/さらに/他にも/別の/もう少し」等の継続マーカーを必須と
+  // する)には一致しないため、この分岐に入らず補完されない
+  // (Phase88 Multi-turn unrelated topicテストで確認)。
+  let taskDescription = input;
+
+  if (
+    assignedCapability === "research" &&
+    request.previousUserInput &&
+    (looksLikeAdditionalResearchRequest(input) ||
+      looksLikeResearchContinuation(input, request.previousUserInput))
+  ) {
+
+    const previousTopic = extractResearchTopic(request.previousUserInput);
+
+    if (previousTopic && !input.includes(previousTopic)) {
+      taskDescription = `${previousTopic} ${input}`;
+    }
+
+  }
+
+  const task = makeTask(taskDescription, assignedCapability);
+
+  // Phase90: Table Schema(列構成・要求件数)をResearch Taskへ引き継ぐ。
+  // Research Capability以外のTaskには意味を持たないため設定しない。
+  if (assignedCapability === "research" && request.tableSchema) {
+    task.tableSchema = request.tableSchema;
+  }
+
+  return [task];
 
 }

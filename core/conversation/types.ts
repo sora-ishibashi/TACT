@@ -17,11 +17,18 @@
 
 export type ConversationRole = "user" | "assistant";
 
+// Phase55: roleとは独立した軸。通常のメッセージはmessageTypeを持たず
+// (undefined)、Clarification質問(role:"assistant")だけが
+// "clarification_question"を持つ。汎用的なMessage種別taxonomyは
+// 作らない(値は現時点でこの1種類のみ、Phase52〜55の絶対条件)。
+export type ConversationMessageType = "clarification_question";
+
 export interface ConversationMessage {
   id: string;
   role: ConversationRole;
   content: string;
   createdAt: string;
+  messageType?: ConversationMessageType;
 }
 
 // =========================
@@ -109,6 +116,18 @@ export interface Conversation {
   messages: ConversationMessage[];
 
   workflowRuns: WorkflowRun[];
+
+  // Phase55(Phase52 Product Decision Clarification=B、Phase53/54で
+  // 設計): 現在pendingなClarification質問を指すmessage id。undefined/
+  // 未設定ならpendingなし。質問文・元入力・回答文そのものは
+  // messagesから導出する(ここに複製しない、Phase54 Decision A)。
+  pendingClarificationMessageId?: string;
+
+  // 上記messageに対してユーザーが回答した時刻。undefinedならまだ
+  // 未回答(pending)、設定済みなら回答済み(answered、Execution成功/
+  // 失敗待ち)。Execution成功時は両フィールドをundefinedへ戻す
+  // ("executed"という状態を独立して永続化しない、Phase54 Decision E)。
+  pendingClarificationAnsweredAt?: string;
 }
 
 // =========================
