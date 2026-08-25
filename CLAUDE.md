@@ -140,3 +140,63 @@ TACT開発では完璧な設計を最初から完成させることよりも、
 既存のAgent system prompt（`core/agents/*.ts`）が重要な設計資産であること、既存の命名・
 ディレクトリ構成の矛盾や重複を見つけても即座に「バグ」として修正するのではなくまず事実として
 報告することも、これまでと変わらず維持します。
+
+## 13. TACT Research Phase方式の開発ルール（Phase66〜、スマホからの継続作業向け）
+
+`core/tact-research/`・`core/tact-conversation/`・`core/tact-artifact/`・
+`core/tact-orchestrator/` を中心とするTACT Research/Comparison Table基盤の開発は、
+上記1〜12の一般ルールに加えて、Phase単位で以下の順序を守る。
+
+- Phase方式で開発する。1つのPhase指示 = 1つの調査・実装スコープとして扱い、
+  指示されていない次のPhaseへ勝手に進まない。
+- 各Phaseの基本順序: 実装前にRoot Causeをコードレベルで確認 → 最小実装 →
+  Unit Test → 全Regression（`npm test`） → `tsc --noEmit` → `eslint` →
+  （必要なら）`next build` → 実装完了報告。
+- **Reality Test（実LLM/実Search APIを使った実機確認）は、ユーザーの明示的な許可が
+  出た場合のみ実行する。** 実装完了報告の時点では実行せず、そこで一旦停止する。
+- Reality Test実行後は、結果を報告して停止する。結果を見て次に何をするかは
+  ユーザーが判断する（「次のPhaseへ自動で進む」ことをしない）。
+- Root Causeが完全に特定できていない状態で、大規模な設計変更・Pipeline刷新を
+  行わない。特定できなかった場合は「未特定」と正直に報告して止める。
+- Search/LLM呼び出しは無制限に増やさない（Discovery/Deepeningのような多段階化は、
+  上限回数を明示した上で最小限にする）。API/DBコストを意識し、不要な呼び出しを
+  増やす変更は避ける。
+- No-Fabrication（確認できない情報を「情報未確認」等で扱い、推測で埋めない）は
+  常に維持する。
+- 既存Architecture（Research/Conversation/Artifact/Orchestratorの一方向依存、
+  既存Block/Schema）を優先し、新しいSchema・新しいPipeline・新しいProviderの追加は
+  最小限にする。可能な限りoptional/additiveな変更（既存の型に`?`付きフィールドを
+  足す等）を基本とする。
+- Phase単位で1 commitを基本とする（例: `phase95: validate stale knowledge fix`）。
+  ただしReality Testのみでcode変更が無いPhaseはcommit不要。
+
+## 14. 現在地点（最終更新: Phase94、2026-08-25）
+
+TACT Research／Comparison Table基盤は Phase66〜94 まで進行済み（2026-08-25時点で
+`checkpoint: TACT Research/Artifact pipeline through Phase94` としてまとめてcommit・
+push済み）。
+
+- **Phase90〜92**: Research結果からComparison Tableを生成する基盤
+  （Table Schema・Evidence Grounding・Query Condensation）を実装。ただし実機では
+  個別イベントEntityがほとんど発見できず、ポータル/一覧ページの情報に留まっていた。
+- **Phase93**: Research Capabilityへ Discovery → Deepening（`core/tact-research/
+  candidateDiscovery.ts`）を追加。実機でDiscovery→Deepeningの発火自体は確認できたが、
+  Candidate抽出（ポータル判定）の精度が低く、個別Entity発見には未到達（改善は
+  Phase95以降で扱う、今回は着手しない）。
+- **Phase94**: Reality Testで繰り返し観測されていた「別Conversationの古いResearch
+  結果（Evidence anomaly: `claim`=昔のUser Input、`source`=昔のtask ID）が、
+  全く無関係なTurnでCore-only Answerability（LLM 0回・Search 0回）の根拠として
+  誤って再利用される」問題のRoot Causeを特定・修正。Research由来のKnowledgeは
+  `freshness: "volatile"` として区別されていたが、DBへ永続化される際にこの情報が
+  失われていたため、`assessAnswerability()` / `knowledgeGap.ts` の
+  `classifyRequirement()` がCore-only判定の根拠として誤って使ってしまっていた。
+  `KnowledgeItem.metadata` 経由でfreshnessを永続化し、Core-only判定の2箇所から
+  volatileなResearch Knowledgeを除外することで修正（過去のResearch結果を閲覧する
+  `/api/tact/knowledge` は意図的に対象外のまま）。591 tests passed / tsc 0 errors /
+  eslint 0 errors・0 warnings（既存Legacy Workflowファイルの既存エラーは対象外）。
+  **Phase94のReality Testはまだ実行していない**（許可待ちで停止中）。
+
+**Phase95の起点**: まずPhase94のReality Test（Phase90〜93と同じ3ターン構成）を
+実行し、Turn2/Turn3で実際に`performWebResearch()`まで到達すること・Evidence
+anomalyが再発しないことを実データで確認する。それを踏まえて、Candidate抽出精度の
+改善（Phase93で残った課題）へ進むかどうかを判断する。
