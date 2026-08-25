@@ -85,7 +85,11 @@ import {
 } from "./coreOnlyAnswer";
 import { buildResearchQueries, buildGapResearchQueries, buildDeepeningQueries } from "./queryGeneration";
 import { performWebResearch, WebResearchResult, DEFAULT_MAX_EVIDENCE } from "./webResearch";
-import { discoverCandidateEntities, selectDeepeningCandidates } from "./candidateDiscovery";
+import {
+  discoverCandidateEntities,
+  selectDeepeningCandidates,
+  prioritizeIndividualEntityEvidence,
+} from "./candidateDiscovery";
 import { removeDuplicates } from "../tools/pipeline/removeDuplicates";
 import { selectEvidence } from "../evidence/selectEvidence";
 import { assembleResearchContext, AssembledResearchContext } from "./contextAssembly";
@@ -570,18 +574,42 @@ export async function runResearch(
     // Discovery/Deepening両方のEvidenceを1つのpoolへ統合する。重複排除は
     // 既存executeEvidencePipeline()(core/tools/pipeline/evidence.ts)と
     // 同じkey(claim+source)でremoveDuplicates()(既存汎用関数)を
-    // 再利用し、統合後は既存selectEvidence()で改めて関連度順に絞り込む
-    // (新しい重複判定・スコアリングロジックは作らない。pool肥大化を
-    // 防ぎ、既存のmaxEvidence契約を維持する)。
+    // 再利用し、統合後は既存selectEvidence()で改めて関連度順に並べる
+    // (新しい重複判定・スコアリングロジックは作らない)。
+    //
+    // Phase99(Repository Evidence: Phase98 Reality Test): ここで
+    // selectEvidence()がそのままmaxEvidence件に絞り込むと、Deepeningが
+    // 個別Entityを対象に検索できていても、関連度スコアが高いPortal/
+    // 一覧ページ(汎用的な地域・属性キーワードをタイトルに含みやすい)に
+    // 押し出されて最終Evidenceから漏れることが実データで確認された。
+    // 絞り込み前に一旦重複排除後のpool全体を関連度順にランクし直し
+    // (selectEvidence()自体は無変更、limitをpool長にして「並べ替えの
+    // みで絞り込まない」呼び出しに留める)、
+    // prioritizeIndividualEntityEvidence()(candidateDiscovery.ts、
+    // Phase93/97のisLikelyCollectionOrPortal()を再利用するだけの決定論的
+    // 後処理)でIndividual Entityらしい項目を優先してからmaxEvidence件へ
+    // 絞り込む。Portal Evidenceを排除するわけではなく、Individual
+    // Entityが無ければ従来通りPortal Evidenceで埋まる(全面排除の禁止)。
     const combinedEvidence = deepeningResult
-      ? selectEvidence(
-          removeDuplicates(
+      ? (() => {
+
+          const dedupedPool = removeDuplicates(
             [...webResult.evidence, ...deepeningResult.evidence],
             (item) => `${item.claim}${item.source}`
-          ),
-          query,
-          options?.maxResults ?? DEFAULT_MAX_EVIDENCE
-        )
+          );
+
+          const relevanceRanked = selectEvidence(
+            dedupedPool,
+            query,
+            dedupedPool.length
+          );
+
+          return prioritizeIndividualEntityEvidence(
+            relevanceRanked,
+            options?.maxResults ?? DEFAULT_MAX_EVIDENCE
+          );
+
+        })()
       : webResult.evidence;
 
     // ===============================

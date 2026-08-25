@@ -70,6 +70,8 @@ import { run as runTactArtifactPhase82 } from "./artifact/tactArtifactPhase82.te
 import { run as runTactArtifactPhase83 } from "./artifact/tactArtifactPhase83.test";
 import { run as runTactArtifactPhase85 } from "./artifact/tactArtifactPhase85.test";
 import { run as runTactArtifactPhase91 } from "./artifact/tactArtifactPhase91.test";
+import { run as runAgentHandoff } from "./agent/agentHandoff.test";
+import { run as runListCodeTasksFilter } from "./codeAgent/listCodeTasksFilter.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -115,6 +117,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "artifact/tactArtifactPhase83", run: runTactArtifactPhase83 },
   { name: "artifact/tactArtifactPhase85", run: runTactArtifactPhase85 },
   { name: "artifact/tactArtifactPhase91", run: runTactArtifactPhase91 },
+  { name: "agent/agentHandoff", run: runAgentHandoff },
+  { name: "codeAgent/listCodeTasksFilter", run: runListCodeTasksFilter },
 ];
 
 async function main() {

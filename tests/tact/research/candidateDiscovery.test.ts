@@ -23,6 +23,7 @@ import "dotenv/config";
 import {
   discoverCandidateEntities,
   selectDeepeningCandidates,
+  prioritizeIndividualEntityEvidence,
   type CandidateEntity,
 } from "../../../core/tact-research/candidateDiscovery";
 import { buildDeepeningQueries } from "../../../core/tact-research/queryGeneration";
@@ -138,6 +139,236 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Discovery-5] 極端に短いタイトル(固有名詞と判断できない)はCandidateにしない",
         discoverCandidateEntities(shortTitleEvidence).length === 0
+      )
+    );
+
+  }
+
+  // ==========================================================
+  // Phase97: Phase95/96の実データで確認されたfalse positiveパターンの
+  // 追加Candidate判定(件数付き一覧・案内文型・複数主体型イベント+URL)。
+  // 以下のtitle/urlは、断りが無い限りPhase95実Reality Testの実データ
+  // (ResearchResult.evidenceにそのまま出現したclaim/source)をそのまま
+  // fixture化したもの。
+  // ==========================================================
+
+  {
+    // Phase95 Turn2実データ(internshipguide.jp、件数付き一覧)。
+    const countedListingEvidence: Evidence[] = [
+      makeEvidence({
+        id: "e1",
+        claim: "愛知県のインターン・インターンシップ（2212件）",
+        source: "https://internshipguide.jp/interns/japanInternList/23",
+      }),
+    ];
+
+    results.push(
+      check(
+        "[Phase97-A] 件数付き一覧タイトル(「（2212件）」)はCandidateから除外される" +
+          "(Phase95実データ、PORTAL_TITLE_MARKERSの固定8語に一致しないfalse negativeの修正確認)",
+        discoverCandidateEntities(countedListingEvidence).length === 0
+      )
+    );
+
+    // 半角括弧・別件数でも同じパターンとして判定できることを確認する。
+    const halfWidthCountEvidence: Evidence[] = [
+      makeEvidence({
+        id: "e2",
+        claim: "◯◯総合イベント情報サイト(123件)",
+        source: "https://example.com/events",
+      }),
+    ];
+
+    results.push(
+      check(
+        "[Phase97-A2] 半角括弧の件数付きタイトルも同様に除外される(表記揺れ耐性)",
+        discoverCandidateEntities(halfWidthCountEvidence).length === 0
+      )
+    );
+
+  }
+
+  {
+    // Phase95 Turn1実データ(job.rikunabi.com、案内文型「〜情報」で終わる)。
+    const guidancePhraseEvidence: Evidence[] = [
+      makeEvidence({
+        id: "e1",
+        claim: "【リクナビ】愛知県 イベント インターンシップのインターンシップ情報",
+        source: "https://job.rikunabi.com/kw/some-search-path/",
+      }),
+    ];
+
+    results.push(
+      check(
+        "[Phase97-B] 案内文型タイトル(「〜情報」で終わる)はCandidateから除外される" +
+          "(Phase95実データ、PORTAL_TITLE_MARKERSに一致しないfalse negativeの修正確認)",
+        discoverCandidateEntities(guidancePhraseEvidence).length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Phase97-B2] 「〜はこちら」で終わる案内文型タイトルも同様に除外される",
+        discoverCandidateEntities([
+          makeEvidence({
+            id: "e2",
+            claim: "対象イベントの一次情報はこちら",
+            source: "https://example.com/guide",
+          }),
+        ]).length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Phase97-B3] タイトル『中間』に「情報」を含むだけの個別Entityは除外されない" +
+          "(末尾一致のみを対象にする設計により、過剰除外を避ける)",
+        discoverCandidateEntities([
+          makeEvidence({
+            id: "e3",
+            claim: "名古屋インターンシップフェア2026 開催情報まとめページ更新",
+            source: "https://example.com/nagoya-intern-fes-2026-detail",
+          }),
+        ]).length === 1
+      )
+    );
+
+  }
+
+  {
+    // Phase95 Turn2実データ(career-tasu.jp、onecareer.jp): タイトルは
+    // 既存PORTAL_TITLE_MARKERS(「一覧」)にも一致するが、Section2の
+    // URLベース補助判定が同時に成立することも確認する(組み合わせ判定の
+    // 健全性確認、URL側だけを見ても壊れていないことの確認)。
+    const portalUrlEvidence: Evidence[] = [
+      makeEvidence({
+        id: "e1",
+        claim: "愛知県で実施 - インターンシップ・キャリア情報一覧 | インターンシップ・新卒採用情報サイト キャリタス就活",
+        source: "https://job.career-tasu.jp/intern-search/lst-isArea-04/lst-isPref-23/",
+      }),
+      makeEvidence({
+        id: "e2",
+        claim: "愛知県のインターンシップ一覧｜就活イベントを探すなら【ONE CAREER】",
+        source: "https://www.onecareer.jp/events/internship/area/4/23",
+      }),
+    ];
+
+    const portalUrlCandidates = discoverCandidateEntities(portalUrlEvidence);
+
+    results.push(
+      check(
+        "[Phase97-C] career-tasu.jp(URL: /intern-search/lst-...)はCandidateから除外される" +
+          "(Phase95実データ、タイトル「一覧」+URL「/lst-」の両方がPortalシグナル)",
+        !portalUrlCandidates.some((c) => c.evidenceId === "e1"),
+        `candidates=${JSON.stringify(portalUrlCandidates.map((c) => c.evidenceId))}`
+      )
+    );
+
+    results.push(
+      check(
+        "[Phase97-D] onecareer.jp(URL: /events/internship/area/4/23)はCandidateから除外される" +
+          "(Phase95実データ、タイトル「一覧」+URL「/area/」の両方がPortalシグナル)",
+        !portalUrlCandidates.some((c) => c.evidenceId === "e2"),
+        `candidates=${JSON.stringify(portalUrlCandidates.map((c) => c.evidenceId))}`
+      )
+    );
+
+    results.push(
+      check(
+        "[Phase97-CD] 両方ともタイトル側の強いシグナルで既に除外されるため、" +
+          "この時点でCandidateは0件になる(組み合わせ判定に到達する前段の健全性確認)",
+        portalUrlCandidates.length === 0
+      )
+    );
+
+  }
+
+  {
+    // Phase95 Turn2実データ(internshipguide.jp、URL「japanInternList」)。
+    // タイトル自体が件数付き一覧(Phase97-Aと同じパターン)のため、
+    // タイトル側の強いシグナルだけで除外されることを確認する
+    // (URLの大文字混じり「japanInternList」は本heuristicの
+    // PORTAL_URL_MARKERSと厳密一致しないが、タイトル側が捕捉するため
+    // 過検出にはならない)。
+    const internshipGuideEvidence: Evidence[] = [
+      makeEvidence({
+        id: "e1",
+        claim: "愛知県のインターン・インターンシップ（1034件）",
+        source: "https://internshipguide.jp/interns/japanInternList/23",
+      }),
+    ];
+
+    results.push(
+      check(
+        "[Phase97-E] internshipguide.jp(件数付き一覧タイトル)はCandidateから除外される" +
+          "(Phase95実データ)",
+        discoverCandidateEntities(internshipGuideEvidence).length === 0
+      )
+    );
+
+  }
+
+  {
+    // Phase97-F: 単一企業・単一イベント・具体的開催情報を含む個別Entityは
+    // 新しいheuristic追加後も引き続きCandidateとして残ることを確認する
+    // (false negativeの修正がfalse positiveを増やしていないことの確認)。
+    const individualEntityEvidence: Evidence[] = [
+      makeEvidence({
+        id: "e1",
+        claim: "株式会社サンプル 1dayインターンシップ 2026年9月10日開催",
+        source: "https://example.com/sample-corp/internship-20260910",
+        evidence: "参加費無料、対象は大学3〜4年生、定員30名。",
+      }),
+    ];
+
+    results.push(
+      check(
+        "[Phase97-F] 単一企業の具体的な開催情報を含むタイトルはCandidateとして残る" +
+          "(新規heuristicによる過剰除外が発生していないことの確認)",
+        discoverCandidateEntities(individualEntityEvidence).length === 1 &&
+          discoverCandidateEntities(individualEntityEvidence)[0].name ===
+            "株式会社サンプル 1dayインターンシップ 2026年9月10日開催"
+      )
+    );
+
+  }
+
+  {
+    // Section4絶対条件: 「合同説明会」「EXPO」等の複数主体型イベント語を
+    // 含んでいても、単語一致だけでは除外しない(それ自体が独立した1つの
+    // Entityであり得るため)。既存Discovery-2の「名古屋インターンシップ
+    // フェア2026」(通常URL)は引き続きCandidateとして残ることを確認済み
+    // なので、ここではURLがPortalらしい場合にのみ除外されることを
+    // 明示的に確認する。
+    const weakSignalOnlyEvidence: Evidence[] = [
+      makeEvidence({
+        id: "e1",
+        claim: "豊田キャリアEXPO2026",
+        source: "https://example.com/toyota-career-expo-2026",
+      }),
+    ];
+
+    results.push(
+      check(
+        "[Phase97-G1] 「EXPO」を含んでいても通常URL(Portalらしいパターンなし)なら" +
+          "Candidateとして残る(単語単体では除外しない、過剰除外防止の確認)",
+        discoverCandidateEntities(weakSignalOnlyEvidence).length === 1
+      )
+    );
+
+    const weakSignalWithPortalUrlEvidence: Evidence[] = [
+      makeEvidence({
+        id: "e2",
+        claim: "豊田キャリアEXPO2026",
+        source: "https://example.com/category/career-expo-2026",
+      }),
+    ];
+
+    results.push(
+      check(
+        "[Phase97-G2] 同じ「EXPO」タイトルでも、URLがPortalらしいパターン(「/category/」)と" +
+          "一致する場合はCandidateから除外される(タイトル+URLの組み合わせ判定の確認、Section2)",
+        discoverCandidateEntities(weakSignalWithPortalUrlEvidence).length === 0
       )
     );
 
@@ -300,6 +531,183 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         JSON.stringify(candidateKeys) ===
           JSON.stringify(["evidenceId", "evidenceText", "name", "source", "url"]),
         `keys=${JSON.stringify(candidateKeys)}`
+      )
+    );
+
+  }
+
+  // ==========================================================
+  // Phase99: 最終Evidence選定でのIndividual Entity優先
+  // (prioritizeIndividualEntityEvidence()、Root Cause: Phase98実
+  // Reality Testで、Deepeningが個別Entityを対象に検索できていても、
+  // 関連度スコア中心の既存selectEvidence()がPortal/一覧ページを
+  // 優先してしまい最終Evidenceから漏れることを確認した)
+  // ==========================================================
+
+  {
+    // Test1: 個別Entity EvidenceがPortal Evidenceに不当に負けない。
+    // 既存selectEvidence()の関連度順(Phase98実データを模した並び:
+    // Portal 3件が上位、個別Entityらしい行政プログラムが末尾)を入力とし、
+    // limitを3件にした場合でも、個別Entityが押し出されず残ることを確認する。
+    const rankedWithPortalFirst: Evidence[] = [
+      makeEvidence({
+        id: "portal-1",
+        claim: "愛知県で実施 - インターンシップ・キャリア情報一覧 | キャリタス就活",
+        source: "https://job.career-tasu.jp/intern-search/lst-isArea-04/lst-isPref-23/",
+      }),
+      makeEvidence({
+        id: "portal-2",
+        claim: "愛知県のインターンシップ一覧｜就活イベントを探すなら【ONE CAREER】",
+        source: "https://www.onecareer.jp/events/internship/area/4/23",
+      }),
+      makeEvidence({
+        id: "portal-3",
+        claim: "愛知県のインターン・インターンシップ（2212件）",
+        source: "https://internshipguide.jp/interns/japanInternList/23",
+      }),
+      makeEvidence({
+        id: "individual-1",
+        claim: "2025年度 愛知県「留学生地域定着・活躍促進事業」留学生インターンシップ（夏季）について",
+        source: "https://www.pref.aichi.jp/some-program-page.html",
+        evidence: "開催日: 2025年8月、対象: 大学3〜4年生、参加費: 無料。",
+      }),
+    ];
+
+    const prioritized = prioritizeIndividualEntityEvidence(rankedWithPortalFirst, 3);
+
+    results.push(
+      check(
+        "[Phase99-1] 個別Entity Evidence(行政プログラム)がPortal Evidence 3件より" +
+          "関連度順で後ろにあっても、limit=3の最終選定で残る(Portalに不当に負けない)",
+        prioritized.some((item) => item.id === "individual-1"),
+        `prioritized=${JSON.stringify(prioritized.map((item) => item.id))}`
+      )
+    );
+
+    results.push(
+      check(
+        "[Phase99-1-2] 個別Entity Evidenceが先頭(最優先)に来る" +
+          "(Individual/Portalそれぞれのグループ内では元の関連度順を維持したまま、" +
+          "Individualグループを先に並べる設計の確認)",
+        prioritized[0]?.id === "individual-1"
+      )
+    );
+
+  }
+
+  {
+    // Test2: Portal Evidenceしか存在しない場合、Portal Evidenceを引き続き
+    // 利用できる(全面排除しない)。件数・順序とも変化しないことを確認する。
+    const portalOnly: Evidence[] = [
+      makeEvidence({
+        id: "portal-1",
+        claim: "愛知県のインターンシップ一覧｜就活イベントを探すなら【ONE CAREER】",
+        source: "https://www.onecareer.jp/events/internship/area/4/23",
+      }),
+      makeEvidence({
+        id: "portal-2",
+        claim: "愛知県のインターン・インターンシップ（1034件）",
+        source: "https://internshipguide.jp/interns/japanInternList/23",
+      }),
+    ];
+
+    const prioritized = prioritizeIndividualEntityEvidence(portalOnly, 10);
+
+    results.push(
+      check(
+        "[Phase99-2] Individual Entityが1件も無い場合、Portal Evidenceが" +
+          "そのまま(件数・順序を変えず)最終選定に残る(Portal Evidenceの全面排除禁止)",
+        prioritized.length === 2 &&
+          prioritized[0].id === "portal-1" &&
+          prioritized[1].id === "portal-2",
+        `prioritized=${JSON.stringify(prioritized.map((item) => item.id))}`
+      )
+    );
+
+  }
+
+  {
+    // Test3: 個別EntityとPortalが混在する場合、limitに達するまでは
+    // Individualグループを使い切ってからPortalで埋める。
+    const mixed: Evidence[] = [
+      makeEvidence({ id: "portal-1", claim: "◯◯県のインターン一覧", source: "https://example.com/a" }),
+      makeEvidence({
+        id: "individual-1",
+        claim: "株式会社サンプルA 1dayインターンシップ 8月20日開催",
+        source: "https://example.com/sample-a",
+      }),
+      makeEvidence({ id: "portal-2", claim: "◯◯のインターンシップ情報", source: "https://example.com/b" }),
+      makeEvidence({
+        id: "individual-2",
+        claim: "株式会社サンプルB 説明会 9月1日開催",
+        source: "https://example.com/sample-b",
+      }),
+    ];
+
+    const prioritized = prioritizeIndividualEntityEvidence(mixed, 3);
+
+    results.push(
+      check(
+        "[Phase99-3] 個別Entity 2件がPortal 2件より先に並び、limit=3の3件目だけ" +
+          "Portalで埋まる(Individualを使い切ってからPortalで補う設計の確認)",
+        JSON.stringify(prioritized.map((item) => item.id)) ===
+          JSON.stringify(["individual-1", "individual-2", "portal-1"]),
+        `prioritized=${JSON.stringify(prioritized.map((item) => item.id))}`
+      )
+    );
+
+  }
+
+  {
+    // Test4: Evidence自体の内容(claim/evidence本文/confidence等)は
+    // 一切変更しない(並び替えのみ、捏造・断定的な補完をしない)。
+    const original = makeEvidence({
+      id: "individual-1",
+      claim: "株式会社サンプルC インターン",
+      source: "https://example.com/sample-c",
+      evidence: "詳細は未確認。",
+      confidence: "low",
+    });
+
+    const [result] = prioritizeIndividualEntityEvidence([original], 10);
+
+    results.push(
+      check(
+        "[Phase99-4] 弱いEvidence(confidence='low'、本文が薄い)であっても、内容を書き換えたり" +
+          "confidenceを引き上げたりしない(並び替えのみ、無理にEntityの確からしさを補強しない)",
+        result?.claim === original.claim &&
+          result?.evidence === original.evidence &&
+          result?.confidence === "low" &&
+          result?.source === original.source
+      )
+    );
+
+  }
+
+  {
+    // Test5: No-Fabrication / Grounding境界の確認。
+    // prioritizeIndividualEntityEvidence()はEvidence[]の並び替えのみを行い、
+    // groundParsedEntities()(tact-conversation層、Phase83、無変更)が
+    // 要求する「Entity title/fieldがEvidence本文に文字列として存在する
+    // こと」というRuleには一切関与しない。ここでは、本関数の出力が
+    // 引き続き通常のResearchEvidenceItem生成経路(runResearch.tsの
+        // toResearchEvidenceItems())へそのまま渡せる形(Evidence[]、新しい
+    // フィールドを追加していない)であることを確認する。
+    const evidence: Evidence[] = [
+      makeEvidence({ id: "e1", claim: "架空判定用サンプル", source: "https://example.com/x" }),
+    ];
+
+    const prioritized = prioritizeIndividualEntityEvidence(evidence, 10);
+    const keys = Object.keys(prioritized[0] ?? {}).sort();
+    const originalKeys = Object.keys(evidence[0]).sort();
+
+    results.push(
+      check(
+        "[Phase99-5] 出力はEvidence型のフィールド構成を変えない" +
+          "(新しいフィールドを追加せず、既存のGrounding/toResearchEvidenceItems()が" +
+          "そのまま消費できる形を維持する)",
+        JSON.stringify(keys) === JSON.stringify(originalKeys),
+        `keys=${JSON.stringify(keys)}`
       )
     );
 
