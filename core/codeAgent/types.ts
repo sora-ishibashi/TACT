@@ -79,6 +79,67 @@ export interface CodeTaskExecutionResult {
   changedFiles: string[];
   durationMs: number;
   timedOut: boolean;
+
+  // Phase117: 添付ファイル(CodeTask.attachments)を、このAdapterが
+  // 実際にどの方式でCoding Agentへ渡したか。Adapterが実行時に行った
+  // ことだけを記録する(「渡したはず」という推測ではなく、実際に
+  // CLI引数へ載せた/Promptへパスを埋め込んだという事実)。
+  // 添付が無い実行ではundefinedのまま(既存Adapter/既存Testとの
+  // 互換性を保つためoptional)。
+  attachmentDelivery?: CodeTaskAttachmentDelivery[];
+}
+
+// =========================
+// Attachment Context(Phase117)
+// =========================
+//
+// TACT Code UIでユーザーが添付した画像/ファイルを、Coding Agentへ
+// 「参考資料のContext」として渡すための型。実体の配置(staging)・検証・
+// cleanupはcore/codeAgent/attachmentContext.tsが行う。
+//
+// Phase117で実際に扱うのは画像("image")のみ。将来のPDF/DOCX/XLSX等の
+// 追加を、この型を壊さずに(kindの値と検証テーブルの追加だけで)
+// 行えるようにしてある。
+
+export type CodeTaskAttachmentKind = "image" | "document";
+
+export interface CodeTaskAttachment {
+
+  // サーバー側で生成した識別子("att-1"等)。クライアント由来の値は使わない。
+  id: string;
+
+  kind: CodeTaskAttachmentKind;
+
+  // magic byte判定で確定したMIME type(クライアント申告値ではない)。
+  mimeType: string;
+
+  // ユーザーが付けた元のファイル名。表示・Report・Prompt上の説明に
+  // のみ使い、パスとしては一切使わない(パスインジェクション対策)。
+  fileName: string;
+
+  sizeBytes: number;
+
+  // サーバーが生成した、実体(一時ファイル)の絶対パス。Repository
+  // (CodeTask.repositoryPath)の外側に置かれる。
+  filePath: string;
+
+}
+
+export type CodeTaskAttachmentDeliveryMethod =
+  // CLI自身の画像添付オプション(codex exec --image)で渡した。
+  | "cli_image_argument"
+  // CLIに画像添付オプションが無いため、Prompt内でファイルパスを参照し、
+  // Agent自身のファイル読み取り機能で画像として開かせた
+  // (Claude Code CLIの場合)。
+  | "prompt_path_reference"
+  // 渡せなかった(理由はdetailに記録する。渡せていないものを
+  // 渡したことにしない)。
+  | "not_delivered";
+
+export interface CodeTaskAttachmentDelivery {
+  attachmentId: string;
+  method: CodeTaskAttachmentDeliveryMethod;
+  detail: string;
 }
 
 // =========================
@@ -233,6 +294,12 @@ export interface CodeTask {
   targetFiles: string[];
 
   timeoutMs?: number;
+
+  // Phase117: ユーザーがTACT Code UIから添付した参考資料(画像等)。
+  // Instruction本文とは別の軸として保持する(Handoff/Resumeで
+  // Instructionが組み立て直されても添付Contextが失われないようにする
+  // ため)。省略時は添付なし = Phase116までと完全に同じ挙動。
+  attachments?: CodeTaskAttachment[];
 
   // STEP144-B: どのCodingAgentProviderで実行するか
   // (core/codeAgent/adapterRegistry.ts)。省略時は"claude-code"。

@@ -270,12 +270,29 @@ export interface AssetReference {
   };
 }
 
+// TACT Design 開発指示(PowerPoint資料編集基盤): 直接編集Canvas
+// (CanvasEditor.tsx)がtype:"shape"の要素をどう描画・書き出すかを
+// 区別するための最小限のフィールド。新しいDocumentElementTypeは
+// 増やさない(既存のtype:"shape"のまま、バリエーションだけを追加)。
+// 未設定の場合はrectangle相当として扱う(既存の"shape"要素との
+// 後方互換)。
+export type ShapeVariant = "rectangle" | "circle" | "line";
+
 export interface DocumentElement {
   id: string;
   type: DocumentElementType;
 
   position: { x: number; y: number };
   size: { width: number; height: number };
+
+  // type: "shape"の場合のみ意味を持つ。既存の後方互換のため任意。
+  shapeVariant?: ShapeVariant;
+
+  // type: "group"の場合、まとめられている子DocumentElement.idの一覧。
+  // groupの実体(座標変換等)は持たず、あくまで「この一覧の要素が
+  // 一緒に選択・移動される」という関係だけを表す最小限の構造
+  // (既存のposition/sizeは、子要素全体を包む外接矩形として扱う)。
+  childIds?: string[];
 
   // text/title等、単純な文字列で表現できる要素の中身。
   content?: string;

@@ -1,58 +1,42 @@
 "use client";
 
 // =========================
-// TACT Design (STEP42〜STEP47)
+// TACT Design (STEP42〜STEP47、開発指示「PowerPoint資料編集基盤」で再構成)
 // =========================
 //
 // TACTとは責務を分離した別アプリとして、同一リポジトリ内の
 // 新しいルート(/design)に実装する。TACT本体(app/page.tsx以下)は
-// 一切変更しない。ルートグループ等でapp/layout.tsxを分岐する
-// 必要もない(既存のapp/layout.tsxはフォント読み込みと
-// globals.cssの適用のみで、TACT固有のヘッダー/サイドバー等の
-// UIチェイン(TactInterface.tsx等)はapp/page.tsx側だけが描画して
-// いるため、共有しても問題ない)。
+// 一切変更しない。
 //
-// STEP42: 「資料編集画面の横にAIがいる」という関係性を成立させる
-// ための最小限のプロトタイプとして、資料編集画面はプレースホルダー
-// (文字だけの箱)だった。
+// 開発指示(PowerPoint資料編集基盤): このPhaseで、読み取り専用
+// DocumentRendererを主役としていた画面構成を、
 //
-// STEP47: プレースホルダーを、実際にDocumentModelを描画する
-// DocumentRenderer(components/design/DocumentRenderer.tsx)へ
-// 置き換えた。あわせて、documentModelの所有(useState)をAIPanel.tsx
-// からこのページへ移動した(状態の持ち上げ)。DocumentRendererと
-// AIPanelが「同じDocumentModel」を参照する必要があるため。
-// DB/API接続はまだ実装しないため、初期状態はローカルの
-// サンプルcurrentOutputから生成する。
+//   Slides(左) | Canvas(中央、直接編集可能) | Properties(右)
 //
-// STEP48: 同様の理由でselectedElementId(表示上の選択状態)も
-// このページが所有する。DocumentModelが変わってselectedElementIdの
-// 指す対象(Element idまたはPage id)が消えた場合、useEffectで
-// 追跡してsetStateするのではなく(このプロジェクトのReact Compiler
-// 方針上、エフェクト内での同期的なsetStateは避ける)、レンダー中に
-// 「今のdocumentModelに実在するか」を毎回導出し、無効なら
-// 子コンポーネントへはnullとして渡す(=selectedElementIdという
-// 生のstate自体はそのまま保持されるが、表示・利用される実効値は
-// 常に整合性が取れている)。
+// という3ペイン構成へ再構成した(開発指示 Section9のUI基本思想)。
+// 既存のFloatingAIButton/AIPanel(STEP42〜、mockDesignAgent.tsによる
+// 自然言語→DesignIntent→DocumentOperationのモック実装)は削除せず、
+// そのままCanvasの上に浮かせて共存させる(開発指示 Section6「TACTへの
+// 指示」「直接編集」という2つの編集方式の共存)。AIPanel/
+// FloatingAIButton/mockDesignAgent.ts/DocumentRenderer.tsxは無変更。
 //
-// 最速実装モード STEP1(TACT Core → TACT Design実接続):
-// ?conversationId=... がURLに付与されている場合、既存の
-// GET /api/tact/conversation(app/api/tact/conversation/route.ts、
-// 既存の単体取得API)から実際のConversation.currentOutputを取得し、
-// SAMPLE_CURRENT_OUTPUT(デモ用の固定値)の代わりに使う。これは
-// ネットワーク越しのデータ取得であり、上記コメントが言う
-// 「エフェクト内での同期的なsetState」(派生状態の二重管理)とは
-// 異なるカテゴリのuseEffect用途のため、既存方針とは矛盾しない
-// (components/ConversationList.tsxの既存fetchパターンと同じ考え方)。
-// conversationIdが無い、または取得に失敗した場合は従来通り
-// SAMPLE_CURRENT_OUTPUTのまま動作する(後方互換)。
+// 新規: SlidePanel.tsx(Slide一覧・追加・削除・複製・並び替え)、
+// CanvasEditor.tsx(直接編集可能なCanvas)、PropertiesPanel.tsx
+// (Text/Object編集)、documentModelOps.ts(編集ロジック本体)、
+// pptxExport.ts/pptxImport.ts(.pptx相互変換)、projectFile.ts
+// (保存/読込、DBは新設せずファイルダウンロード/アップロードで実現)。
+//
+// LLM/APIは一切使用しない(開発指示の絶対条件)。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import FloatingAIButton from "@/components/design/FloatingAIButton";
 import AIPanel, {
   PANEL_WIDTH,
   PANEL_HEIGHT,
 } from "@/components/design/AIPanel";
-import DocumentRenderer from "@/components/design/DocumentRenderer";
+import SlidePanel from "@/components/design/SlidePanel";
+import CanvasEditor from "@/components/design/CanvasEditor";
+import PropertiesPanel from "@/components/design/PropertiesPanel";
 import { currentOutputToDocumentModel } from "@/components/design/currentOutputToDocumentModel";
 import type { DocumentModel } from "@/components/design/types";
 import type { Position } from "@/components/design/useDraggable";
@@ -61,6 +45,14 @@ import {
   AssetSuggestions,
 } from "@/components/design/assetDiscovery";
 import { mockAssets } from "@/components/design/mockAssetLibrary";
+import { addSlide } from "@/components/design/documentModelOps";
+import { exportDocumentModelToPptx, buildPptxFilename } from "@/components/design/pptxExport";
+import { importPptxToDocumentModel } from "@/components/design/pptxImport";
+import {
+  buildProjectFilename,
+  parseDocumentModel,
+  serializeDocumentModel,
+} from "@/components/design/projectFile";
 
 const PANEL_MARGIN = 24;
 
@@ -71,9 +63,6 @@ const PANEL_MARGIN = 24;
 // 想定の差し込み口)。
 const SAMPLE_CURRENT_OUTPUT = {
   title: "在宅勤務のメリットに関するレポート",
-  // STEP46: 複数文にしておく(deleteTextの「先頭文だけ残す」削減が
-  // 意味を持つようにするため。単文だと削減の余地がなく、
-  // 操作案自体が生成されない = mockDesignAgent.tsの安全設計)。
   executiveSummary:
     "在宅勤務には、生産性・コストの両面で複数のメリットが確認できる。" +
     "特に通勤時間の削減が大きな効果をもたらす。",
@@ -103,6 +92,19 @@ const SAMPLE_CURRENT_OUTPUT = {
   nextActions: ["制度設計のためのアンケートを実施する"],
 };
 
+function downloadBlob(blob: Blob, filename: string): void {
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+
+  a.href = url;
+  a.download = filename;
+  a.click();
+
+  URL.revokeObjectURL(url);
+
+}
+
 export default function TactDesignPage() {
 
   const [isPanelOpen, setPanelOpen] = useState(false);
@@ -110,24 +112,18 @@ export default function TactDesignPage() {
   const [panelPosition, setPanelPosition] =
     useState<Position | null>(null);
 
-  // STEP47: DocumentRenderer(表示)とAIPanel(編集操作の提案・承認)
-  // が同じDocumentModelを参照するための、共有state。
-  // currentOutputToDocumentModelは純粋関数であり、
-  // SAMPLE_CURRENT_OUTPUT自体はどの操作でも一切変更しない。
   const [documentModel, setDocumentModel] = useState<DocumentModel>(
     () => currentOutputToDocumentModel(SAMPLE_CURRENT_OUTPUT)
   );
 
-  // 最速実装モード STEP1: URLの?conversationId=から取得した
-  // currentOutputをもとに、STEP140のAsset Discoveryを実行した結果。
-  // 未取得(SAMPLE_CURRENT_OUTPUTのまま)の間はundefined
-  // (AIPanel側は「提案なし」として従来通りのINITIAL_MESSAGEのみ表示)。
   const [assetSuggestions, setAssetSuggestions] =
     useState<AssetSuggestions | undefined>(undefined);
 
-  // 最速実装モード STEP1: TACT Core → TACT Design実接続。
-  // ?conversationId=が無い場合は何もせず、SAMPLE_CURRENT_OUTPUTの
-  // ままにする(既存のデモ動作を完全に維持)。
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  const jsonFileInputRef = useRef<HTMLInputElement | null>(null);
+  const pptxFileInputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => {
 
     const params = new URLSearchParams(window.location.search);
@@ -190,36 +186,43 @@ export default function TactDesignPage() {
 
   }, []);
 
-  // STEP48: DocumentRenderer上でクリックされたElement、または
-  // AIPanelのOperationカードで選択されたtargetを保持する。
-  // Element idとPage idのどちらも入りうる(addTextのようなPage単位
-  // のOperationのため。DocumentRenderer側で区別して描画する)。
-  const [selectedElementId, setSelectedElementId] =
-    useState<string | null>(null);
+  const [currentPageId, setCurrentPageId] = useState<string | null>(null);
 
-  // documentModel内に実在するid(Page id/Element id)の集合。
-  // ApplyでElementが削除された場合等、selectedElementIdが指す対象が
-  // 消えていれば、実効的な選択状態はnullとして扱う(要件11)。
-  const validSelectionIds = new Set<string>();
+  // 選択状態(複数選択対応、グループ化のため)。documentModelが変わって
+  // 選択対象が消えた場合、effective値としてフィルタする
+  // (既存selectedElementId方式(STEP48)と同じ考え方を複数選択へ拡張)。
+  const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
+
+  const allIds = new Set<string>();
 
   for (const page of documentModel.pages) {
 
-    validSelectionIds.add(page.id);
+    allIds.add(page.id);
 
     for (const element of page.elements) {
-      validSelectionIds.add(element.id);
+      allIds.add(element.id);
     }
 
   }
 
-  const effectiveSelectedElementId =
-    selectedElementId !== null && validSelectionIds.has(selectedElementId)
-      ? selectedElementId
-      : null;
+  const effectiveCurrentPageId =
+    currentPageId && documentModel.pages.some((p) => p.id === currentPageId)
+      ? currentPageId
+      : (documentModel.pages[0]?.id ?? null);
 
-  // クリック(ユーザー操作)というイベントハンドラ内でのみ
-  // windowを読むため、Hydration Mismatchの心配がない
-  // (useEffect内でのsetState呼び出しでもない)。
+  const currentPage = documentModel.pages.find(
+    (p) => p.id === effectiveCurrentPageId
+  );
+
+  const effectiveSelectedElementIds = selectedElementIds.filter((id) =>
+    allIds.has(id)
+  );
+
+  // AIPanel(STEP48、単一選択のみを扱う既存インターフェース)との
+  // 互換のため、複数選択の先頭要素だけを渡す(AIPanel自体は変更しない)。
+  const effectiveSelectedElementIdForAIPanel =
+    effectiveSelectedElementIds.length > 0 ? effectiveSelectedElementIds[0] : null;
+
   function handleToggle() {
 
     setPanelOpen((prev) => {
@@ -247,23 +250,236 @@ export default function TactDesignPage() {
 
   }
 
+  function handleNewProject() {
+
+    const blank: DocumentModel = {
+      id: `document-${Date.now()}`,
+      title: "無題のプレゼンテーション",
+      pages: [],
+    };
+
+    const withOneSlide = addSlide(blank);
+
+    setDocumentModel(withOneSlide);
+    setCurrentPageId(withOneSlide.pages[0]?.id ?? null);
+    setSelectedElementIds([]);
+    setStatusMessage("新しいプレゼンテーションを作成しました。");
+
+  }
+
+  function handleSaveJson() {
+
+    const json = serializeDocumentModel(documentModel);
+    const blob = new Blob([json], { type: "application/json" });
+
+    downloadBlob(blob, buildProjectFilename(documentModel));
+    setStatusMessage("プロジェクトファイルを保存しました。");
+
+  }
+
+  function handleOpenJsonFile(e: React.ChangeEvent<HTMLInputElement>) {
+
+    const file = e.target.files?.[0];
+
+    e.target.value = "";
+
+    if (!file) return;
+
+    file.text().then((text) => {
+
+      const result = parseDocumentModel(text);
+
+      if (!result.success || !result.documentModel) {
+
+        setStatusMessage(result.error ?? "読み込みに失敗しました。");
+        return;
+
+      }
+
+      setDocumentModel(result.documentModel);
+      setCurrentPageId(result.documentModel.pages[0]?.id ?? null);
+      setSelectedElementIds([]);
+      setStatusMessage("プロジェクトファイルを読み込みました。");
+
+    });
+
+  }
+
+  async function handleExportPptx() {
+
+    setStatusMessage("PowerPointファイルを生成しています...");
+
+    try {
+
+      const blob = await exportDocumentModelToPptx(documentModel);
+
+      downloadBlob(blob, buildPptxFilename(documentModel));
+      setStatusMessage("PowerPointファイル(.pptx)を書き出しました。");
+
+    } catch (error) {
+
+      console.error("[TACT Design] pptx export failed:", error);
+      setStatusMessage("PowerPointファイルの生成に失敗しました。");
+
+    }
+
+  }
+
+  function handleImportPptxFile(e: React.ChangeEvent<HTMLInputElement>) {
+
+    const file = e.target.files?.[0];
+
+    e.target.value = "";
+
+    if (!file) return;
+
+    setStatusMessage("PowerPointファイルを読み込んでいます...");
+
+    file.arrayBuffer().then(async (buffer) => {
+
+      const result = await importPptxToDocumentModel(buffer, file.name.replace(/\.pptx$/i, ""));
+
+      if (!result.success || !result.documentModel) {
+
+        setStatusMessage(result.error ?? "読み込みに失敗しました。");
+        return;
+
+      }
+
+      setDocumentModel(result.documentModel);
+      setCurrentPageId(result.documentModel.pages[0]?.id ?? null);
+      setSelectedElementIds([]);
+
+      setStatusMessage(
+        result.warnings.length > 0
+          ? `読み込みました(一部情報は復元されません: ${result.warnings.join(" ")})`
+          : "PowerPointファイルを読み込みました。"
+      );
+
+    });
+
+  }
+
   return (
 
-    <main className="relative h-screen w-screen overflow-hidden bg-gray-100">
+    <main className="relative flex h-screen w-screen flex-col overflow-hidden bg-gray-100">
 
-      {/*
-        STEP47: 資料編集画面。DocumentRendererがDocumentModelを
-        実際に描画する(読み取り専用)。「主役は資料編集画面、
-        TACT DesignはAIとしてその上に存在する」という関係性は
-        STEP42から変更していない。
-      */}
+      {/* Toolbar */}
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-gray-200 bg-white px-3">
 
-      <div className="h-full w-full">
-        <DocumentRenderer
-          documentModel={documentModel}
-          selectedElementId={effectiveSelectedElementId}
-          onSelectElement={setSelectedElementId}
+        <span className="mr-2 text-xs font-semibold text-gray-900">TACT Design</span>
+
+        <button
+          type="button"
+          onClick={handleNewProject}
+          className="rounded-md border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
+        >
+          新規
+        </button>
+
+        <button
+          type="button"
+          onClick={() => jsonFileInputRef.current?.click()}
+          className="rounded-md border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
+        >
+          開く
+        </button>
+
+        <input
+          ref={jsonFileInputRef}
+          type="file"
+          accept=".json,.tactdesign.json"
+          className="hidden"
+          onChange={handleOpenJsonFile}
         />
+
+        <button
+          type="button"
+          onClick={handleSaveJson}
+          className="rounded-md border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
+        >
+          保存
+        </button>
+
+        <span className="mx-1 h-4 w-px bg-gray-200" />
+
+        <button
+          type="button"
+          onClick={() => pptxFileInputRef.current?.click()}
+          className="rounded-md border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
+        >
+          PowerPointを読み込む
+        </button>
+
+        <input
+          ref={pptxFileInputRef}
+          type="file"
+          accept=".pptx"
+          className="hidden"
+          onChange={handleImportPptxFile}
+        />
+
+        <button
+          type="button"
+          onClick={handleExportPptx}
+          className="rounded-md bg-gray-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-gray-700"
+        >
+          PowerPointとして書き出す
+        </button>
+
+        {statusMessage && (
+          <span className="ml-3 truncate text-xs text-gray-400">{statusMessage}</span>
+        )}
+
+      </div>
+
+      {/* Slides | Canvas | Properties */}
+      <div className="flex min-h-0 flex-1">
+
+        <SlidePanel
+          documentModel={documentModel}
+          onDocumentModelChange={setDocumentModel}
+          currentPageId={effectiveCurrentPageId}
+          onSelectPage={(pageId) => {
+            setCurrentPageId(pageId);
+            setSelectedElementIds([]);
+          }}
+        />
+
+        <div className="min-w-0 flex-1">
+
+          {currentPage ? (
+
+            <CanvasEditor
+              documentModel={documentModel}
+              onDocumentModelChange={setDocumentModel}
+              page={currentPage}
+              selectedElementIds={effectiveSelectedElementIds}
+              onSelectionChange={setSelectedElementIds}
+            />
+
+          ) : (
+
+            <div className="flex h-full items-center justify-center text-sm text-gray-400">
+              スライドがありません。「新規」から作成してください。
+            </div>
+
+          )}
+
+        </div>
+
+        {currentPage && (
+
+          <PropertiesPanel
+            documentModel={documentModel}
+            onDocumentModelChange={setDocumentModel}
+            page={currentPage}
+            selectedElementIds={effectiveSelectedElementIds}
+            onSelectionChange={setSelectedElementIds}
+          />
+
+        )}
+
       </div>
 
       <FloatingAIButton
@@ -278,8 +494,8 @@ export default function TactDesignPage() {
           onClose={() => setPanelOpen(false)}
           documentModel={documentModel}
           onDocumentModelChange={setDocumentModel}
-          selectedElementId={effectiveSelectedElementId}
-          onSelectElement={setSelectedElementId}
+          selectedElementId={effectiveSelectedElementIdForAIPanel}
+          onSelectElement={(id) => setSelectedElementIds(id ? [id] : [])}
           initialAssetSuggestions={assetSuggestions}
         />
 

@@ -28,6 +28,9 @@ import type { LLMUsage, LLMCost } from "../llm/types";
 import type { MemoryReference, ToolExecutionSummary } from "./types";
 import type { AnswerConfidence } from "./confidence";
 import type { ResearchEvidenceItem } from "../tact-research/types";
+import type { ResearchPresentation } from "../tact-analysis/presentation/types";
+import type { ResearchFrameworkArtifact } from "../tact-analysis/framework/types";
+import type { AnalysisArtifactPlan } from "../tact-analysis/composition";
 
 // =========================
 // Task
@@ -181,5 +184,16 @@ export interface TaskExecutionSummary {
   // LLM呼び出しではない。web-research経路でLLMがuncertaintyを申告した
   // 場合のみ設定され、それ以外はundefinedのまま。
   uncertaintyNote?: string;
+
+  /** Dataset-derived presentation candidates from canonical Research only. */
+  presentations?: ResearchPresentation[];
+
+  presentationWarnings?: import("../tact-analysis/types").ValidationIssue[];
+
+  presentationRequested?: boolean;
+  frameworkArtifacts?: ResearchFrameworkArtifact[];
+  frameworkArtifactRequested?: boolean;
+  analysisArtifactPlan?: AnalysisArtifactPlan;
+  cortexArtifactPlanRequested?: boolean;
 
 }

@@ -11,6 +11,10 @@ import type { Task, TaskExecutionSummary } from "./task";
 import type { MemoryReference } from "./types";
 import type { TaskContext } from "./taskContext";
 import type { ConcurrencyGovernor } from "./concurrencyGovernor";
+import type { AttachmentEvidence } from "../tact-attachment/types";
+import { selectAttachmentEvidence } from "../tact-attachment/evidence";
+// LW-P3: attachmentEvidenceと並行するLocal Workspace Evidence。
+import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
 
 // =========================
 // 一時的失敗の最小限のRetry (Phase 19)
@@ -33,11 +37,11 @@ import type { ConcurrencyGovernor } from "./concurrencyGovernor";
 // Provider横断フォールバック層)とは意図的に依存しない
 // (core/tact-intent/chatHandler.ts・core/tact-research/llmAnswer.tsが
 // 既に確立した「TACT新系列はLegacy向けFallback層を経由しない」という
-// 方針をExecutorでも踏襲する)。対象理由の集合(quota_exceeded/
-// rate_limited/network_error)はrunLLMWithFallback.tsのFALLBACK_REASONSと
-// 同じ判断基準だが、独立した定数として保持する。
+// 方針をExecutorでも踏襲する)。quota_exceededはクレジットの補充等が
+// 必要な恒久エラーのため、再試行しても回復しない。通常の一時的な
+// rate_limited/network_errorだけを独立した定数として保持する。
 const TEMPORARY_LLM_FAILURE_REASONS: ReadonlySet<LLMProviderFailureReason> =
-  new Set(["quota_exceeded", "rate_limited", "network_error"]);
+  new Set(["rate_limited", "network_error"]);
 
 // 認証エラー・不正なリクエスト(モデル名不正等)・分類不能な例外
 // (Capability未登録等の設定ミス)はRetryしても回復しないため対象外
@@ -219,7 +223,9 @@ function composeInputWithDependencies(
 export async function executeTask(
   task: Task,
   core: CoreCapability,
-  taskContext: TaskContext
+  taskContext: TaskContext,
+  attachmentEvidence: AttachmentEvidence[] = [],
+  workspaceEvidence: LocalWorkspaceEvidence[] = []
 ): Promise<TaskExecutionSummary> {
 
   const startedAt = Date.now();
@@ -260,6 +266,14 @@ export async function executeTask(
         {
           query: input,
           context: taskContext.coreContext,
+          attachmentEvidence: selectAttachmentEvidence(input, attachmentEvidence),
+          // LW-P3: workspaceEvidenceは既にclient側のWorkspace Context
+          // Resolver(core/tact-context-source/localWorkspace/resolver.ts)
+          // でbounded済み(最大3file・合計最大5万文字)のため、
+          // attachmentEvidenceのようなTask単位の追加selectionは行わず
+          // そのまま渡す(絶対条件10: 追加のLLM/API呼び出しを増やさない
+          // 範囲での最小変更)。
+          workspaceEvidence,
           // Phase90: task.tableSchema(Table要求を事前検知できた場合の
           // 列構成・要求件数)をResearchOptionsへそのまま橋渡しする。
           // 省略時(既存Phase1〜89のTask)はundefinedのまま、既存挙動を
@@ -310,6 +324,16 @@ export async function executeTask(
         answerConfidence: deriveAnswerConfidence(result),
 
         uncertaintyNote: result.uncertainty,
+
+        presentations: result.presentations,
+
+        presentationWarnings: result.presentationWarnings,
+
+        presentationRequested: result.presentationRequested,
+        frameworkArtifacts: result.frameworkArtifacts,
+        frameworkArtifactRequested: result.frameworkArtifactRequested,
+        analysisArtifactPlan: result.analysisArtifactPlan,
+        cortexArtifactPlanRequested: result.cortexArtifactPlanRequested,
 
       };
 
@@ -466,7 +490,9 @@ export async function runTasks(
   tasks: Task[],
   core: CoreCapability,
   ownerParams: LoadContextParams,
-  governor: ConcurrencyGovernor
+  governor: ConcurrencyGovernor,
+  attachmentEvidence: AttachmentEvidence[] = [],
+  workspaceEvidence: LocalWorkspaceEvidence[] = []
 ): Promise<TaskExecutionSummary[]> {
 
   const taskById = new Map(tasks.map((task) => [task.id, task]));
@@ -596,7 +622,7 @@ export async function runTasks(
 
         try {
 
-          summary = await executeTask(task, core, taskContext);
+          summary = await executeTask(task, core, taskContext, attachmentEvidence, workspaceEvidence);
 
         } finally {
 

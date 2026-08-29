@@ -12,17 +12,21 @@
 // CodingAgentAdapter (interface, core/codeAgent/types.ts)
 //   ↓
 // getCodingAgentAdapter(providerId)  ← 交換点はここだけ
-//   ├─ "claude-code" → ClaudeCodeAdapter(今回実装済み)
-//   ├─ "codex"        → 将来
+//   ├─ "claude-code" → ClaudeCodeAdapter(実装済み)
+//   ├─ "codex"        → CodexAdapter(Phase104で追加。isAvailable()は
+//   │                    常にfalseを返す最小実装——実行不可を実行可能と
+//   │                    偽装しない、Phase104絶対条件)
 //   └─ "gemini-code"   → 将来
 //
-// 今回、Codex/Gemini等の新しいAdapterを実装する必要はない
-// (STEP144-Bの指示どおり、境界の設計のみが目的)。
+// Phase104: Codexの"将来"だった拡張点を、この交換点(スイッチ文)に
+// 1ケース追加するだけで実際に埋める。CodingAgentAdapter interface・
+// 呼び出し側(app/api/tact/code-tasks/execute/route.ts等)は無変更。
 
 import { CodingAgentAdapter } from "./types";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter";
+import { CodexAdapter } from "./codexAdapter";
 
-export type CodingAgentProviderId = "claude-code";
+export type CodingAgentProviderId = "claude-code" | "codex";
 
 const DEFAULT_PROVIDER: CodingAgentProviderId = "claude-code";
 
@@ -34,6 +38,9 @@ export function getCodingAgentAdapter(
 
     case "claude-code":
       return new ClaudeCodeAdapter();
+
+    case "codex":
+      return new CodexAdapter();
 
     default: {
 

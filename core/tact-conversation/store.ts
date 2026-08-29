@@ -9,6 +9,7 @@ import {
   ExecutionCapability,
   ExecutionStatus,
   PendingClarification,
+  ConversationMessageAttachment,
 } from "./types";
 
 // =========================
@@ -94,6 +95,18 @@ export interface ConversationMessageRow {
   message_type: ConversationMessageType | null;
   execution_record_id: string | null;
   created_at: string;
+}
+
+interface ConversationMessageAttachmentRow {
+  message_id: string;
+  position: number;
+  tact_attachments: {
+    id: string;
+    original_filename: string;
+    mime_type: string;
+    file_size_bytes: number;
+    extraction_status: ConversationMessageAttachment["extractionStatus"];
+  } | null;
 }
 
 export interface ExecutionRecordRow {
@@ -303,7 +316,35 @@ export async function getConversationMessages(
     throw error;
   }
 
-  return (data ?? []).map((row) => toConversationMessage(row as ConversationMessageRow));
+  const messages = (data ?? []).map((row) => toConversationMessage(row as ConversationMessageRow));
+  if (messages.length === 0) return messages;
+
+  const { data: links, error: linksError } = await client
+    .from("tact_conversation_message_attachments")
+    .select("message_id, position, tact_attachments(id, original_filename, mime_type, file_size_bytes, extraction_status)")
+    .in("message_id", messages.map((message) => message.id))
+    .order("position", { ascending: true });
+  if (linksError) throw linksError;
+
+  const attachmentsByMessage = new Map<string, ConversationMessageAttachment[]>();
+  for (const link of (links ?? []) as unknown as ConversationMessageAttachmentRow[]) {
+    if (!link.tact_attachments) continue;
+    const item: ConversationMessageAttachment = {
+      id: link.tact_attachments.id,
+      filename: link.tact_attachments.original_filename,
+      mimeType: link.tact_attachments.mime_type,
+      sizeBytes: link.tact_attachments.file_size_bytes,
+      extractionStatus: link.tact_attachments.extraction_status,
+    };
+    const current = attachmentsByMessage.get(link.message_id) ?? [];
+    current.push(item);
+    attachmentsByMessage.set(link.message_id, current);
+  }
+
+  return messages.map((message) => ({
+    ...message,
+    attachments: attachmentsByMessage.get(message.id) ?? [],
+  }));
 
 }
 
@@ -374,6 +415,32 @@ export async function appendConversationMessage(
 
   return toConversationMessage(data as ConversationMessageRow);
 
+}
+
+/**
+ * Persists a user message, links, and linked-retention transition atomically.
+ * Messages are append-only, so this must not rely on a client-side DELETE
+ * compensation path.
+ */
+export async function appendConversationMessageWithAttachments(
+  conversation: Conversation,
+  accessToken: string,
+  content: string,
+  attachmentIds: string[]
+): Promise<ConversationMessage> {
+  const client = createRequestScopedClient(accessToken);
+  const { data, error } = await client.rpc("append_tact_conversation_message_with_attachments", {
+    p_conversation_id: conversation.id,
+    p_content: content,
+    p_attachment_ids: attachmentIds,
+  });
+  if (error) throw error;
+
+  const rows = data as ConversationMessageRow[] | null;
+  const row = rows?.[0];
+  if (!row) throw new Error("Attachment message was not returned.");
+
+  return toConversationMessage(row);
 }
 
 // =========================

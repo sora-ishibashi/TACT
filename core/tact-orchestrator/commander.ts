@@ -132,7 +132,14 @@ export async function runOrchestration(
     resolveMaxAgents(request.constraints)
   );
 
-  const summaries = await runTasks(tasks, core, ownerParams, governor);
+  const summaries = await runTasks(
+    tasks,
+    core,
+    ownerParams,
+    governor,
+    request.attachmentEvidence ?? [],
+    request.workspaceEvidence ?? []
+  );
 
   const { answer } = aggregateResults(tasks, summaries);
 

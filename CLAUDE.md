@@ -1,5 +1,17 @@
 @AGENTS.md
 
+## UI Design Rules
+
+TACTのUIを新規実装・変更・レビューする場合は、`docs/ui-design-rules.md` を必ず参照すること。
+
+UIに関するSingle Source of Truthは `docs/ui-design-rules.md` とする。
+
+既存UI実装とDesign Rulesが矛盾する場合、既存実装を正解としてDesign Rulesを無視せず、原則としてDesign Rulesを基準に判断すること。
+
+ただし、UI Design Rulesへの準拠を理由として、API、DB、Workflow、Orchestrator、Capability、状態管理などUI以外の既存ロジックを勝手に変更してはならない。
+
+不明点やルール同士の矛盾がある場合は、独自解釈でDesign Systemを拡張せず報告すること。
+
 # TACT開発ルール（Claude Code向け）
 
 このファイルはTACTというマルチAgentワークフローシステムの開発に、Claude Codeとして

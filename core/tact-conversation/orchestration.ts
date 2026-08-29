@@ -1,5 +1,6 @@
 import { runOrchestration } from "../tact-orchestrator";
 import type { OrchestrationResult, TaskExecutionSummary } from "../tact-orchestrator";
+import { getSimpleChatResponse } from "../tact-intent/ruleRouter";
 
 import type {
   Conversation,
@@ -12,6 +13,7 @@ import type {
 
 import {
   appendConversationMessage,
+  appendConversationMessageWithAttachments,
   recordClarificationQuestion,
   recordClarificationAnswer,
   recordExecution,
@@ -56,6 +58,15 @@ import {
 } from "../tact-artifact";
 import type { ArtifactBlock, TableBlock } from "../tact-artifact";
 import type { ResearchEvidenceItem } from "../tact-research/types";
+import type { AttachmentEvidence } from "../tact-attachment/types";
+// LW-P3: attachmentEvidenceと並行するLocal Workspace Evidence。
+import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
+import type { ResearchPresentation } from "../tact-analysis/presentation/types";
+import { mergeResearchPresentationBlocks } from "../tact-analysis/presentation/artifactIntegration";
+import type { ResearchFrameworkArtifact } from "../tact-analysis/framework/types";
+import { mergeResearchFrameworkBlocks } from "../tact-analysis/framework/artifactIntegration";
+import type { AnalysisArtifactPlan } from "../tact-analysis/composition";
+import { mergeAnalysisArtifactPlanBlocks } from "../tact-analysis/composition";
 
 // =========================
 // TACT Conversation — Orchestrator Integration (Phase 67, Phase68でClarification
@@ -190,6 +201,13 @@ export type ConversationOrchestrationPlan =
       // 発生しない(既にexecutor.tsが素通ししている値を集約するだけ)。
       evidence: ResearchEvidenceItem[];
       keyFindings: string[];
+      presentations?: ResearchPresentation[];
+      presentationWarnings?: import("../tact-analysis/types").ValidationIssue[];
+      presentationRequested?: boolean;
+      frameworkArtifacts?: ResearchFrameworkArtifact[];
+      frameworkArtifactRequested?: boolean;
+      analysisArtifactPlans?: AnalysisArtifactPlan[];
+      cortexArtifactPlanRequested?: boolean;
     };
 
 export function planConversationTurn(
@@ -217,6 +235,13 @@ export function planConversationTurn(
     capability: deriveExecutionCapability(result.tasks),
     evidence: result.tasks.flatMap((task) => task.evidence ?? []),
     keyFindings: result.tasks.flatMap((task) => task.keyFindings ?? []),
+    presentations: result.tasks.flatMap((task) => task.presentations ?? []),
+    presentationWarnings: result.tasks.flatMap((task) => task.presentationWarnings ?? []),
+    presentationRequested: result.tasks.some((task) => task.presentationRequested === true),
+    frameworkArtifacts: result.tasks.flatMap((task) => task.frameworkArtifacts ?? []),
+    frameworkArtifactRequested: result.tasks.some((task) => task.frameworkArtifactRequested === true),
+    analysisArtifactPlans: result.tasks.flatMap((task) => task.analysisArtifactPlan ? [task.analysisArtifactPlan] : []),
+    cortexArtifactPlanRequested: result.tasks.some((task) => task.cortexArtifactPlanRequested === true),
   };
 
 }
@@ -327,7 +352,13 @@ export interface ConversationTurnResult {
 export async function runConversationOrchestration(
   conversation: Conversation,
   accessToken: string,
-  userInput: string
+  userInput: string,
+  attachmentIds: string[] = [],
+  attachmentEvidence: AttachmentEvidence[] = [],
+  // LW-P3: client-side Workspace Context Resolverが既にbound済みの
+  // Local Workspace Evidence(app/api/tact/tact-conversations/route.ts
+  // でのserver validation通過後の値)。
+  workspaceEvidence: LocalWorkspaceEvidence[] = []
 ): Promise<ConversationTurnResult> {
 
   const pending = await getPendingClarification(conversation, accessToken);
@@ -336,7 +367,7 @@ export async function runConversationOrchestration(
     return runClarificationAnswerTurn(conversation, accessToken, userInput, pending);
   }
 
-  return runNormalTurn(conversation, accessToken, userInput);
+  return runNormalTurn(conversation, accessToken, userInput, attachmentIds, attachmentEvidence, workspaceEvidence);
 
 }
 
@@ -1032,6 +1063,32 @@ export async function buildResearchOutcomeWithOptionalTable(
   // しなければRow Entity化しない(Rule4)。
   workingBlocks = appendRowEntitiesFromText(workingBlocks, plan.answer, evidenceIds, plan.evidence);
 
+  // Canonical Cortex ownership: a plan (including an intentionally empty one)
+  // suppresses compatibility projection adapters, so each output is inserted once.
+  if (plan.cortexArtifactPlanRequested) {
+    return {
+      blocks: plan.analysisArtifactPlans?.reduce((blocks, artifactPlan) => mergeAnalysisArtifactPlanBlocks(blocks, artifactPlan), workingBlocks) ?? workingBlocks,
+      detail,
+    };
+  }
+
+  // Cortex Presentation is already validated and selected from a Dataset.
+  // Do not route it through the legacy answer-text table/chart inference, and
+  // never substitute a different chart for an invalid explicit request.
+  if (plan.frameworkArtifactRequested) {
+    return {
+      blocks: mergeResearchFrameworkBlocks(workingBlocks, plan.frameworkArtifacts ?? []),
+      detail,
+    };
+  }
+
+  if (plan.presentationRequested) {
+    return {
+      blocks: mergeResearchPresentationBlocks(workingBlocks, plan.presentations ?? []),
+      detail,
+    };
+  }
+
   if (!wantsTable && !wantsChart) {
     return { blocks: workingBlocks, detail };
   }
@@ -1289,18 +1346,54 @@ async function applyArtifactMutation(
 
 }
 
+// This instruction is internal-only. The original empty user content remains the
+// persisted conversation message; this value is used solely to route an
+// attachment-only turn through Research with its resolved user-file Evidence.
+export const ATTACHMENT_ONLY_RESEARCH_INSTRUCTION =
+  "添付資料を調査して、根拠に基づく要点を報告してください。";
+
+export function getAttachmentOnlyOrchestrationInput(
+  userInput: string,
+  hasAttachments: boolean
+): string {
+  const trimmed = userInput.trim();
+  return (trimmed || hasAttachments)
+    ? trimmed || ATTACHMENT_ONLY_RESEARCH_INSTRUCTION
+    : "";
+}
+
 async function runNormalTurn(
   conversation: Conversation,
   accessToken: string,
-  userInput: string
+  userInput: string,
+  attachmentIds: string[] = [],
+  attachmentEvidence: AttachmentEvidence[] = [],
+  workspaceEvidence: LocalWorkspaceEvidence[] = []
 ): Promise<ConversationTurnResult> {
 
-  const userMessage = await appendConversationMessage(
-    conversation,
-    accessToken,
-    "user",
-    userInput
+  const userMessage = attachmentIds.length > 0
+    ? await appendConversationMessageWithAttachments(conversation, accessToken, userInput, attachmentIds)
+    : await appendConversationMessage(conversation, accessToken, "user", userInput);
+
+  const orchestrationInput = getAttachmentOnlyOrchestrationInput(
+    userInput,
+    attachmentIds.length > 0
   );
+
+  // 定型の挨拶・お礼はローカル応答に確定するため、Orchestrator/Core取得/
+  // Research/LLM/Artifact Mutationを実行しない。会話履歴は通常どおり保存する。
+  const simpleChatResponse = getSimpleChatResponse(orchestrationInput);
+
+  if (simpleChatResponse) {
+    const message = await appendConversationMessage(
+      conversation,
+      accessToken,
+      "assistant",
+      simpleChatResponse
+    );
+
+    return { conversation, userMessage, message };
+  }
 
   // Phase86: Intent Router(classifyIntent())が「直前Turnの延長として
   // 追加調査を求めているか」を判定できるよう、直前のuser発言を渡す。
@@ -1319,13 +1412,15 @@ async function runNormalTurn(
   // parseRequestedRowCount()の合成のみ、新しいParserは追加しない)。
   // 取得できない場合(比較軸が明示されていない等)はundefinedのまま、
   // 既存(Phase1〜89)のResearch後Row Entity化の挙動へフォールバックする。
-  const tableSchema = buildResearchTableSchema(userInput);
+  const tableSchema = buildResearchTableSchema(orchestrationInput);
 
   const result = await runOrchestration({
     userId: conversation.userId,
-    input: userInput,
+    input: orchestrationInput,
     previousUserInput,
     tableSchema,
+    attachmentEvidence,
+    workspaceEvidence,
   });
 
   const plan = planConversationTurn(result);
@@ -1346,7 +1441,7 @@ async function runNormalTurn(
     conversation,
     accessToken,
     plan.capability,
-    userInput,
+    orchestrationInput,
     plan.status,
     plan.executionId
   );
@@ -1354,7 +1449,7 @@ async function runNormalTurn(
   const assistantContent = await applyArtifactMutation(
     conversation,
     accessToken,
-    userInput,
+    orchestrationInput,
     plan
   );
 

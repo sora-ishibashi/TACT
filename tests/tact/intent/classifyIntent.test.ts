@@ -9,7 +9,10 @@
 //
 // Category A(Deterministic Evaluation)。
 
-import { classifyIntent } from "../../../core/tact-intent/ruleRouter";
+import {
+  classifyIntent,
+  getSimpleChatResponse,
+} from "../../../core/tact-intent/ruleRouter";
 import { check, summarize, type CheckResult } from "../lib/check";
 import type { TactIntent } from "../../../core/tact-intent/types";
 
@@ -80,6 +83,55 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
 
   });
+
+  const simpleChatCases: { input: string; expectedResponses?: readonly string[] }[] = [
+    {
+      input: "  こんにちは！！ ",
+      expectedResponses: [
+        "こんにちは！今日は何を進めますか？",
+        "こんにちは！何か調べたいことはありますか？",
+        "こんにちは！今日は何を任せますか？",
+        "こんにちは！どうしましたか？",
+      ],
+    },
+    {
+      input: "ありがとう？",
+      expectedResponses: [
+        "どういたしまして！",
+        "お役に立ててよかったです。",
+        "こちらこそ、ありがとうございます。",
+      ],
+    },
+    {
+      input: "よろしく お願いします！",
+      expectedResponses: [
+        "こちらこそ、よろしくお願いします。何から始めましょうか？",
+        "よろしくお願いします！今日は何を進めますか？",
+      ],
+    },
+    {
+      input: "おはよう！？",
+      expectedResponses: [
+        "おはようございます！今日は何から始めますか？",
+        "おはようございます！今日もよろしくお願いします。",
+      ],
+    },
+    { input: "こんにちは、今日の予定を教えて" },
+  ];
+
+  for (const c of simpleChatCases) {
+    const response = getSimpleChatResponse(c.input);
+
+    results.push(
+      check(
+        `[FastPath] getSimpleChatResponse(${JSON.stringify(c.input)})`,
+        c.expectedResponses
+          ? c.expectedResponses.includes(response ?? "")
+          : response === undefined,
+        `actual=${JSON.stringify(response)}`
+      )
+    );
+  }
 
   return summarize("classifyIntent", results);
 

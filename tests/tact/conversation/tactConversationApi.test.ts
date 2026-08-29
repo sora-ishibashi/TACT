@@ -30,6 +30,8 @@ import {
 } from "../../../app/api/tact/tact-conversations/route";
 import { GET as getConversationRoute } from "../../../app/api/tact/tact-conversations/[conversationId]/route";
 import { GET as getMessagesRoute } from "../../../app/api/tact/tact-conversations/[conversationId]/messages/route";
+import { getAttachmentOnlyOrchestrationInput } from "../../../core/tact-conversation/orchestration";
+import { classifyIntent } from "../../../core/tact-intent/ruleRouter";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeRequest(method: string, url: string, body?: unknown): NextRequest {
@@ -114,6 +116,20 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       parseTurnRequestBody({ content: "調べて" }).ok === true
     )
   );
+
+  const attachmentId = "11111111-1111-4111-8111-111111111111";
+  const attachmentOnly = parseTurnRequestBody({ content: "", attachmentIds: [attachmentId] });
+  const whitespaceAttachmentOnly = parseTurnRequestBody({ content: "   ", attachmentIds: [attachmentId] });
+  results.push(check("[Attachment-only] text without attachment is accepted", parseTurnRequestBody({ content: "調べて", attachmentIds: [] }).ok === true));
+  results.push(check("[Attachment-only] text with attachment is accepted", parseTurnRequestBody({ content: "調べて", attachmentIds: [attachmentId] }).ok === true));
+  results.push(check("[Attachment-only] empty content with attachment is accepted and remains empty", attachmentOnly.ok && attachmentOnly.content === ""));
+  results.push(check("[Attachment-only] whitespace content with attachment is accepted and remains empty", whitespaceAttachmentOnly.ok && whitespaceAttachmentOnly.content === ""));
+  results.push(check("[Attachment-only] empty content without attachment is rejected", parseTurnRequestBody({ content: "", attachmentIds: [] }).ok === false));
+  results.push(check("[Attachment-only] invalid attachment IDs remain rejected", parseTurnRequestBody({ content: "", attachmentIds: ["not-a-uuid"] }).ok === false));
+
+  const attachmentOnlyInstruction = getAttachmentOnlyOrchestrationInput("", true);
+  results.push(check("[Attachment-only] internal fallback routes to Research", attachmentOnlyInstruction.length > 0 && classifyIntent(attachmentOnlyInstruction).intent === "research"));
+  results.push(check("[Attachment-only] supplied user text is never replaced internally", getAttachmentOnlyOrchestrationInput("user supplied text", true) === "user supplied text"));
 
   results.push(
     check(

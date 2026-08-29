@@ -262,6 +262,40 @@ export interface AgentUsage {
 }
 
 // =========================
+// Agent Candidate(Phase111: Agent selection層の入力、拡張点のみ)
+// =========================
+//
+// core/tact-agent/agentSelection.tsのselectCodingAgent()が判断材料と
+// して受け取る、1つのCoding Agentの「今この瞬間の状態」。
+//
+// availabilityのみが今回実際に使われる(実測できる値)。cost/quota/
+// performanceは将来selectCodingAgent()が評価できるようにするための
+// 型のみの拡張点であり、Phase111では実データを取得しない
+// (絶対条件: 実測できないものを推測値で埋めない)。selectCodingAgent()
+// 自体もこれらのフィールドを今回は一切参照しない。
+export interface AgentCandidate {
+
+  agentId: string;
+
+  // CodingAgentAdapter.isAvailable()(core/codeAgent/types.ts)が返す
+  // 形とそのまま同じ形。CodeTask型全体は取り込まず、構造的に必要な
+  // 最小限だけを受け取る(handoffTrigger.tsのAgentExecutionOutcomeと
+  // 同じ設計判断、型としての強い結合を避ける)。
+  availability: { available: boolean; detail: string };
+
+  // 将来のCost評価用の拡張点(未実装、Phase111では常にundefined)。
+  cost?: { estimatedCostPerTask?: number; currency?: string };
+
+  // 将来のQuota評価用の拡張点(未実装、Phase111では常にundefined)。
+  quota?: AgentUsage;
+
+  // 将来のPerformance/failure history評価用の拡張点
+  // (未実装、Phase111では常にundefined)。
+  performance?: { recentSuccessRate?: number; recentFailureCount?: number };
+
+}
+
+// =========================
 // Agent Handoff Store(永続化の交換可能な境界)
 // =========================
 //

@@ -19,6 +19,7 @@ export {
   listConversations,
   getConversationMessages,
   appendConversationMessage,
+  appendConversationMessageWithAttachments,
   recordClarificationQuestion,
   recordClarificationAnswer,
   getPendingClarification,

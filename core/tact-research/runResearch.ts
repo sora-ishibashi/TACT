@@ -101,7 +101,14 @@ import {
 } from "./knowledgeGap";
 import type { Provider } from "../agent/types";
 import type { Evidence } from "../context/types";
+import type { AttachmentEvidence } from "../tact-attachment/types";
+// LW-P3: combineEvidencePool()のtype注釈のためだけにimportする
+// (このファイル自体はFileSystemHandle等のBrowser固有型には依存しない、
+// types.tsと同じ理由)。
+import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
 import { runLLM } from "../llm";
+import { composeAnalysisArtifactPlan, createDefaultAnalysisCapabilityRegistry, createFrameworkCortexRegistry, projectCortexPipelineForResearch, runCortexAnalysisPipeline } from "../tact-analysis";
+import { createCortexFulfillmentSearchAdapter } from "./cortexFulfillmentAdapter";
 
 // =========================
 // Research内部LLM Retry (Phase 23調査 → Phase 24実装)
@@ -240,16 +247,43 @@ function buildEvidenceSnippet(
 // 必要な変換をそこへ持ち込まないため、STEP198絶対条件1「変更は
 // 最小限に」を優先しこの関数内で完結させた)。
 function toResearchEvidenceItems(
-  evidence: { id: string; claim: string; source?: string; confidence: "low" | "medium" | "high"; evidence: string }[]
+  evidence: { id: string; claim: string; source?: string; sourceType?: string; confidence: "low" | "medium" | "high"; evidence: string }[]
 ): ResearchEvidenceItem[] {
 
   return evidence.map((item) => ({
     id: item.id,
     claim: item.claim,
     source: item.source,
+    sourceType: item.sourceType,
     confidence: item.confidence,
     snippet: buildEvidenceSnippet(item.evidence),
   }));
+
+}
+
+// =========================
+// combineEvidencePool (LW-P3)
+// =========================
+//
+// calculationEvidence(Cortex numericEvidenceの元)とcitedEvidence
+// (LLMのevidenceIds引用先)は、どちらも「Web Evidence + Attachment
+// Evidence + Workspace Evidence」という同じ3種類のpoolから作られる
+// (Web分はcombinedEvidenceとして呼び出し元が既に用意している)。
+// 元々この組み立てがcalculationEvidence/citedEvidenceの2箇所で
+// 重複していたため、独立した関数として切り出す(exportして
+// 単体テスト可能にする——STEP20のgenerateLLMAnswerWithRetry()と
+// 同じ理由: Evaluation Harnessが実装と乖離しないようにする)。
+export function combineEvidencePool(
+  combinedEvidence: Evidence[],
+  attachmentEvidence: AttachmentEvidence[],
+  workspaceEvidence: LocalWorkspaceEvidence[]
+): Evidence[] {
+
+  return [
+    ...combinedEvidence,
+    ...attachmentEvidence.map((item) => item.evidence),
+    ...workspaceEvidence.map((item) => item.evidence),
+  ];
 
 }
 
@@ -319,7 +353,7 @@ export async function runResearch(
 
   const startedAt = Date.now();
 
-  const { query, context, options } = params;
+  const { query, context, options, attachmentEvidence = [], workspaceEvidence = [] } = params;
 
   const retrievedCounts = computeRetrievedCounts(context);
 
@@ -429,7 +463,16 @@ export async function runResearch(
     // STEP185絶対条件(セクション13): 全Requirementがcoveredであっても
     // hasTimeSensitiveSignal()を再度確認し、assessAnswerability()と
     // 矛盾しないようにする(canAnswerAllFromCoreOnly()内部で実施)。
-    if (canAnswerAllFromCoreOnly(query, requirements)) {
+    // LW-P3: workspaceEvidenceがある場合も、attachmentEvidenceと同様に
+    // core-only近道(Web Research/Evidence統合を一切行わない経路)を
+    // 使わない(既にclient側で明示的なWorkspace参照意図があると判定
+    // されユーザーのローカル資料が渡されている以上、それを無視して
+    // Core情報だけで即答してはならない)。
+    if (
+      attachmentEvidence.length === 0 &&
+      workspaceEvidence.length === 0 &&
+      canAnswerAllFromCoreOnly(query, requirements)
+    ) {
 
       const gapCoreOnly = buildCoreOnlyAnswerFromRequirements(requirements, context);
 
@@ -612,6 +655,29 @@ export async function runResearch(
         })()
       : webResult.evidence;
 
+    // Canonical Cortex path: evidence is acquired once above, then all Analysis
+    // categories are planned and executed through the same bounded pipeline.
+    // No legacy direct calculation/presentation/framework invocation remains.
+    // LW-P3: workspaceEvidence(Local Workspace由来)もattachmentEvidence
+    // と並行してcalculationEvidenceへ合流させる(Section8: calculation
+    // Evidence/citedEvidenceへ利用可能にする)。
+    const calculationEvidence = combineEvidencePool(combinedEvidence, attachmentEvidence, workspaceEvidence);
+    const numericEvidence = calculationEvidence.map((item) => ({ id: item.id, claim: item.claim, text: item.evidence }));
+    const cortexAnalysis = await runCortexAnalysisPipeline({
+      objective: query,
+      evidence: numericEvidence,
+      cortexRegistry: createFrameworkCortexRegistry(),
+      capabilityRegistry: createDefaultAnalysisCapabilityRegistry(),
+      searchAdapter: createCortexFulfillmentSearchAdapter(),
+      planner: { provider: options?.llmProvider, model: options?.llmModel },
+      frameworkInferenceProvider: options?.llmProvider,
+      frameworkInferenceModel: options?.llmModel,
+      frameworkReviewerProvider: options?.llmProvider,
+      frameworkReviewerModel: options?.llmModel,
+    });
+    const cortexProjection = projectCortexPipelineForResearch(cortexAnalysis);
+    const analysisArtifactPlan = cortexAnalysis.status === "not_applicable" ? undefined : composeAnalysisArtifactPlan(cortexAnalysis);
+
     // ===============================
     // ④ Context Assembly(CODE、LLM 0回)
     // ===============================
@@ -630,8 +696,11 @@ export async function runResearch(
       query,
       context,
       evidence: combinedEvidence,
+      attachmentEvidence,
+      workspaceEvidence,
       requirements,
       tableSchema: options?.tableSchema,
+      analysis: cortexProjection.analysis,
     });
 
     // ===============================
@@ -649,7 +718,7 @@ export async function runResearch(
     // に対して、従来通り1回(Retry込みで最大2回)だけLLMを呼ぶ。
     const { outcome, attempts } = await generateLLMAnswerWithRetry(
       assembled,
-      combinedEvidence,
+      calculationEvidence,
       options?.llmProvider,
       options?.llmModel
     );
@@ -734,14 +803,19 @@ export async function runResearch(
 
         errorMessage: outcome.errorMessage,
 
+        ...cortexProjection,
+        cortexAnalysis,
+        ...(analysisArtifactPlan ? { analysisArtifactPlan, cortexArtifactPlanRequested: true } : {}),
+
       };
 
     }
 
     // Phase93: 引用対象もcombinedEvidence(Discovery+Deepening統合後)から
     // 探す(DeepeningでのみEvidence化された項目もLLMが引用できるように
-    // なったため)。
-    const citedEvidence = combinedEvidence.filter((item) =>
+    // なったため)。LW-P3: workspaceEvidenceも同じcombineEvidencePool()
+    // (=citedEvidence探索対象、calculationEvidenceと同じpool)から探す。
+    const citedEvidence = calculationEvidence.filter((item) =>
       outcome.evidenceIds.includes(item.id)
     );
 
@@ -794,6 +868,10 @@ export async function runResearch(
       // outcome.keyFindingsを透過する(新しいLLM呼び出しなし、
       // Repository Evidenceで判明した既存の未配線箇所)。
       keyFindings: outcome.keyFindings,
+
+      ...cortexProjection,
+      cortexAnalysis,
+      ...(analysisArtifactPlan ? { analysisArtifactPlan, cortexArtifactPlanRequested: true } : {}),
 
     };
 

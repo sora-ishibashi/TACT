@@ -33,6 +33,7 @@ import { run as runQueryTopicContinuation } from "./research/queryTopicContinuat
 import { run as runTableAwareResearch } from "./research/tableAwareResearch.test";
 import { run as runQueryCondensation } from "./research/queryCondensation.test";
 import { run as runCandidateDiscovery } from "./research/candidateDiscovery.test";
+import { run as runEmptyStateGreeting } from "./research/emptyStateGreeting.test";
 import { run as runDetectAmbiguity } from "./ambiguity/detectAmbiguity.test";
 import { run as runDecomposeTask } from "./decomposition/decomposeTask.test";
 import { run as runFailureClassification } from "./retry/failureClassification.test";
@@ -71,7 +72,28 @@ import { run as runTactArtifactPhase83 } from "./artifact/tactArtifactPhase83.te
 import { run as runTactArtifactPhase85 } from "./artifact/tactArtifactPhase85.test";
 import { run as runTactArtifactPhase91 } from "./artifact/tactArtifactPhase91.test";
 import { run as runAgentHandoff } from "./agent/agentHandoff.test";
+import { run as runCodeAgentAdapterHandoff } from "./agent/codeAgentAdapterHandoff.test";
+import { run as runCodingTaskOrchestrator } from "./agent/codingTaskOrchestrator.test";
+import { run as runCodingTaskReport } from "./agent/codingTaskReport.test";
+import { run as runAttachmentContext } from "./agent/attachmentContext.test";
 import { run as runListCodeTasksFilter } from "./codeAgent/listCodeTasksFilter.test";
+import { run as runDocumentModelOps } from "./design/documentModelOps.test";
+import { run as runPptxRoundtrip } from "./design/pptxRoundtrip.test";
+import { run as runTactAttachmentPhase1 } from "./attachment/tactAttachmentPhase1.test";
+import { run as runPdfAttachmentComposer } from "./research/pdfAttachmentComposer.test";
+import { run as runArtifactPreview } from "./research/artifactPreview.test";
+import { run as runContextSourceFiltering } from "./contextSource/filtering.test";
+import { run as runContextSourceToEvidence } from "./contextSource/toEvidence.test";
+import { run as runContextSourceBrowserAdapter } from "./contextSource/browserAdapter.test";
+import { run as runContextSourceEntryTree } from "./contextSource/entryTree.test";
+import { run as runContextSourceHandleStore } from "./contextSource/handleStore.test";
+import { run as runContextSourceSearch } from "./contextSource/search.test";
+import { run as runContextSourceContentIndex } from "./contextSource/contentIndex.test";
+import { run as runContextSourceRead } from "./contextSource/read.test";
+import { run as runContextSourceResolver } from "./contextSource/resolver.test";
+import { run as runContextSourceWorkspaceResolverAdapter } from "./contextSource/workspaceResolverAdapter.test";
+import { run as runContextSourceRequestValidation } from "./contextSource/requestValidation.test";
+import { run as runResearchWorkspaceContextIntegration } from "./research/workspaceContextIntegration.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -80,6 +102,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "research/tableAwareResearch", run: runTableAwareResearch },
   { name: "research/queryCondensation", run: runQueryCondensation },
   { name: "research/candidateDiscovery", run: runCandidateDiscovery },
+  { name: "research/emptyStateGreeting", run: runEmptyStateGreeting },
   { name: "ambiguity/detectAmbiguity", run: runDetectAmbiguity },
   { name: "decomposition/decomposeTask", run: runDecomposeTask },
   { name: "retry/failureClassification", run: runFailureClassification },
@@ -118,7 +141,28 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "artifact/tactArtifactPhase85", run: runTactArtifactPhase85 },
   { name: "artifact/tactArtifactPhase91", run: runTactArtifactPhase91 },
   { name: "agent/agentHandoff", run: runAgentHandoff },
+  { name: "agent/codeAgentAdapterHandoff", run: runCodeAgentAdapterHandoff },
+  { name: "agent/codingTaskOrchestrator", run: runCodingTaskOrchestrator },
+  { name: "agent/codingTaskReport", run: runCodingTaskReport },
+  { name: "agent/attachmentContext", run: runAttachmentContext },
   { name: "codeAgent/listCodeTasksFilter", run: runListCodeTasksFilter },
+  { name: "design/documentModelOps", run: runDocumentModelOps },
+  { name: "design/pptxRoundtrip", run: runPptxRoundtrip },
+  { name: "attachment/tactAttachmentPhase1", run: runTactAttachmentPhase1 },
+  { name: "research/pdfAttachmentComposer", run: runPdfAttachmentComposer },
+  { name: "research/artifactPreview", run: runArtifactPreview },
+  { name: "contextSource/filtering", run: runContextSourceFiltering },
+  { name: "contextSource/toEvidence", run: runContextSourceToEvidence },
+  { name: "contextSource/browserAdapter", run: runContextSourceBrowserAdapter },
+  { name: "contextSource/entryTree", run: runContextSourceEntryTree },
+  { name: "contextSource/handleStore", run: runContextSourceHandleStore },
+  { name: "contextSource/search", run: runContextSourceSearch },
+  { name: "contextSource/contentIndex", run: runContextSourceContentIndex },
+  { name: "contextSource/read", run: runContextSourceRead },
+  { name: "contextSource/resolver", run: runContextSourceResolver },
+  { name: "contextSource/workspaceResolverAdapter", run: runContextSourceWorkspaceResolverAdapter },
+  { name: "contextSource/requestValidation", run: runContextSourceRequestValidation },
+  { name: "research/workspaceContextIntegration", run: runResearchWorkspaceContextIntegration },
 ];
 
 async function main() {

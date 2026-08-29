@@ -95,6 +95,7 @@ export function createEvidenceBlock(
   params: {
     claim: string;
     source?: string;
+    sourceType?: string;
     confidence?: "low" | "medium" | "high";
     data?: string;
   },
@@ -108,6 +109,7 @@ export function createEvidenceBlock(
     type: "evidence",
     claim: params.claim,
     source: params.source,
+    sourceType: params.sourceType,
     confidence: params.confidence,
     data: params.data,
     order,

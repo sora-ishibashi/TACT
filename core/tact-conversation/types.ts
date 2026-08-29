@@ -89,8 +89,18 @@ export interface ConversationMessage {
 
   executionRecordId?: string | null;
 
+  attachments?: ConversationMessageAttachment[];
+
   createdAt: string;
 
+}
+
+export interface ConversationMessageAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  extractionStatus: "pending" | "processing" | "ready" | "failed" | "unavailable";
 }
 
 export type ExecutionCapability =

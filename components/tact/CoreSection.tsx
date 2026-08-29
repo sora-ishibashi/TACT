@@ -13,8 +13,14 @@
 // 開発者・熟練ユーザーが直接操作できる窓口になりうる。この
 // CoreSectionはその最初の窓口(Push=書き込みのみ)であり、
 // 閲覧・編集・検索といった機能はまだ無い。
+//
+// LW-P1: TACT Core Local Workspace(core/tact-context-source/、
+// ContextSource contract経由)の接続UIを、既存レイアウトの上部へ
+// 追加する。ProductLauncherへ新sectionは増やさず、Core内部機能として
+// 組み込む(既存のDirect Push二カラム自体は変更しない)。
 
 import { useState } from "react";
+import LocalWorkspacePanel from "./localWorkspace/LocalWorkspacePanel";
 
 type PushType = "knowledge" | "memory" | "example";
 
@@ -116,7 +122,14 @@ export default function CoreSection() {
 
   return (
 
-    <div className="flex h-full min-w-0 flex-1">
+    <div className="flex h-full min-w-0 flex-1 flex-col">
+
+      {/* Local Workspace接続(LW-P1) */}
+      <div className="border-b border-[#D9D9D9] px-5 py-4">
+        <LocalWorkspacePanel />
+      </div>
+
+      <div className="flex min-h-0 flex-1">
 
       {/* 左: TACTへ教える(対話) */}
       <div className="flex h-full min-w-0 flex-1 flex-col border-r border-gray-200 px-5 py-4">
@@ -234,6 +247,8 @@ export default function CoreSection() {
           </ul>
 
         )}
+
+      </div>
 
       </div>
 

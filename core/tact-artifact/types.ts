@@ -163,16 +163,17 @@ export interface TableBlock extends ArtifactBlockCommon {
 }
 
 // 将来的にグラフとしてレンダリング可能なデータ(Section5「Chart」)。
-// Phase76時点ではUI側(components/tact/ResearchWorkspace.tsx)に
-// 棒グラフの最小rendererのみを実装するため、chartTypeも"bar"のみを
-// 対象とする(Section10「過剰に作り込まない」)。
+// `chartType` is additive: existing bar blocks remain valid while Cortex
+// Presentation can render a deterministic single-series line chart.
 export interface ChartBlock extends ArtifactBlockCommon {
   type: "chart";
-  chartType: "bar";
+  chartType: "bar" | "line";
   data: { label: string; value: number }[];
   // Phase78 Tier1: ChartはTableから導出されるため、元Tableの
   // sourceEvidenceIdsをそのまま引き継ぐ(同じ絶対条件)。
   sourceEvidenceIds?: string[];
+  /** Point-level provenance parallel to `data`; rendering does not require displaying it. */
+  pointSourceEvidenceIds?: string[][];
 }
 
 // 提案・施策(Section5「Recommendation」)。

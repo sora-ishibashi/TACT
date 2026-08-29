@@ -27,7 +27,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   const reasonCases: { reason: LLMProviderFailureReason; expectedRetry: boolean }[] = [
     { reason: "network_error", expectedRetry: true },
     { reason: "rate_limited", expectedRetry: true },
-    { reason: "quota_exceeded", expectedRetry: true },
+    { reason: "quota_exceeded", expectedRetry: false },
     { reason: "authentication_failed", expectedRetry: false },
     { reason: "invalid_request", expectedRetry: false },
     { reason: "unknown_error", expectedRetry: false },
@@ -93,6 +93,27 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         "[Phase19-9] temporary failure x2 -> fails after exactly 2 attempts, both reasons kept",
         threw && calls === 2 && message.includes("#1") && message.includes("#2"),
         `calls=${calls}, message=${message}`
+      )
+    );
+  }
+
+  {
+    let calls = 0;
+    const attempt = async () => {
+      calls++;
+      throw new LLMProviderError("openai", "quota_exceeded", "mock quota");
+    };
+    let threw = false;
+    try {
+      await withTemporaryFailureRetry(attempt);
+    } catch {
+      threw = true;
+    }
+    results.push(
+      check(
+        "[Quota] quota_exceeded -> NOT retried (calls=1)",
+        threw && calls === 1,
+        `calls=${calls}`
       )
     );
   }

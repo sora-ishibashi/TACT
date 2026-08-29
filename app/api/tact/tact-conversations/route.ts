@@ -10,6 +10,14 @@ import {
 import { getProject } from "@/core/tact-project/store";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
+import { resolveReadyAttachments } from "@/core/tact-attachment/repository";
+import { buildAttachmentEvidence } from "@/core/tact-attachment/evidence";
+import { validateAttachmentIds } from "@/core/tact-attachment/validation";
+// LW-P3: client-side Workspace Context Resolverが送ってきた
+// workspaceEvidenceを、無条件に信頼せずここでvalidationする。DOM/
+// Browser API/File System Access APIには依存しない(server-safe)。
+import { validateWorkspaceEvidence } from "@/core/tact-context-source/localWorkspace/requestValidation";
+import type { LocalWorkspaceEvidence } from "@/core/tact-context-source/localWorkspace/types";
 
 // =========================
 // GET / POST /api/tact/tact-conversations (Phase 66)
@@ -159,7 +167,16 @@ export async function GET(
 // 独立させることで、validation logic自体は実認証なしに検証できる)。
 
 export type ParsedTurnRequestBody =
-  | { ok: true; content: string; conversationId?: string; projectId?: string }
+  | {
+      ok: true;
+      content: string;
+      conversationId?: string;
+      projectId?: string;
+      attachmentIds: string[];
+      // LW-P3: client-side Workspace Context Resolverが既にbound済み
+      // (最大3file・合計最大5万文字)のLocal Workspace Evidence。
+      workspaceEvidence: LocalWorkspaceEvidence[];
+    }
   | { ok: false; error: string };
 
 export function parseTurnRequestBody(body: unknown): ParsedTurnRequestBody {
@@ -172,10 +189,6 @@ export function parseTurnRequestBody(body: unknown): ParsedTurnRequestBody {
     typeof (body as Record<string, unknown>).content === "string"
       ? ((body as Record<string, unknown>).content as string).trim()
       : "";
-
-  if (!content) {
-    return { ok: false, error: "content is required and must be a non-empty string" };
-  }
 
   const rawConversationId = (body as Record<string, unknown>).conversationId;
 
@@ -191,6 +204,24 @@ export function parseTurnRequestBody(body: unknown): ParsedTurnRequestBody {
   // conversationIdが指定された場合は無視する、POST handler側で判断)。
   const rawProjectId = (body as Record<string, unknown>).projectId;
 
+  const attachmentIdsResult = validateAttachmentIds((body as Record<string, unknown>).attachmentIds);
+  if (!attachmentIdsResult.ok) {
+    return { ok: false, error: attachmentIdsResult.message };
+  }
+
+  // LW-P3: workspaceEvidenceはoptional。省略時は空配列(既存Turnと
+  // 完全に同じ挙動、後方互換)。
+  const workspaceEvidenceResult = validateWorkspaceEvidence(
+    (body as Record<string, unknown>).workspaceEvidence
+  );
+  if (!workspaceEvidenceResult.ok) {
+    return { ok: false, error: workspaceEvidenceResult.message };
+  }
+
+  if (!content && attachmentIdsResult.attachmentIds.length === 0) {
+    return { ok: false, error: "content or at least one attachment is required" };
+  }
+
   if (
     rawProjectId !== undefined &&
     rawProjectId !== null &&
@@ -204,6 +235,8 @@ export function parseTurnRequestBody(body: unknown): ParsedTurnRequestBody {
     content,
     conversationId: typeof rawConversationId === "string" ? rawConversationId : undefined,
     projectId: typeof rawProjectId === "string" ? rawProjectId : undefined,
+    attachmentIds: attachmentIdsResult.attachmentIds,
+    workspaceEvidence: workspaceEvidenceResult.workspaceEvidence,
   };
 
 }
@@ -249,7 +282,20 @@ export async function POST(
 
     }
 
-    const { content, conversationId, projectId } = parsed;
+    const { content, conversationId, projectId, attachmentIds, workspaceEvidence } = parsed;
+
+    const attachments = await resolveReadyAttachments({
+      userId: authenticatedUserId,
+      accessToken,
+      attachmentIds,
+    });
+    if (!attachments) {
+      return NextResponse.json(
+        { success: false, error: "one or more attachments are not available" },
+        { status: 404 }
+      );
+    }
+    const attachmentEvidence = buildAttachmentEvidence(attachments);
 
     // Phase63 Section8のWrite Ordering通り、Conversationの存在確認/作成を
     // 常に最初に行う。他Userのconversationidを指定した場合は
@@ -310,10 +356,11 @@ export async function POST(
       // 先頭文字列の切り出しのみ(app/api/tact/core/push/route.tsの
       // deriveTitle()と同じ考え方)。
       const TITLE_MAX_LENGTH = 60;
-      const derivedTitle =
-        content.length > TITLE_MAX_LENGTH
+      const derivedTitle = content
+        ? content.length > TITLE_MAX_LENGTH
           ? `${content.slice(0, TITLE_MAX_LENGTH)}...`
-          : content;
+          : content
+        : attachments[0]?.originalFilename ?? "Attachment";
 
       conversation = await createConversation(
         authenticatedUserId,
@@ -327,7 +374,10 @@ export async function POST(
     const turn = await runConversationOrchestration(
       conversation,
       accessToken,
-      content
+      content,
+      attachmentIds,
+      attachmentEvidence,
+      workspaceEvidence
     );
 
     // runConversationOrchestration()の各ステップ(User Message/

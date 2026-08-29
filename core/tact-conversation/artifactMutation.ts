@@ -525,6 +525,7 @@ export function buildResearchMutationBlocks(
         {
           claim: item.claim,
           source: item.source,
+          sourceType: item.sourceType,
           confidence: item.confidence,
           data: item.snippet,
         },

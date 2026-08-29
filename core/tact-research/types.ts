@@ -34,6 +34,21 @@ import type { SearchProviderAttempt } from "../tools/search/searchWithFallback";
 // (単数形、core/llmが依存する側)のProvider("openai"|"gemini"|"claude")
 // のみを再利用する。
 import type { Provider } from "../agent/types";
+import type { AttachmentEvidence } from "../tact-attachment/types";
+// LW-P3: Local Workspace(core/tact-context-source/)由来のEvidence。
+// AttachmentEvidenceとは意図的に別の型として扱う(Attachment
+// pipeline/DBへ統合しない、Section6)。core/tact-context-source/
+// localWorkspace/types.tsはDOM/Browser API非依存のpure typeのみを
+// 持つため、server側のこのファイルからimportしても安全(実際に
+// FileSystemHandle等を扱うbrowserAdapter.tsはimportしない)。
+import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
+import type { ResearchAnalysis } from "../tact-analysis/research/types";
+import type { ValidationIssue } from "../tact-analysis/types";
+import type { ResearchPresentation } from "../tact-analysis/presentation/types";
+import type { ResearchFrameworkAnalysis } from "../tact-analysis/framework/types";
+import type { ResearchFrameworkArtifact } from "../tact-analysis/framework/types";
+import type { CortexAnalysisPipelineResult } from "../tact-analysis/pipeline";
+import type { AnalysisArtifactPlan } from "../tact-analysis/composition";
 
 export interface ResearchOptions {
 
@@ -80,6 +95,16 @@ export interface ResearchParams {
   // contextを読むだけ(STEP176絶対条件3のステップ2/3に対応)。
   context: CoreContext;
 
+  /** Per-turn user-file evidence resolved by the Conversation boundary. */
+  attachmentEvidence?: AttachmentEvidence[];
+
+  // LW-P3: client-side Workspace Context Resolver(core/tact-context-source/
+  // localWorkspace/resolver.ts)が既にbound済みのLocal Workspace
+  // Evidence。attachmentEvidenceと同じく、Conversation boundary
+  // (app/api/tact/tact-conversations/route.ts)がserver側validation
+  // 通過後に詰める。AttachmentEvidenceへは統合しない(Section6)。
+  workspaceEvidence?: LocalWorkspaceEvidence[];
+
   options?: ResearchOptions;
 
 }
@@ -100,6 +125,8 @@ export interface ResearchEvidenceItem {
   claim: string;
 
   source?: string;
+
+  sourceType?: string;
 
   confidence: "low" | "medium" | "high";
 
@@ -270,6 +297,33 @@ export interface ResearchResult {
   // 自体が存在しないためundefinedのまま。TACT Artifact
   // (core/tact-artifact/*)のFinding Block構築に利用する。
   keyFindings?: string[];
+
+  /** Optional Cortex output; absent when no explicit, safely executable analysis was requested. */
+  analysis?: ResearchAnalysis[];
+
+  /** Non-fatal reasons why an explicit analysis request was skipped. */
+  analysisWarnings?: ValidationIssue[];
+
+  /** Optional deterministic Dataset-derived Artifact presentation candidates. */
+  presentations?: ResearchPresentation[];
+
+  /** Non-fatal reasons why a requested presentation was not created. */
+  presentationWarnings?: ValidationIssue[];
+
+  /** True only when the user explicitly requested a Cortex presentation. */
+  presentationRequested?: boolean;
+
+  frameworks?: ResearchFrameworkAnalysis[];
+  frameworkWarnings?: ValidationIssue[];
+  frameworkArtifacts?: ResearchFrameworkArtifact[];
+  frameworkArtifactRequested?: boolean;
+
+  /** Optional canonical Cortex Pipeline trace; absent for ordinary Research. */
+  cortexAnalysis?: CortexAnalysisPipelineResult;
+
+  /** Canonical, pure Cortex Artifact plan; Conversation owns mutation/persistence. */
+  analysisArtifactPlan?: AnalysisArtifactPlan;
+  cortexArtifactPlanRequested?: boolean;
 
 }
 
