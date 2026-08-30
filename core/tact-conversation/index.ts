@@ -36,10 +36,15 @@ export {
   deriveExecutionCapability,
   buildClarificationResendInput,
   findPrecedingUserInput,
+  // BOT-P2
+  runConversationTurn,
 } from "./orchestration";
 export type {
   ConversationTurnResult,
   ConversationOrchestrationPlan,
+  // BOT-P2
+  RunConversationTurnParams,
+  RunConversationTurnResult,
 } from "./orchestration";
 // Phase75: Artifact Mutation判定・本文構築の純粋関数群(DB/Orchestrator
 // 呼び出しなし)。core/tact-conversation/orchestration.tsへの実結線は

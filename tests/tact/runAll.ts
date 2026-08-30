@@ -94,6 +94,14 @@ import { run as runContextSourceResolver } from "./contextSource/resolver.test";
 import { run as runContextSourceWorkspaceResolverAdapter } from "./contextSource/workspaceResolverAdapter.test";
 import { run as runContextSourceRequestValidation } from "./contextSource/requestValidation.test";
 import { run as runResearchWorkspaceContextIntegration } from "./research/workspaceContextIntegration.test";
+import { run as runResearchLocalWorkspacePreview } from "./research/localWorkspacePreview.test";
+import { run as runBotBuildBotContext } from "./bot/buildBotContext.test";
+import { run as runBotIdentityResolver } from "./bot/identityResolver.test";
+import { run as runBotNotConnectedConnector } from "./bot/notConnectedConnector.test";
+import { run as runBotReceiveBotMessage } from "./bot/receiveBotMessage.test";
+import { run as runBotExecuteBotActions } from "./bot/executeBotActions.test";
+import { run as runBotIdentityStore } from "./bot/identityStore.test";
+import { run as runBotConversationConnector } from "./bot/conversationConnector.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -163,6 +171,14 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "contextSource/workspaceResolverAdapter", run: runContextSourceWorkspaceResolverAdapter },
   { name: "contextSource/requestValidation", run: runContextSourceRequestValidation },
   { name: "research/workspaceContextIntegration", run: runResearchWorkspaceContextIntegration },
+  { name: "research/localWorkspacePreview", run: runResearchLocalWorkspacePreview },
+  { name: "bot/buildBotContext", run: runBotBuildBotContext },
+  { name: "bot/identityResolver", run: runBotIdentityResolver },
+  { name: "bot/notConnectedConnector", run: runBotNotConnectedConnector },
+  { name: "bot/receiveBotMessage", run: runBotReceiveBotMessage },
+  { name: "bot/executeBotActions", run: runBotExecuteBotActions },
+  { name: "bot/identityStore", run: runBotIdentityStore },
+  { name: "bot/conversationConnector", run: runBotConversationConnector },
 ];
 
 async function main() {

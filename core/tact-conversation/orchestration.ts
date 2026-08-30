@@ -21,6 +21,15 @@ import {
   clearPendingClarification,
   getConversationMessages,
   linkConversationArtifact,
+  // BOT-P2: runConversationTurn()(Conversationのresolve-or-create + 実行)
+  // が使う。既存のapp/api/tact/tact-conversations/route.tsのPOST handler
+  // と同じ2関数だが、これまでroute.ts側にしかimportされていなかった
+  // (Conversation自体の存在確認・新規作成は呼び出し元の責務という既存の
+  // layering)。BOT-P2でWeb(route.ts)とBot(core/tact-bot/)の両方から
+  // 同じConversation解決ロジックを再利用できるようにするため、この
+  // ファイルへ集約する(route.ts自体は変更しない、既存Web挙動に影響なし)。
+  getConversation,
+  createConversation,
 } from "./store";
 
 import {
@@ -368,6 +377,117 @@ export async function runConversationOrchestration(
   }
 
   return runNormalTurn(conversation, accessToken, userInput, attachmentIds, attachmentEvidence, workspaceEvidence);
+
+}
+
+// =========================
+// runConversationTurn (BOT-P2)
+// =========================
+//
+// app/api/tact/tact-conversations/route.tsのPOST handlerが持つ
+// 「conversationIdがあれば所有権確認込みで取得・無ければ新規作成
+// →runConversationOrchestration()→最新状態を再取得」という一連の
+// 流れを、HTTP(NextRequest/NextResponse)から独立した共通関数として
+// 抽出したもの。route.ts自体はこの関数を呼ぶよう変更していない
+// (既存Web挙動に一切影響を与えない、絶対条件)。core/tact-bot/の
+// Conversation Connector(BOT-P2)が、Web(route.ts)と全く同じ
+// Conversation/Orchestrator実行経路を再利用するために、ここから
+// 呼び出す。
+//
+// 「Botに独自のConversation管理を作らない」という方針を、
+// この関数自体がroute.tsのロジックを複製せず1箇所に集約することで
+// 支える。projectId/attachmentIds等、route.ts固有の付随的な入力は
+// 意図的に含めない(BOT-P2時点でBotはこれらを使わないため。将来
+// 必要になれば、この関数へoptional paramとして追加する)。
+//
+// 呼び出し元がuserId/accessTokenとしてどんな値を渡すかは、この関数の
+// 関知するところではない(既存のstore.ts関数と同じ、token-agnostic
+// design)。Web routeは実Supabase Auth JWTを渡す。Bot Conversation
+// Connector(core/tact-bot/connector/conversationConnector.ts)は、
+// identity resolver(core/tact-bot/identity/)で解決済みのtactUserIdと、
+// Bot専用のservice role keyを渡す——「identity解決済みの場合のみ・
+// 狭いconnector内だけでservice roleを使う」というBOT-P2のsecurity
+// 設計は、この関数の外側(呼び出し元)の責務であり、この関数自体は
+// 何がaccessTokenとして渡されたかを判断しない(token-agnostic)。
+
+export interface RunConversationTurnParams {
+
+  userId: string;
+
+  accessToken: string;
+
+  content: string;
+
+  // 省略時は新規Conversationを作成する。
+  conversationId?: string;
+
+  attachmentEvidence?: AttachmentEvidence[];
+
+  workspaceEvidence?: LocalWorkspaceEvidence[];
+
+}
+
+export type RunConversationTurnResult =
+  | ({ ok: true } & ConversationTurnResult)
+  | { ok: false; error: "conversation_not_found" };
+
+const CONVERSATION_TITLE_MAX_LENGTH = 60;
+
+function deriveConversationTitle(content: string): string {
+
+  const trimmed = content.trim();
+
+  return trimmed.length > CONVERSATION_TITLE_MAX_LENGTH
+    ? `${trimmed.slice(0, CONVERSATION_TITLE_MAX_LENGTH)}...`
+    : trimmed;
+
+}
+
+export async function runConversationTurn(
+  params: RunConversationTurnParams
+): Promise<RunConversationTurnResult> {
+
+  const {
+    userId,
+    accessToken,
+    content,
+    conversationId,
+    attachmentEvidence = [],
+    workspaceEvidence = [],
+  } = params;
+
+  // route.tsのWrite Ordering(Phase63 Section8)と同じ: conversationIdが
+  // 指定された場合、所有権確認(user_idでの絞り込み)を必ず経由する。
+  // 他userのconversationIdを渡された場合は「存在しない」と同じ扱いで
+  // 拒否する(IDOR対策、既存route.tsの既存方針をそのまま踏襲)。
+  let conversation = conversationId
+    ? await getConversation(conversationId, userId, accessToken)
+    : undefined;
+
+  if (conversationId && !conversation) {
+    return { ok: false, error: "conversation_not_found" };
+  }
+
+  if (!conversation) {
+    conversation = await createConversation(userId, accessToken, deriveConversationTitle(content));
+  }
+
+  const turn = await runConversationOrchestration(
+    conversation,
+    accessToken,
+    content,
+    [],
+    attachmentEvidence,
+    workspaceEvidence
+  );
+
+  // route.tsと同じ理由: runConversationOrchestration()の各ステップは
+  // Conversation.updated_at等を更新するが、turn自体は最新状態を
+  // 返さないため、明示的に再取得する。
+  const refreshedConversation =
+    (await getConversation(conversation.id, userId, accessToken)) ?? turn.conversation;
+
+  return { ok: true, ...turn, conversation: refreshedConversation };
 
 }
 
