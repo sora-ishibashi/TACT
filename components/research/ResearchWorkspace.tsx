@@ -82,6 +82,15 @@ import type { Artifact, ArtifactBlock, TableBlock } from "@/core/tact-artifact/t
 import { renderBlocksToPlainText } from "@/core/tact-artifact/blocks";
 import { ArtifactEvidencePopover, type ArtifactEvidenceSource } from "./ArtifactEvidencePopover";
 import { getArtifactPreview, getArtifactPreviewEvidenceSources } from "./artifactPreview";
+// LW-P3 Mock E2E Preview(development専用、実Browser/LLM/Search API/
+// Supabase writeなし)。既存のartifactPreviewと同じgating patternを
+// 踏襲する独立した機能のため、既存のResearch送信フローには一切
+// 影響しない(下記の早期returnでのみ分岐する)。
+import {
+  getLocalWorkspacePreviewKind,
+  type LocalWorkspacePreviewKind,
+} from "./localWorkspacePreview";
+import LocalWorkspacePreviewPanel from "./LocalWorkspacePreviewPanel";
 import {
   applyAttachmentUploadResult,
   canSubmitConversationTurn,
@@ -124,6 +133,23 @@ function getClientArtifactPreview(): Artifact | null {
 
 function getServerArtifactPreview(): undefined {
   return undefined;
+}
+
+// LW-P3 Mock E2E Preview(development専用)。artifactPreviewと同じ
+// gating pattern(production常時null・useSyncExternalStoreでURL変更を
+// 拾う)を踏襲する。
+function subscribeToLocalWorkspacePreview() {
+  return () => {};
+}
+
+function getClientLocalWorkspacePreviewKind(): LocalWorkspacePreviewKind | null {
+  return getLocalWorkspacePreviewKind(
+    new URLSearchParams(window.location.search).get("localWorkspacePreview")
+  );
+}
+
+function getServerLocalWorkspacePreviewKind(): null {
+  return null;
 }
 
 function describeErrorResponse(status: number): string {
@@ -785,6 +811,15 @@ export default function ResearchWorkspace({
   const artifactPreviewActive = artifactPreview !== null;
   const displayedArtifact = artifactPreview ?? artifact;
   const artifactEvidenceSources = displayedArtifact ? getArtifactEvidenceSources(displayedArtifact) : {};
+
+  // LW-P3 Mock E2E Preview。artifactPreviewと同じ理由でuseSyncExternalStore
+  // を使う(SSR/CSRでgetSnapshotの不整合が起きないようgetServerSnapshotを
+  // 別に渡す)。
+  const localWorkspacePreviewKind = useSyncExternalStore<LocalWorkspacePreviewKind | null>(
+    subscribeToLocalWorkspacePreview,
+    getClientLocalWorkspacePreviewKind,
+    getServerLocalWorkspacePreviewKind,
+  );
 
   // Phase77 Section6: Artifactコピー機能。Legacy(components/layout/
   // OutputViewer.tsxのSTEP23)と同じ「コピーしました」表示パターン
@@ -1484,6 +1519,14 @@ export default function ResearchWorkspace({
 
   const selectedKnowledgeItem =
     knowledge.find((k) => k.id === selectedKnowledgeId) ?? null;
+
+  // LW-P3 Mock E2E Preview: ?localWorkspacePreview=research が有効な
+  // development環境でのみ、通常のResearch画面全体を置き換えて
+  // debug専用panelを表示する。実Research送信・既存Turn state・
+  // Artifact取得等、他のロジックには一切到達しない(早期return)。
+  if (localWorkspacePreviewKind) {
+    return <LocalWorkspacePreviewPanel />;
+  }
 
   return (
 

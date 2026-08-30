@@ -65,6 +65,7 @@ import {
 import {
   boundWorkspaceEvidenceByCharBudget,
   detectExplicitWorkspaceIntent,
+  detectWorkspaceOptOut,
   extractWorkspaceQueryTerms,
   rankWorkspaceCandidates,
   selectFilesWithinReadLimit,
@@ -662,6 +663,13 @@ export function createBrowserLocalWorkspaceAdapter(
 
       if (!directoryHandle) {
         return { used: false, evidence: [], candidateCount: 0, readCount: 0, reason: "not_connected" };
+      }
+
+      // 明示的なopt-outは、EXPLICIT_WORKSPACE_INTENT_PATTERNSへの一致より
+      // 優先する(「ローカルは使わずに調べて」等、参照語と否定表現が
+      // 同時に現れた場合は利用しない、Section8)。
+      if (detectWorkspaceOptOut(query)) {
+        return { used: false, evidence: [], candidateCount: 0, readCount: 0, reason: "opted_out" };
       }
 
       if (!detectExplicitWorkspaceIntent(query)) {

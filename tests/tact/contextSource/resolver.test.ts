@@ -20,6 +20,7 @@ import {
   MAX_WORKSPACE_TOTAL_CONTEXT_CHARS,
   boundWorkspaceEvidenceByCharBudget,
   detectExplicitWorkspaceIntent,
+  detectWorkspaceOptOut,
   extractWorkspaceQueryTerms,
   rankWorkspaceCandidates,
   selectFilesWithinReadLimit,
@@ -52,6 +53,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     "Workspaceから探して",
     "前に作ったSROI資料を使って",
     "PC内の資料を参考に",
+    "前に作ったSROI研究を参考に今回の調査を設計して",
+    "PCにある資料を参考にして",
+    "保存してある資料を使って",
   ];
 
   for (const query of explicitIntentCases) {
@@ -74,6 +78,42 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     check(
       "[Test2-2] 空文字・空白のみもfalse",
       detectExplicitWorkspaceIntent("") === false && detectExplicitWorkspaceIntent("   ") === false
+    )
+  );
+
+  // ==========================================================
+  // Explicit opt-out(Section2/8): Workspace参照語+否定表現が
+  // 同時に現れた場合は利用しない
+  // ==========================================================
+
+  const optOutCases = [
+    "ローカルは使わずに、SROIについて調べて",
+    "Workspaceを参照しないで調べて",
+    "資料は見ずに、一般的な傾向を調べて",
+    "ファイルは使わないで最新情報を調べて",
+  ];
+
+  for (const query of optOutCases) {
+    results.push(
+      check(
+        `[Test2-3] 「${query}」は明示的opt-outとしてtrue`,
+        detectWorkspaceOptOut(query) === true
+      )
+    );
+  }
+
+  results.push(
+    check(
+      "[Test2-4] opt-out表現が無い通常の参照意図はfalse",
+      detectWorkspaceOptOut("ローカル資料を参考に調べて") === false &&
+        detectWorkspaceOptOut("トヨタについて調べて") === false
+    )
+  );
+
+  results.push(
+    check(
+      "[Test2-5] 空文字・空白のみもfalse",
+      detectWorkspaceOptOut("") === false && detectWorkspaceOptOut("   ") === false
     )
   );
 
@@ -176,6 +216,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     const rankedAgain = rankWorkspaceCandidates(entries, contentIndex, terms);
 
+
     results.push(
       check(
         "[Test4-5] rankingは決定論的(同じ入力なら常に同じ順序)",
@@ -192,6 +233,37 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       rankWorkspaceCandidates(entries, contentIndex, []).length === 0
     )
   );
+
+  // ==========================================================
+  // 3 tier優先順位: 2) content index match が 3) weaker metadata
+  // match(拡張子一致のみ)より上位に来ることを、拡張子一致のみの
+  // fileと本文一致のみのfileを直接比較して確認する。
+  // ==========================================================
+
+  {
+    const tierEntries: ContextSourceEntryMetadata[] = [
+      // filename(拡張子除く)にもcontentにも一致しない、拡張子のみ
+      // "md"に一致するfile(tier3のみ)。
+      fileEntry({ name: "unrelated.md", relativePath: "unrelated.md", extension: "md" }),
+      // filenameにもrelativePathにも一致しないが、本文に一致するfile
+      // (tier2のみ)。
+      fileEntry({ name: "notes.txt", relativePath: "notes.txt", extension: "txt" }),
+    ];
+
+    const tierContentIndex: LocalWorkspaceContentIndex = [
+      { relativePath: "notes.txt", contentLower: "this file mentions md somewhere in the body." },
+    ];
+
+    const ranked = rankWorkspaceCandidates(tierEntries, tierContentIndex, ["md"]);
+
+    results.push(
+      check(
+        "[Test4-7] content一致(tier2)のfileが、拡張子一致のみ(tier3)のfileより上位に来る",
+        ranked.length === 2 && ranked[0].entry.relativePath === "notes.txt"
+      )
+    );
+
+  }
 
   // ==========================================================
   // Bounded retrieval: max候補件数

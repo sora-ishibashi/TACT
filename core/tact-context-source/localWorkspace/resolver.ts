@@ -34,21 +34,49 @@ export const MAX_WORKSPACE_TOTAL_CONTEXT_CHARS = 50_000;
 // =========================
 //
 // 「ローカル資料を参考に」「Workspaceから探して」「前に作ったSROI資料を
-// 使って」「PC内の資料を参考に」等、ユーザーが明示的にローカルの資料を
-// 参照してほしいと述べた場合のみtrueになる。将来的な高度化(意味的な
+// 使って」「PC内の資料を参考に」「PCにある資料」等、ユーザーが明示的に
+// ローカルの資料を参照してほしいと述べた場合のみtrueになる。
+// 「ファイル」「資料」のような単体では一般的な語も、指示に明記された
+// トリガー語として含める(強く判定してよい、という指示に基づく)。
+// 誤判定した場合の安全性はcandidate側で担保する(0件ならWorkspaceは
+// 使われない、threshold未満の無関係fileはreadしない)ため、多少
+// 広めに拾うこと自体はリスクにならない。将来的な高度化(意味的な
 // 参照検出等)を妨げないよう、単体の関数としてexportする
 // (呼び出し元から差し替え可能な、独立した判定点として保つ)。
 const EXPLICIT_WORKSPACE_INTENT_PATTERNS: readonly RegExp[] = [
   /ローカル/,
   /ワークスペース/,
   /workspace/i,
+  /ファイル/,
+  /資料/,
   /pc\s*内/i,
   /pcの中/i,
-  /パソコン(の中|内)/,
+  /pcにある/i,
+  /パソコン(の中|内|にある)/,
   /前に作った/,
   /手元(にある|の)資料/,
-  /保存(した|してある)資料/,
+  /保存(した|してある)/,
   /自分のファイル/,
+];
+
+// =========================
+// Explicit workspace opt-out (Section2/8)
+// =========================
+//
+// 「ローカルは使わずに調べて」「Workspaceを参照しないで」のように、
+// ユーザーが明示的にLocal Workspaceを使わないよう指示した場合、
+// EXPLICIT_WORKSPACE_INTENT_PATTERNSに一致していても利用しない
+// (Section8「明示的にWorkspaceを使わない指示がある場合は利用しない」)。
+// Workspace参照語(ローカル/workspace/ワークスペース/資料/ファイル)の
+// 近傍に否定表現(使わない/使わず/見ない/見ずに/参照しない/不要 等)が
+// 現れるパターンのみを対象とする(無関係な文脈で"ない"が出現するだけで
+// 誤ってopt-out判定しないよう、参照語と否定表現をセットで要求する)。
+const WORKSPACE_OPT_OUT_PATTERNS: readonly RegExp[] = [
+  /ローカル.{0,8}(使わ|参照し|見)(ない|ず)/,
+  /(workspace|ワークスペース).{0,8}(使わ|参照し|見)(ない|ず)/i,
+  /資料.{0,8}(使わ|見)(ない|ず)/,
+  /ファイル.{0,8}(使わ|見)(ない|ず)/,
+  /ローカル(は|を)?(なし|不要|無し)/,
 ];
 
 export function detectExplicitWorkspaceIntent(query: string): boolean {
@@ -58,6 +86,16 @@ export function detectExplicitWorkspaceIntent(query: string): boolean {
   }
 
   return EXPLICIT_WORKSPACE_INTENT_PATTERNS.some((pattern) => pattern.test(query));
+
+}
+
+export function detectWorkspaceOptOut(query: string): boolean {
+
+  if (typeof query !== "string" || !query.trim()) {
+    return false;
+  }
+
+  return WORKSPACE_OPT_OUT_PATTERNS.some((pattern) => pattern.test(query));
 
 }
 
@@ -116,10 +154,19 @@ export function extractWorkspaceQueryTerms(
 // Deterministic ranking (Section3)
 // =========================
 //
-// ranking基準: filename/path一致(重み2倍)・content index一致・
-// query term coverage(一致したterm数そのもの)。スコア0(=どのtermとも
-// 一致しない)のfileは候補にしない(threshold未満の無関係fileはread
-// しない)。
+// ranking優先順位(3 tier、指示に基づく):
+//   1) filename/path exact/strong match … fileName・directory部分への
+//      一致(最優先)
+//   2) content index match             … 本文一致(2番目)
+//   3) weaker metadata match           … 拡張子一致等の弱い一致(最後)
+// 各tierの重みは、あるtierの1件の一致が、常に下位tierの1件の一致を
+// 上回るよう間隔を空けて設定する(tier間の逆転が起きない値、
+// tier1=4/3・tier2=2・tier3=1)。スコア0(=どのtermとも一致しない)の
+// fileは候補にしない(threshold未満の無関係fileはreadしない)。
+const NAME_MATCH_WEIGHT = 4;
+const PATH_MATCH_WEIGHT = 3;
+const CONTENT_MATCH_WEIGHT = 2;
+const EXTENSION_MATCH_WEIGHT = 1;
 
 function countMatchingTerms(haystack: string, terms: string[]): number {
 
@@ -132,8 +179,31 @@ function countMatchingTerms(haystack: string, terms: string[]): number {
 
 }
 
+// entry.nameは常に"<basename>.<extension>"の形をしている(拡張子付き
+// fileの場合)ため、nameへの一致判定をそのまま使うと、拡張子と一致した
+// termがname一致としても二重にカウントされ、tier1(name/path)と
+// tier3(拡張子)が実質的に分離できなくなる。ここでnameから拡張子
+// suffixを取り除いたbasenameだけをtier1判定に使うことで、
+// 「拡張子にしか一致しないtermはtier3としてのみ扱う」という3 tierの
+// 分離を保証する。
+function stripExtensionSuffix(name: string, extension?: string): string {
+
+  if (!extension) {
+    return name;
+  }
+
+  const suffix = `.${extension}`;
+
+  return name.toLowerCase().endsWith(suffix.toLowerCase())
+    ? name.slice(0, name.length - suffix.length)
+    : name;
+
+}
+
 export interface RankedWorkspaceCandidate {
   entry: ContextSourceEntryMetadata;
+  // fileName・directory部分・拡張子一致の合計(後方互換のため維持する
+  // 集計値。tier別の内訳はscore計算時にのみ使う)。
   metadataMatchCount: number;
   contentMatchCount: number;
   score: number;
@@ -162,15 +232,34 @@ export function rankWorkspaceCandidates(
       continue;
     }
 
-    const metadataMatchCount = countMatchingTerms(
-      `${entry.name} ${entry.relativePath} ${entry.extension ?? ""}`,
+    // relativePathは"directory部分 + fileName"の形で構築されている
+    // (browserAdapter.tsのwalkEntries())ため、末尾からfileName長を
+    // 引くだけでdirectory部分(末尾の"/"を含む、rootならば空文字)を
+    // 安全に取り出せる。
+    const directoryPortion = entry.relativePath.slice(
+      0,
+      entry.relativePath.length - entry.name.length
+    );
+
+    const nameMatchCount = countMatchingTerms(
+      stripExtensionSuffix(entry.name, entry.extension),
       terms
     );
+    const pathMatchCount = countMatchingTerms(directoryPortion, terms);
+    const extensionMatchCount = entry.extension
+      ? countMatchingTerms(entry.extension, terms)
+      : 0;
 
     const content = contentByPath.get(entry.relativePath);
     const contentMatchCount = content ? countMatchingTerms(content, terms) : 0;
 
-    const score = metadataMatchCount * 2 + contentMatchCount;
+    const metadataMatchCount = nameMatchCount + pathMatchCount + extensionMatchCount;
+
+    const score =
+      nameMatchCount * NAME_MATCH_WEIGHT +
+      pathMatchCount * PATH_MATCH_WEIGHT +
+      contentMatchCount * CONTENT_MATCH_WEIGHT +
+      extensionMatchCount * EXTENSION_MATCH_WEIGHT;
 
     if (score > 0) {
       scored.push({ entry, metadataMatchCount, contentMatchCount, score });

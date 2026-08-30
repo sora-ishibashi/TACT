@@ -67,6 +67,7 @@ export interface LocalWorkspaceEvidence {
 // 場合、evidenceは常に空配列(呼び出し元はResearchへ何も追加しない)。
 export type LocalWorkspaceContextResolutionReason =
   | "no_intent"
+  | "opted_out"
   | "not_connected"
   | "permission_revoked"
   | "no_candidates";

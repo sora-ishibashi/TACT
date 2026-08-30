@@ -124,6 +124,29 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   }
 
   // ==========================================================
+  // 明示的opt-out -> 参照意図があっても利用しない
+  // ==========================================================
+
+  {
+    const root = buildWorkspace();
+    const adapter = createBrowserLocalWorkspaceAdapter({ directoryHandle: asHandle(root) });
+
+    await adapter.connect();
+
+    const result = await adapter.resolveWorkspaceContext(
+      "ローカルは使わずに、SROIについて調べて"
+    );
+
+    results.push(
+      check(
+        "[Test2-2] 明示的opt-out時はused:false・reason:opted_out(参照語があっても利用しない)",
+        result.used === false && result.evidence.length === 0 && result.reason === "opted_out"
+      )
+    );
+
+  }
+
+  // ==========================================================
   // Workspace未接続 -> directoryHandleへアクセスせず安全に0件
   // ==========================================================
 
