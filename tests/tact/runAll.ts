@@ -50,6 +50,7 @@ import { run as runWorkMapping } from "./work/mapping.test";
 import { run as runWorkStoreAuthorization } from "./work/storeAuthorization.test";
 import { run as runWorkIntake } from "./work/intake.test";
 import { run as runWorkExecution } from "./work/execution.test";
+import { run as runWorkApproval } from "./work/approval.test";
 import { run as runGenerateLLMAnswerRetry } from "./research/generateLLMAnswerRetry.test";
 import { run as runEvaluateTaskExecution } from "./evaluation/evaluateTaskExecution.test";
 import { run as runLearningSignalsWiring } from "./evaluation/learningSignalsWiring.test";
@@ -110,6 +111,7 @@ import { run as runBotExecuteBotActions } from "./bot/executeBotActions.test";
 import { run as runBotIdentityStore } from "./bot/identityStore.test";
 import { run as runBotConversationConnector } from "./bot/conversationConnector.test";
 import { run as runBotTrustedConversationTurn } from "./bot/trustedConversationTurn.test";
+import { run as runBotApproval } from "./bot/approval.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -135,6 +137,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/storeAuthorization", run: runWorkStoreAuthorization },
   { name: "work/intake", run: runWorkIntake },
   { name: "work/execution", run: runWorkExecution },
+  { name: "work/approval", run: runWorkApproval },
   { name: "research/generateLLMAnswerRetry", run: runGenerateLLMAnswerRetry },
   { name: "evaluation/evaluateTaskExecution", run: runEvaluateTaskExecution },
   { name: "evaluation/learningSignalsWiring", run: runLearningSignalsWiring },
@@ -195,6 +198,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "bot/identityStore", run: runBotIdentityStore },
   { name: "bot/conversationConnector", run: runBotConversationConnector },
   { name: "bot/trustedConversationTurn", run: runBotTrustedConversationTurn },
+  { name: "bot/approval", run: runBotApproval },
 ];
 
 async function main() {

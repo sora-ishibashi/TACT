@@ -58,6 +58,7 @@ function makeRecordingDeps(
     completeRunCalls: string[];
     failRunCalls: { runId: string; error: string }[];
     updateTaskStatusCalls: { taskId: string; status: string }[];
+    requestApprovalCalls: { workId: string; taskId?: string | null; reason: string }[];
   } = {
     workStatusUpdates: [],
     createTaskDescriptions: [],
@@ -66,6 +67,7 @@ function makeRecordingDeps(
     completeRunCalls: [],
     failRunCalls: [],
     updateTaskStatusCalls: [],
+    requestApprovalCalls: [],
   };
 
   let nextTaskDbId = 1;
@@ -129,6 +131,25 @@ function makeRecordingDeps(
     },
 
     runOrchestration,
+
+    requestApproval: async (request) => {
+      calls.requestApprovalCalls.push({ workId: request.workId, taskId: request.taskId, reason: request.reason });
+      calls.workStatusUpdates.push("waiting_for_approval");
+      return {
+        id: `approval-db-${calls.requestApprovalCalls.length}`,
+        workId: request.workId,
+        taskId: request.taskId ?? null,
+        requestedByActorKind: request.requestedByActor.kind,
+        requestedByActorId: request.requestedByActor.id,
+        requestedFromActorKind: request.requestedFromActor.kind,
+        requestedFromActorId: request.requestedFromActor.id,
+        status: "pending",
+        reason: request.reason,
+        payload: {},
+        requestedAt: "2026-09-06T00:00:00.000Z",
+        createdAt: "2026-09-06T00:00:00.000Z",
+      };
+    },
 
   };
 
@@ -532,6 +553,93 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Clarification resumed] waiting_for_input状態のWorkも、Task計画が行われればrunningへ戻る",
         calls.workStatusUpdates[0] === "running"
+      )
+    );
+  }
+
+  // ---- Approval requirement (Architecture Migration Phase B3):
+  // Capabilityがapproval requirementを返したTaskは、Runは通常通り
+  // 作られる(承認要否を判断した"提案"attempt自体は実際に実行された
+  // ため)が、WorkはcompletedにはならずrequestApproval()経由で
+  // waiting_for_approvalへ進む ----
+  {
+    const task = makeTask({ description: "外部SaaSへ投稿する下書きを作る", assignedCapability: "phase-b3-mock-write" });
+
+    const fakeOrchestration = async (
+      _request: OrchestrationRequest,
+      hooks?: OrchestrationHooks
+    ): Promise<OrchestrationResult> => {
+
+      await hooks?.onTasksPlanned?.([task]);
+
+      await hooks?.onAttempt?.(task, {
+        attempt: 1,
+        capability: "phase-b3-mock-write",
+        status: "completed",
+        output: "下書きを作成しました",
+        result: {
+          success: true,
+          output: "下書きを作成しました",
+          approvalRequirement: {
+            reason: "外部SaaSへの投稿には承認が必要です",
+            action: { kind: "external_write_test", summary: "Slackへ投稿する" },
+          },
+        },
+      });
+
+      const summary = makeSummary({
+        taskId: task.id,
+        status: "completed",
+        output: "下書きを作成しました",
+        approvalRequirement: {
+          reason: "外部SaaSへの投稿には承認が必要です",
+          action: { kind: "external_write_test", summary: "Slackへ投稿する" },
+        },
+      });
+
+      await hooks?.onTaskFinished?.(task, summary);
+
+      return {
+        answer: "下書きを作成しました",
+        executionId: "exec-7",
+        tasks: [summary],
+        memoryUsed: [],
+        toolsUsed: [],
+        memoryWrites: [],
+        learningSignals: ["successful_execution"],
+        metadata: { executionMode: "single-execution" },
+      };
+
+    };
+
+    const { deps, calls } = makeRecordingDeps(fakeOrchestration);
+
+    const result = await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Approval requirement] 提案attempt自体はRunとして記録される(絶対条件14: Approval待機自体はRunではないが、実際に行われたattemptはRunになる)",
+        calls.createRunCalls.length === 1 && calls.completeRunCalls.length === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Approval requirement] Workはcompletedにならず、requestApproval()が呼ばれてwaiting_for_approvalへ進む(通常のcompleted/failed判定より優先される)",
+        calls.requestApprovalCalls.length === 1 &&
+          calls.requestApprovalCalls[0].reason === "外部SaaSへの投稿には承認が必要です" &&
+          calls.workStatusUpdates[calls.workStatusUpdates.length - 1] === "waiting_for_approval" &&
+          !calls.workStatusUpdates.includes("completed")
+      )
+    );
+
+    results.push(
+      check(
+        "[Approval requirement] OrchestrationResult自体は既存のまま呼び出し元へ返る(Response compatibility)",
+        result.answer === "下書きを作成しました"
       )
     );
   }

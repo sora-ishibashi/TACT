@@ -289,6 +289,9 @@ export type CapabilityInvocationResult = Partial<
     | "frameworkArtifactRequested"
     | "analysisArtifactPlan"
     | "cortexArtifactPlanRequested"
+    // Architecture Migration Phase B3(Approval Execution): Provider
+    // 非依存の抽象的なApproval要求signal。task.ts参照。
+    | "approvalRequirement"
   >
 > & {
 

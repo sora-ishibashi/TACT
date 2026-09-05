@@ -196,4 +196,38 @@ export interface TaskExecutionSummary {
   analysisArtifactPlan?: AnalysisArtifactPlan;
   cortexArtifactPlanRequested?: boolean;
 
+  // Architecture Migration Phase B3(Approval Execution): Capability
+  // (のAdapter)が、このTaskの結果を実際に使う前に人間の承認が必要だと
+  // 判断した場合にのみ設定する、Provider非依存の抽象的なsignal。
+  // Research固有ではなく、将来どのCapabilityも使いうる汎用フィールド
+  // として他のTaskExecutionSummaryフィールドと同じ「pure value
+  // object」方式で追加する(絶対条件: OrchestratorへApproval判断
+  // ロジックやSupabase依存を持ち込まない——Orchestrator自身はこの
+  // フィールドの値をそのまま透過するだけで、意味を解釈しない。実際に
+  // Approvalを作りWorkをwaiting_for_approvalへ遷移させるのは
+  // core/tact-work/execution.tsの責務)。
+  approvalRequirement?: TaskApprovalRequirement;
+
+}
+
+// Architecture Migration Phase B3: Approval対象となる提案actionの
+// 抽象的な記述。Provider固有のフィールド(例: slackChannelId・
+// gmailMessageId等)は一切含めない——「何を・なぜ承認してほしいか」を
+// 人間が読める形で表すだけの、Provider非依存の最小限の形。
+export interface TaskApprovalAction {
+
+  kind: string;
+
+  summary: string;
+
+  metadata?: Record<string, unknown>;
+
+}
+
+export interface TaskApprovalRequirement {
+
+  reason: string;
+
+  action?: TaskApprovalAction;
+
 }

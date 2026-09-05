@@ -4,6 +4,7 @@ import type {
   OrchestrationResult,
   OrchestrationHooks,
   Task,
+  TaskApprovalRequirement,
 } from "../tact-orchestrator";
 import {
   updateWorkStatus,
@@ -14,6 +15,7 @@ import {
   completeRun,
   failRun,
 } from "./store";
+import { requestApproval as defaultRequestApproval } from "./approval";
 import type { Work } from "./types";
 
 // =========================
@@ -71,6 +73,9 @@ export interface RunWorkTurnDeps {
 
   runOrchestration: typeof defaultRunOrchestration;
 
+  // Architecture Migration Phase B3(Approval Execution)。
+  requestApproval: typeof defaultRequestApproval;
+
 }
 
 const defaultDeps: RunWorkTurnDeps = {
@@ -82,6 +87,7 @@ const defaultDeps: RunWorkTurnDeps = {
   completeRun,
   failRun,
   runOrchestration: defaultRunOrchestration,
+  requestApproval: defaultRequestApproval,
 };
 
 export interface RunWorkTurnParams {
@@ -117,6 +123,18 @@ export async function runWorkTurn(
   // 永続化したWorkTask.idへのmapping。同一Work Turn内でのみ有効な
   // 一時的な対応表であり、永続化はしない。
   const workTaskIdByOrchestratorTaskId = new Map<string, string>();
+
+  // Architecture Migration Phase B3: このTurn内でApproval要求
+  // signal(TaskExecutionSummary.approvalRequirement)を返したTaskを
+  // 集める。Approval待機そのものはRunとして扱わない(絶対条件14)
+  // ——ここで集めるのは「どのWorkTaskがApprovalを必要としたか」
+  // というポインタだけであり、Run/Capability呼び出しとは独立して
+  // 扱う。
+  const approvalRequirements: {
+    workTaskId: string;
+    capability?: string;
+    requirement: TaskApprovalRequirement;
+  }[] = [];
 
   const hooks: OrchestrationHooks = {
 
@@ -231,6 +249,16 @@ export async function runWorkTurn(
       // (ARCH-R2 Section4、Phase B1で既に揃えてある)。
       await deps.updateTaskStatus(work.id, userId, accessToken, workTaskId, summary.status);
 
+      if (summary.approvalRequirement) {
+
+        approvalRequirements.push({
+          workTaskId,
+          capability: summary.capability,
+          requirement: summary.approvalRequirement,
+        });
+
+      }
+
     },
 
   };
@@ -253,7 +281,39 @@ export async function runWorkTurn(
 
   }
 
-  if (result.clarification) {
+  if (approvalRequirements.length > 0) {
+
+    // Architecture Migration Phase B3: 人間の承認待ちは、Clarification
+    // (曖昧な依頼内容の確認)やTask失敗とは別種の「実行を続けてよいか」
+    // という判断であり、最優先で扱う(Clarification/failed/completed
+    // いずれの判定よりも先にWorkをwaiting_for_approvalへ進める)。
+    // requestApproval()自体がWork→waiting_for_approvalへの遷移を
+    // 行う(1件ごとに呼んでも冪等——同じstatusへ複数回更新するだけ)。
+    for (const { workTaskId, capability, requirement } of approvalRequirements) {
+
+      await deps.requestApproval(
+        {
+          workId: work.id,
+          taskId: workTaskId,
+          scope: "task",
+          // Approvalを提案した主体はCapability自身(人間・Botではない)。
+          // ARCH-R2 Section9の方針通り、AIごとの行を作らずcapability名を
+          // 固定文字列のActor idとして使う。
+          requestedByActor: { kind: "ai", id: capability ?? "orchestrator" },
+          // 判断を仰ぐ相手は常にWork所有者本人(Bot経由でも、
+          // server側で解決済みのtactUserId=userId、BOT-P2.5の絶対
+          // 条件をそのまま継承)。
+          requestedFromActor: { kind: "user", id: userId },
+          reason: requirement.reason,
+          action: requirement.action,
+        },
+        userId,
+        accessToken
+      );
+
+    }
+
+  } else if (result.clarification) {
 
     // Phase B2 Section11/12: Clarificationが必要な場合、Workは
     // "waiting_for_input"のまま(または遷移する)。ユーザーが回答すると

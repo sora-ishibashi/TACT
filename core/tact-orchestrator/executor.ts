@@ -468,6 +468,11 @@ export async function executeTask(
           analysisArtifactPlan: raw.analysisArtifactPlan,
           cortexArtifactPlanRequested: raw.cortexArtifactPlanRequested,
 
+          // Architecture Migration Phase B3: Capability(のAdapter)が
+          // 付与したApproval要求signalをそのまま透過する
+          // (executor.ts自身はApproval判断を一切行わない)。
+          approvalRequirement: raw.approvalRequirement,
+
         };
 
       }

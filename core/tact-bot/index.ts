@@ -30,3 +30,7 @@ export * from "./connector/types";
 export * from "./connector/notConnectedConnector";
 export * from "./gateway/receiveMessage";
 export * from "./gateway/executeBotActions";
+// Architecture Migration Phase B3: Canonical Approval(core/tact-work/)
+// -> BotRequestApprovalActionへの純粋なtranslation(DBアクセス無し、
+// core/tact-work/types.tsの型のみに依存)。
+export * from "./approval";
