@@ -35,6 +35,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       title: "test",
       project_id: null,
       artifact_id: null,
+      work_id: null,
       created_at: "2026-08-24T00:00:00.000Z",
       updated_at: "2026-08-24T00:00:00.000Z",
       pending_clarification_message_id: null,
@@ -76,6 +77,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       title: null,
       project_id: "proj-1",
       artifact_id: "art-1",
+      work_id: "work-1",
       created_at: "2026-08-24T00:00:00.000Z",
       updated_at: "2026-08-24T00:01:00.000Z",
       pending_clarification_message_id: "msg-q1",
@@ -105,6 +107,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         conversation.artifactId === "art-1"
       )
     );
+
+    results.push(
+      check(
+        "[Test2] toConversation(): work_id='work-1'(Phase B2) -> workIdへ正しく変換される",
+        conversation.workId === "work-1"
+      )
+    );
   }
 
   // ---- Test 3: toConversationSummary() — 一覧表示用の軽量変換 ----
@@ -115,6 +124,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       title: "会話タイトル",
       project_id: "proj-2",
       artifact_id: null,
+      work_id: null,
       created_at: "2026-08-24T00:00:00.000Z",
       updated_at: "2026-08-24T00:02:00.000Z",
       pending_clarification_message_id: "msg-q2",

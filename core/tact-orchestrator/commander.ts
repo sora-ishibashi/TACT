@@ -8,7 +8,7 @@ import { writeMemoryCandidates } from "./memoryWriter";
 import { createConcurrencyGovernor, resolveMaxAgents } from "./concurrencyGovernor";
 import { detectAmbiguity } from "./ambiguityDetector";
 import { evaluateTaskExecution } from "./evaluation";
-import type { OrchestrationRequest, OrchestrationResult } from "./types";
+import type { OrchestrationRequest, OrchestrationResult, OrchestrationHooks } from "./types";
 
 // =========================
 // runOrchestration (Phase 3, Commander入口。Phase 4でTaskContext対応、
@@ -52,8 +52,16 @@ import type { OrchestrationRequest, OrchestrationResult } from "./types";
 // chat)ではCoreへのDB問い合わせ自体が発生しなくなる(Case A)。
 // Commanderはowner識別情報(userId等)をrunTasks()へそのまま引き渡す
 // だけで、Retrieval自体には関与しない。
+// Architecture Migration Phase B2: hooksは省略可能(既定undefined)。
+// core/tact-work/(Canonical Work Model)がWork Execution Boundary
+// (core/tact-work/execution.ts)経由でTask/Runの永続化のためだけに
+// 利用する観測用コールバックであり、hooksを渡さない既存呼び出し元
+// (Web/Botのどの経路も含め、Phase B2完了時点でまだ1つも存在しない
+// —— core/tact-conversation/orchestration.tsがPhase B2でこの引数を
+// 渡すようになる)は一切影響を受けない。
 export async function runOrchestration(
-  request: OrchestrationRequest
+  request: OrchestrationRequest,
+  hooks?: OrchestrationHooks
 ): Promise<OrchestrationResult> {
 
   const startedAt = Date.now();
@@ -128,6 +136,13 @@ export async function runOrchestration(
 
   const tasks = decomposeTask(request);
 
+  // Phase B2: decomposeTask()の結果(description/dependencies/
+  // assignedCapabilityを含む完全なTask[])を、実行開始前にhooksへ
+  // 通知する。TaskExecutionSummaryにはdescription/dependenciesが
+  // 含まれないため、Work Execution Boundaryがtact_tasksへ永続化
+  // できるのはこの時点だけ。
+  await hooks?.onTasksPlanned?.(tasks);
+
   const governor = createConcurrencyGovernor(
     resolveMaxAgents(request.constraints)
   );
@@ -138,7 +153,8 @@ export async function runOrchestration(
     ownerParams,
     governor,
     request.attachmentEvidence ?? [],
-    request.workspaceEvidence ?? []
+    request.workspaceEvidence ?? [],
+    hooks
   );
 
   const { answer } = aggregateResults(tasks, summaries);

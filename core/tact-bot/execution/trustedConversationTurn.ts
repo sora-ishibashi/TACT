@@ -88,6 +88,14 @@ export async function runConversationTurnAsTrustedActor(
     conversationId: params.conversationId,
     attachmentEvidence: params.attachmentEvidence,
     workspaceEvidence: params.workspaceEvidence,
+    // Architecture Migration Phase B2: core/tact-work/(Work Intake)が
+    // 新規Work作成時にWork.metadata.sourceへ記録するだけの観測用
+    // タグ(業務判断には使われない、絶対条件: BotはWork Routerではない
+    // ・Work-specific business logicを持たない)。requestedByActorは
+    // ここでも(Web同様)params.tactUserId——server-side identity
+    // resolverが解決済みの値のみを使い、外部Channelのexternal actor
+    // idは一切使わない(BOT-P2.5から継続する絶対条件)。
+    source: "bot",
   });
 
 }

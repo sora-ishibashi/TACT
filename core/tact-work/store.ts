@@ -526,6 +526,41 @@ export async function listTasksForWork(
 
 }
 
+// Architecture Migration Phase B2: Work Execution Boundary
+// (core/tact-work/execution.ts)が、実Execution(core/tact-orchestrator/
+// executor.tsのOrchestrationHooks.onTaskFinished)に合わせてWorkTask.
+// statusを更新するために追加した。supabase/migrations/
+// 20260906000000_add_tact_tasks_update_policy.sqlでtact_tasksへ
+// updateポリシーを追加済み。
+export async function updateTaskStatus(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  taskId: string,
+  status: TaskStatus,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<void> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return;
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { error } = await client
+    .from("tact_tasks")
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq("id", taskId)
+    .eq("work_id", workId);
+
+  if (error) {
+    throw error;
+  }
+
+}
+
 // =========================
 // Task Dependency
 // =========================

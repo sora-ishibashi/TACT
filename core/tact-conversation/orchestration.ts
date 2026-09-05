@@ -1,6 +1,14 @@
 import { runOrchestration } from "../tact-orchestrator";
-import type { OrchestrationResult, TaskExecutionSummary } from "../tact-orchestrator";
+import type { OrchestrationResult, OrchestrationRequest, TaskExecutionSummary } from "../tact-orchestrator";
 import { getSimpleChatResponse } from "../tact-intent/ruleRouter";
+// Architecture Migration Phase B2: Canonical Work Model。Interfaceが
+// 何であってもConversationを経由すれば同じWork Intake/Work Execution
+// Boundaryへ到達する(ARCH-R2 Section11)。core/tact-orchestratorは
+// この存在を一切知らない(依存方向はcore/tact-conversation →
+// core/tact-work → core/tact-orchestratorの一方向、core/tact-work/
+// index.tsのコメント参照)。
+import { resolveWork, runWorkTurn } from "../tact-work";
+import type { WorkIntakeSource, ActorReference } from "../tact-work";
 
 import type {
   Conversation,
@@ -21,6 +29,7 @@ import {
   clearPendingClarification,
   getConversationMessages,
   linkConversationArtifact,
+  linkConversationWork,
   // BOT-P2: runConversationTurn()(Conversationのresolve-or-create + 実行)
   // が使う。既存のapp/api/tact/tact-conversations/route.tsのPOST handler
   // と同じ2関数だが、これまでroute.ts側にしかimportされていなかった
@@ -358,6 +367,14 @@ export interface ConversationTurnResult {
 // 側には一切のClarification固有ロジックを持たせない
 // (Phase66から契約不変、Phase68 Section11)。
 
+// Architecture Migration Phase B2: sourceは省略可能(既定"web")。
+// app/api/tact/tact-conversations/route.tsはこの引数を渡さずに
+// 呼んでいる既存呼び出し元であり、既定値"web"により挙動は一切
+// 変わらない。core/tact-bot/execution/trustedConversationTurn.tsの
+// runConversationTurnAsTrustedActor()経由の場合のみ"bot"が渡る
+// (core/tact-work/(Work Intake)がWork.metadata.sourceとして記録
+// するだけの観測用タグであり、実行ロジックはsourceによって分岐
+// しない)。
 export async function runConversationOrchestration(
   conversation: Conversation,
   accessToken: string,
@@ -367,16 +384,17 @@ export async function runConversationOrchestration(
   // LW-P3: client-side Workspace Context Resolverが既にbound済みの
   // Local Workspace Evidence(app/api/tact/tact-conversations/route.ts
   // でのserver validation通過後の値)。
-  workspaceEvidence: LocalWorkspaceEvidence[] = []
+  workspaceEvidence: LocalWorkspaceEvidence[] = [],
+  source: WorkIntakeSource = "web"
 ): Promise<ConversationTurnResult> {
 
   const pending = await getPendingClarification(conversation, accessToken);
 
   if (pending) {
-    return runClarificationAnswerTurn(conversation, accessToken, userInput, pending);
+    return runClarificationAnswerTurn(conversation, accessToken, userInput, pending, source);
   }
 
-  return runNormalTurn(conversation, accessToken, userInput, attachmentIds, attachmentEvidence, workspaceEvidence);
+  return runNormalTurn(conversation, accessToken, userInput, attachmentIds, attachmentEvidence, workspaceEvidence, source);
 
 }
 
@@ -427,6 +445,13 @@ export interface RunConversationTurnParams {
 
   workspaceEvidence?: LocalWorkspaceEvidence[];
 
+  // Architecture Migration Phase B2: このTurnがどのInterfaceから
+  // 来たか(core/tact-work/のWork Intakeが、新規Work作成時に
+  // Work.metadata.sourceとして記録するだけの観測用タグ)。省略時は
+  // "web"(既存のrunConversationTurnAsAuthenticatedUser()呼び出し元は
+  // 全てこの既定値のままで挙動が変わらない)。
+  source?: WorkIntakeSource;
+
 }
 
 export type RunConversationTurnResult =
@@ -456,6 +481,7 @@ export async function runConversationTurn(
     conversationId,
     attachmentEvidence = [],
     workspaceEvidence = [],
+    source = "web",
   } = params;
 
   // route.tsのWrite Ordering(Phase63 Section8)と同じ: conversationIdが
@@ -480,7 +506,8 @@ export async function runConversationTurn(
     content,
     [],
     attachmentEvidence,
-    workspaceEvidence
+    workspaceEvidence,
+    source
   );
 
   // route.tsと同じ理由: runConversationOrchestration()の各ステップは
@@ -680,6 +707,16 @@ export interface SupplementalResearchOutcome {
   answer: string;
   evidence: ResearchEvidenceItem[];
 }
+
+// Known Architecture Debt(Phase B2完了報告に記載、今回のFinal Fixの
+// scope外): runSupplementalResearchForArtifact()内のrunOrchestration()
+// 呼び出しは、runNormalTurn()/runClarificationAnswerTurn()と異なり
+// core/tact-work/(Work Intake/Work Execution Boundary)を経由しない
+// ため、Work/Task/Run Trackingの対象外のままになっている
+// (Comparison Tableへの補助的な追加調査であり、既存Turnの主Work配下
+// のCapability呼び出しとしては記録されない)。Audit/Costを全面的に
+// Work Modelへ寄せる段階で、このLegacy的な直接呼び出しもWork
+// Execution Boundary経由へ統合する対象として扱う。
 
 export async function runSupplementalResearchForArtifact(
   userId: string | undefined,
@@ -1475,12 +1512,18 @@ async function applyArtifactMutation(
 
   }
 
+  // Phase B2 Section13: Work経由で生成されたArtifactにはWork.idを
+  // 付与する(既存Conversation.artifactIdによる紐付けは維持したまま
+  // のtemporary dual linkage)。conversation.workIdが未設定の場合
+  // (Phase B2導入前の既存Conversation、またはWork Intake未到達の
+  // 経路)はnullのまま、既存挙動と完全に同じ。
   const newArtifact = await createArtifact(
     conversation.userId,
     accessToken,
     deriveArtifactTitle(userInput),
     outcome.blocks,
-    conversation.projectId
+    conversation.projectId,
+    conversation.workId
   );
 
   await linkConversationArtifact(conversation, accessToken, newArtifact.id);
@@ -1508,13 +1551,135 @@ export function getAttachmentOnlyOrchestrationInput(
     : "";
 }
 
+// =========================
+// shouldRepairConversationWorkLink (Phase B2 Final Fix、純粋関数)
+// =========================
+//
+// Conversation.workIdへの書き戻しが必要かどうかを、既存link
+// (currentWorkId、無ければnull/undefined)と、resolveWork()が実際に
+// 使うことになったWork.id(resolvedWorkId)の比較だけで決定論的に
+// 判定する。DBアクセス無しでテストできるようにするため、判定ロジック
+// 自体をresolveAndRunWork()から切り出した。
+//
+// 以前はここが「conversation.workIdが未設定だったか」だけを条件に
+// していたため、conversation.workIdがstale(参照先が存在しない)・
+// foreign(他user所有、resolveWork()内のgetWork()が絶対に再利用
+// しない)だった場合、resolveWork()は正しく新しいWorkへfallbackする
+// ものの、conversation.workId自体は既にnon-nullのため書き戻されず、
+// 古い/他user所有のidを指したまま残ってしまっていた——結果、次の
+// Turnも同じ無効なlinkを読み、Turnのたびに新しいWorkを作り続けて
+// しまう(「1 Conversationから毎Turn別Workが生成される」バグ)。
+//
+// 修正後は、既存linkと実際に使われたWork.idを比較することで、
+// 以下の4ケース全てを正しく扱う:
+//   1. link無し                -> 不一致 -> 新規Workをlink
+//   2. 有効な自分のWorkへのlink   -> 一致   -> 書き戻し無し(無駄な
+//                                            UPDATEを発生させない)
+//   3. stale/存在しないlink      -> 不一致 -> 新しいWorkへrepair
+//   4. 他user所有のWorkへのlink   -> 不一致 -> 新しいWorkへrepair
+//      (foreign Work自体は絶対に再利用しない、resolveWork()内の
+//      getWork()による既存ownership防御がこの安全性を保証する。
+//      repair自体もlinkConversationWork()の既存
+//      `.eq("id", conversation.id).eq("user_id", conversation.userId)`
+//      によりconversation所有者の検証を経由する——外部user idを
+//      owner判定へ使うことは一切無い)。
+export function shouldRepairConversationWorkLink(
+  currentWorkId: string | null | undefined,
+  resolvedWorkId: string
+): boolean {
+
+  return (currentWorkId ?? null) !== resolvedWorkId;
+
+}
+
+// =========================
+// resolveAndRunWork (Architecture Migration Phase B2)
+// =========================
+//
+// ARCH-R2の目標経路(Interface → Conversation → Work Intake → Work →
+// Work Execution Boundary → existing Orchestrator)を、
+// runNormalTurn()・runClarificationAnswerTurn()の両方から共通で
+// 呼び出すための薄いヘルパー。既存のconversation.workId
+// (tact_conversations.work_id、Phase B2で追加)を「再利用候補」として
+// 渡すだけで、このConversation自身のstore.ts(work_id列)へは
+// core/tact-work自身は一切問い合わせない(core/tact-work/intake.ts
+// のコメント参照、モジュール間の一方向依存を保つ)。
+//
+// 絶対条件: Work.id ≠ Conversation.id。書き戻しが必要かどうかは
+// shouldRepairConversationWorkLink()が判定する(1 Conversation →
+// 1 active Workの単純運用、ARCH-R2最重要原則)。
+//
+// テスト容易性のため、実際のresolveWork()/linkConversationWork()/
+// runWorkTurn()呼び出しをConstructor/Parameter Injectionで差し替え
+// 可能にする(既定値は実関数。他のcore/tact-work呼び出し箇所と同じ
+// DIパターン)。
+export interface ResolveAndRunWorkDeps {
+
+  resolveWork: typeof resolveWork;
+
+  linkConversationWork: typeof linkConversationWork;
+
+  runWorkTurn: typeof runWorkTurn;
+
+}
+
+const defaultResolveAndRunWorkDeps: ResolveAndRunWorkDeps = {
+  resolveWork,
+  linkConversationWork,
+  runWorkTurn,
+};
+
+export async function resolveAndRunWork(
+  conversation: Conversation,
+  accessToken: string,
+  orchestrationRequest: OrchestrationRequest,
+  content: string,
+  source: WorkIntakeSource,
+  deps: ResolveAndRunWorkDeps = defaultResolveAndRunWorkDeps
+): Promise<OrchestrationResult> {
+
+  const requestedByActor: ActorReference = { kind: "user", id: conversation.userId };
+
+  const work = await deps.resolveWork(
+    {
+      userId: conversation.userId,
+      requestedByActor,
+      content,
+      source,
+      conversationId: conversation.id,
+      existingWorkId: conversation.workId ?? null,
+    },
+    accessToken
+  );
+
+  if (shouldRepairConversationWorkLink(conversation.workId, work.id)) {
+
+    await deps.linkConversationWork(conversation, accessToken, work.id);
+
+    // このTurn内で後続処理(applyArtifactMutation()等)が
+    // conversation.workIdを参照する場合に備え、in-memoryの値も
+    // 更新する(DBへは既にlinkConversationWork()で反映済み)。
+    conversation.workId = work.id;
+
+  }
+
+  return deps.runWorkTurn({
+    work,
+    userId: conversation.userId,
+    accessToken,
+    orchestrationRequest,
+  });
+
+}
+
 async function runNormalTurn(
   conversation: Conversation,
   accessToken: string,
   userInput: string,
   attachmentIds: string[] = [],
   attachmentEvidence: AttachmentEvidence[] = [],
-  workspaceEvidence: LocalWorkspaceEvidence[] = []
+  workspaceEvidence: LocalWorkspaceEvidence[] = [],
+  source: WorkIntakeSource = "web"
 ): Promise<ConversationTurnResult> {
 
   const userMessage = attachmentIds.length > 0
@@ -1560,14 +1725,25 @@ async function runNormalTurn(
   // 既存(Phase1〜89)のResearch後Row Entity化の挙動へフォールバックする。
   const tableSchema = buildResearchTableSchema(orchestrationInput);
 
-  const result = await runOrchestration({
-    userId: conversation.userId,
-    input: orchestrationInput,
-    previousUserInput,
-    tableSchema,
-    attachmentEvidence,
-    workspaceEvidence,
-  });
+  // Architecture Migration Phase B2: Orchestratorを直接呼ぶ代わりに
+  // Work Intake/Work Execution Boundary(core/tact-work/)経由で呼ぶ。
+  // OrchestrationRequestの中身自体は既存(Phase1〜90)と完全に同じ
+  // ——resolveAndRunWork()はWork解決/Task・Run永続化を行うだけで、
+  // Orchestratorへ渡すrequestを一切変更しない。
+  const result = await resolveAndRunWork(
+    conversation,
+    accessToken,
+    {
+      userId: conversation.userId,
+      input: orchestrationInput,
+      previousUserInput,
+      tableSchema,
+      attachmentEvidence,
+      workspaceEvidence,
+    },
+    orchestrationInput,
+    source
+  );
 
   const plan = planConversationTurn(result);
 
@@ -1648,7 +1824,8 @@ async function runClarificationAnswerTurn(
   conversation: Conversation,
   accessToken: string,
   answerInput: string,
-  pending: PendingClarification
+  pending: PendingClarification,
+  source: WorkIntakeSource = "web"
 ): Promise<ConversationTurnResult> {
 
   const userMessage = await recordClarificationAnswer(
@@ -1670,10 +1847,20 @@ async function runClarificationAnswerTurn(
     answerInput
   );
 
-  const result = await runOrchestration({
-    userId: conversation.userId,
-    input: resendInput,
-  });
+  // Architecture Migration Phase B2: 同上(runNormalTurn()参照)。
+  // Clarification再実行は、既存のWork(waiting_for_input状態のはず)を
+  // resolveAndRunWork()が再利用し、Task計画が実際に行われた時点で
+  // runningへ戻す(core/tact-work/execution.tsのonTasksPlanned)。
+  const result = await resolveAndRunWork(
+    conversation,
+    accessToken,
+    {
+      userId: conversation.userId,
+      input: resendInput,
+    },
+    resendInput,
+    source
+  );
 
   const plan = planConversationTurn(result);
 

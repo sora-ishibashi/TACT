@@ -195,6 +195,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       id: "art-1",
       user_id: "user-1",
       project_id: "proj-1",
+      work_id: "work-1",
       title: "中京大学のスポーツ系ゼミ調査",
       content: "## 概要\n\n本文",
       blocks: null,
@@ -211,6 +212,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         artifact.id === "art-1" &&
           artifact.userId === "user-1" &&
           artifact.projectId === "proj-1" &&
+          artifact.workId === "work-1" &&
           artifact.version === 3
       )
     );
@@ -233,6 +235,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       id: "art-2",
       user_id: "user-1",
       project_id: null,
+      work_id: null,
       title: "未所属Artifact",
       content: "",
       blocks: null,

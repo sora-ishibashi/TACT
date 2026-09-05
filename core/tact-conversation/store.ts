@@ -81,6 +81,7 @@ export interface ConversationRow {
   title: string | null;
   project_id: string | null;
   artifact_id: string | null;
+  work_id: string | null;
   created_at: string;
   updated_at: string;
   pending_clarification_message_id: string | null;
@@ -130,6 +131,7 @@ export function toConversation(row: ConversationRow): Conversation {
     title: row.title,
     projectId: row.project_id,
     artifactId: row.artifact_id,
+    workId: row.work_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     pendingClarificationMessageId: row.pending_clarification_message_id,
@@ -178,7 +180,7 @@ export function toExecutionRecord(row: ExecutionRecordRow): ExecutionRecord {
 }
 
 const CONVERSATION_COLUMNS =
-  "id, user_id, title, project_id, artifact_id, created_at, updated_at, pending_clarification_message_id, pending_clarification_answered_at";
+  "id, user_id, title, project_id, artifact_id, work_id, created_at, updated_at, pending_clarification_message_id, pending_clarification_answered_at";
 
 const MESSAGE_COLUMNS =
   "id, conversation_id, role, content, message_type, execution_record_id, created_at";
@@ -741,6 +743,45 @@ export async function linkConversationArtifact(
     .from("tact_conversations")
     .update({
       artifact_id: artifactId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", conversation.id)
+    .eq("user_id", conversation.userId);
+
+  if (error) {
+    throw error;
+  }
+
+}
+
+// =========================
+// linkConversationWork (Architecture Migration Phase B2)
+// =========================
+//
+// core/tact-work/(Canonical Work Model)がこのConversationのために
+// 新規Work(core/tact-work/intake.tsのresolveWork())を作った際、
+// tact_conversations.work_idへback-referenceを記録する
+// (linkConversationArtifact()と全く同じ形)。ARCH-R2の原則通り、
+// これは「このConversationから現在activeなWorkを見つけるための
+// compatibility link」の更新であり、Work自身の作成・状態遷移は
+// 一切行わない(それはcore/tact-work/store.tsの責務)。既存の
+// linkConversationArtifact()と同じく、まだ紐付いていない
+// Conversationへ初めて紐付ける場面、または他userのWork linkが
+// 解決できず新しいWorkへ差し替える場面(core/tact-work/intake.tsの
+// stale link fallback)で呼ばれる想定。
+
+export async function linkConversationWork(
+  conversation: Conversation,
+  accessToken: string,
+  workId: string
+): Promise<void> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { error } = await client
+    .from("tact_conversations")
+    .update({
+      work_id: workId,
       updated_at: new Date().toISOString(),
     })
     .eq("id", conversation.id)

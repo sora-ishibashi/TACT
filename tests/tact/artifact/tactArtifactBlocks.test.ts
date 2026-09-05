@@ -157,6 +157,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       id: "art-legacy",
       user_id: "user-1",
       project_id: null,
+      work_id: null,
       title: "Legacy Artifact",
       content: "旧形式の本文",
       blocks: null,
@@ -180,6 +181,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       id: "art-structured",
       user_id: "user-1",
       project_id: null,
+      work_id: null,
       title: "Structured Artifact",
       content: "",
       blocks: [

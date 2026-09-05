@@ -301,6 +301,72 @@ export type CapabilityInvocationResult = Partial<
 };
 
 // =========================
+// Orchestration Hooks (Architecture Migration Phase B2)
+// =========================
+//
+// 目的: core/tact-work/(Canonical Work Model)がTask/Runを永続化
+// できるよう、Orchestratorの実行過程を「観測」するための最小限の
+// hook。絶対条件(Phase B2指示): Orchestrator → Supabaseという直接
+// 依存は作らない。commander.ts/executor.tsはこのhooksの中身
+// (どこに何を保存するか)を一切知らず、単に「計画された」「1回
+// 試行した」「Taskが確定した」という事実をコールバックで通知する
+// だけ。呼び出し元がhooksを渡さない場合(既定undefined)は、
+// 既存の挙動と完全に同一(全既存呼び出し元・全既存testが無変更で
+// 動作する)。
+//
+// 各コールバックは戻り値を無視される(Promise<void> | void)——
+// hooksの結果がOrchestratorの実行判断(retry/status/aggregation等)
+// に一切影響しない、という設計上の保証(絶対条件: 観測が実行を
+// 支配しない)。
+export interface TaskAttemptRecord {
+
+  // 同一Task内での試行回数(1から開始)。
+  attempt: number;
+
+  capability: string;
+
+  provider?: Provider;
+
+  model?: string;
+
+  status: "completed" | "failed";
+
+  error?: string;
+
+  // Capability Registry経由でない経路(chat)の出力。
+  output?: string;
+
+  // Capability Registry経由(CapabilityInvocationResult準拠)の結果。
+  result?: CapabilityInvocationResult;
+
+}
+
+export interface OrchestrationHooks {
+
+  // decomposeTask()の直後、実行開始前に1回だけ呼ばれる。Work
+  // Execution Boundaryはこの時点でTask.description/dependencies/
+  // assignedCapabilityを永続化できる(TaskExecutionSummaryには
+  // description/dependenciesが含まれないため、この時点でしか
+  // 取得できない)。
+  onTasksPlanned?: (tasks: import("./task").Task[]) => Promise<void> | void;
+
+  // 1回の実行attempt(Capability/Chat呼び出し1回、Retryが発生した
+  // 場合は複数回)ごとに呼ばれる。
+  onAttempt?: (
+    task: import("./task").Task,
+    record: TaskAttemptRecord
+  ) => Promise<void> | void;
+
+  // Taskの最終状態(completed/failed/cancelled)が確定した直後に
+  // 呼ばれる(cancelled、つまりRunが1件も作られなかった場合も含む)。
+  onTaskFinished?: (
+    task: import("./task").Task,
+    summary: TaskExecutionSummary
+  ) => Promise<void> | void;
+
+}
+
+// =========================
 // Orchestration Result
 // =========================
 //

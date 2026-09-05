@@ -42,6 +42,7 @@ export interface ArtifactRow {
   id: string;
   user_id: string;
   project_id: string | null;
+  work_id: string | null;
   title: string;
   content: string;
   // Phase76: jsonb列。supabase-jsが自動でJS配列へparse済みの値が渡って
@@ -68,6 +69,7 @@ export function toArtifact(row: ArtifactRow): Artifact {
     id: row.id,
     userId: row.user_id,
     projectId: row.project_id,
+    workId: row.work_id,
     title: row.title,
     blocks,
     content: row.content,
@@ -91,7 +93,7 @@ export function toArtifactSummary(row: ArtifactRow): ArtifactSummary {
 }
 
 const ARTIFACT_COLUMNS =
-  "id, user_id, project_id, title, content, blocks, version, created_at, updated_at";
+  "id, user_id, project_id, work_id, title, content, blocks, version, created_at, updated_at";
 
 // =========================
 // createArtifact
@@ -103,12 +105,17 @@ const ARTIFACT_COLUMNS =
 // 必要はない(store.ts自身は「渡された値をそのまま保存するだけ」の
 // 薄い層という既存方針を維持)。
 
+// Architecture Migration Phase B2: workIdは末尾のoptional引数として
+// 追加した(既存呼び出し元は一切変更不要、既定値nullで既存挙動と
+// 完全に同じ)。Work経由で生成されたArtifactにのみ、呼び出し元
+// (core/tact-conversation/orchestration.ts)が解決済みのWork.idを渡す。
 export async function createArtifact(
   userId: string,
   accessToken: string,
   title: string,
   blocks: ArtifactBlock[],
-  projectId?: string | null
+  projectId?: string | null,
+  workId?: string | null
 ): Promise<Artifact> {
 
   const client = createRequestScopedClient(accessToken);
@@ -121,6 +128,7 @@ export async function createArtifact(
       content: renderBlocksToPlainText(blocks),
       blocks,
       project_id: projectId ?? null,
+      work_id: workId ?? null,
     })
     .select(ARTIFACT_COLUMNS)
     .single();

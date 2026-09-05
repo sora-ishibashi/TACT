@@ -14,6 +14,7 @@ import type { Task, TaskExecutionSummary } from "./task";
 import type {
   CapabilityInvocationRequest,
   CapabilityInvocationResult,
+  OrchestrationHooks,
 } from "./types";
 import type { TaskContext } from "./taskContext";
 import type { ConcurrencyGovernor } from "./concurrencyGovernor";
@@ -85,8 +86,18 @@ export function isTemporaryFailure(error: unknown): boolean {
 // 保持したままthrowする(絶対条件: 失敗を隠さない)。
 //
 // Phase 20: isTemporaryFailure()と同じ理由でexportする(Step10)。
+//
+// Phase B2: 第2引数onFirstAttemptFailedは省略可能(既定undefined、
+// 既存呼び出し元・既存挙動には一切影響しない)。1回目の呼び出しが
+// 一時的失敗でRetryする場合にのみ、その最初の失敗をコールバックへ
+// 通知する——1回目の失敗はこれまで(2回目が成功した場合)呼び出し元へ
+// 一切伝わらず捨てられていたため、Work Model(core/tact-work/)が
+// 「Run#1 failed, Run#2 completed」という2件のRunを実データで
+// 永続化できるようにするための最小限の観測点(絶対条件: Retry判断
+// 自体は変更しない)。
 export async function withTemporaryFailureRetry<T>(
-  attempt: () => Promise<T>
+  attempt: () => Promise<T>,
+  onFirstAttemptFailed?: (error: unknown) => Promise<void> | void
 ): Promise<{ result: T; retried: boolean }> {
 
   try {
@@ -99,6 +110,8 @@ export async function withTemporaryFailureRetry<T>(
     if (!isTemporaryFailure(firstError)) {
       throw firstError;
     }
+
+    await onFirstAttemptFailed?.(firstError);
 
     try {
 
@@ -243,7 +256,8 @@ export async function executeTask(
   core: CoreCapability,
   taskContext: TaskContext,
   attachmentEvidence: AttachmentEvidence[] = [],
-  workspaceEvidence: LocalWorkspaceEvidence[] = []
+  workspaceEvidence: LocalWorkspaceEvidence[] = [],
+  hooks?: OrchestrationHooks
 ): Promise<TaskExecutionSummary> {
 
   const startedAt = Date.now();
@@ -274,6 +288,41 @@ export async function executeTask(
   }
 
   const { provider, model } = routing;
+
+  // Phase B2(core/tact-work/): このTask内での実行attempt番号
+  // (1から開始)。invoke()が呼ばれるたびに増分する——research
+  // (retry-exempt、常に1回)・research以外のCapability(Retryで
+  // 最大2回)・chat(Retryで最大2回)のいずれも、実際にCapability/
+  // LLMを呼び出した回数と一致する。Work Model(core/tact-work/)が
+  // Capability実行attemptごとにRun(core/tact-work/store.tsの
+  // createRun())を作れるようにするための観測用カウンタであり、
+  // Retry判断自体には一切関与しない。
+  let attemptCounter = 0;
+
+  // hooks.onAttempt()を呼ぶための共通ヘルパー。hooksが渡されない
+  // 場合(既定undefined、既存呼び出し元全て)は何もしない——既存の
+  // 実行結果・パフォーマンスに一切影響しない。
+  const recordAttempt = async (
+    attempt: number,
+    capabilityLabel: string,
+    outcome:
+      | { status: "completed"; output?: string; result?: CapabilityInvocationResult }
+      | { status: "failed"; error: string }
+  ): Promise<void> => {
+
+    if (!hooks?.onAttempt) {
+      return;
+    }
+
+    await hooks.onAttempt(task, {
+      attempt,
+      capability: capabilityLabel,
+      provider,
+      model,
+      ...outcome,
+    });
+
+  };
 
   try {
 
@@ -323,14 +372,19 @@ export async function executeTask(
       // 引き続きCapability Registryである(絶対条件: Registryを
       // 迂回しない)。research以外のCapabilityは汎用のinvokeCapability()
       // を直接呼ぶ(絶対条件12: Capability固有分岐を増やさない)。
-      const invoke = (): Promise<unknown> =>
-        capabilityName === "research"
+      const invoke = (): Promise<unknown> => {
+
+        attemptCounter++;
+
+        return capabilityName === "research"
           ? runResearchCapability(request, core)
           : invokeCapability<CapabilityInvocationRequest, unknown>(
               capabilityName,
               request,
               core
             );
+
+      };
 
       // "research"は内部にSearch+LLMという複数ステップの独自パイプ
       // ラインを持ち、Task全体をRetryすると「一時的失敗1回につき
@@ -339,7 +393,18 @@ export async function executeTask(
       // 既存方針、上部コメント参照)。
       const { result: raw, retried } = RETRY_EXEMPT_CAPABILITIES.has(capabilityName)
         ? { result: await invoke(), retried: false }
-        : await withTemporaryFailureRetry(invoke);
+        : await withTemporaryFailureRetry(invoke, async (firstError) => {
+
+            // Phase B2: 1回目の一時的失敗をRun#1(failed)として記録する
+            // (Retryが成功した場合、これまでこの情報は呼び出し元へ
+            // 一切伝わらなかった)。
+            await recordAttempt(attemptCounter, capabilityName, {
+              status: "failed",
+              error:
+                firstError instanceof Error ? firstError.message : String(firstError),
+            });
+
+          });
 
       // Capability Registryへ登録された各Capability(のAdapter)が、
       // CapabilityInvocationResultの語彙(success/output/errorMessage/
@@ -350,6 +415,14 @@ export async function executeTask(
       if (isCapabilityInvocationResult(raw)) {
 
         const succeeded = raw.success !== false;
+
+        await recordAttempt(
+          attemptCounter,
+          capabilityName,
+          succeeded
+            ? { status: "completed", output: raw.output, result: raw }
+            : { status: "failed", error: raw.errorMessage ?? "capability reported failure" }
+        );
 
         return {
 
@@ -405,6 +478,16 @@ export async function executeTask(
       // 固有の分岐を増やさない(絶対条件12)。挙動はPhase A以前と
       // 完全に同じ(呼び出しが例外を投げない限りstatus:"completed"、
       // `answer`フィールドがあればそれをoutputとして使う)。
+      const genericOutput =
+        typeof raw === "object" && raw !== null && "answer" in raw
+          ? String((raw as { answer: unknown }).answer)
+          : JSON.stringify(raw);
+
+      await recordAttempt(attemptCounter, capabilityName, {
+        status: "completed",
+        output: genericOutput,
+      });
+
       return {
 
         taskId: task.id,
@@ -421,10 +504,7 @@ export async function executeTask(
 
         durationMs: Date.now() - startedAt,
 
-        output:
-          typeof raw === "object" && raw !== null && "answer" in raw
-            ? String((raw as { answer: unknown }).answer)
-            : JSON.stringify(raw),
+        output: genericOutput,
 
       };
 
@@ -440,13 +520,32 @@ export async function executeTask(
     // Phase 19: chatはLLM呼び出し1回だけの単発経路のため、一時的失敗
     // (rate limit/network error等)のRetry対象にする。成功時
     // (retried===false)は既存(Phase18まで)と全く同じ経路・同じコスト。
-    const { result: answer, retried } = await withTemporaryFailureRetry(() =>
-      runChat(input, {
-        provider,
-        model,
-        context: taskContext.coreContext,
-      })
+    const { result: answer, retried } = await withTemporaryFailureRetry(
+      () => {
+        attemptCounter++;
+        return runChat(input, {
+          provider,
+          model,
+          context: taskContext.coreContext,
+        });
+      },
+      async (firstError) => {
+
+        // Phase B2: chatはCapability Registry経由ではないが、Work
+        // ModelはこれもRun(capability="chat")として記録できるよう
+        // 同じ観測点を使う。
+        await recordAttempt(attemptCounter, "chat", {
+          status: "failed",
+          error: firstError instanceof Error ? firstError.message : String(firstError),
+        });
+
+      }
     );
+
+    await recordAttempt(attemptCounter, "chat", {
+      status: "completed",
+      output: answer,
+    });
 
     return {
 
@@ -479,6 +578,20 @@ export async function executeTask(
     };
 
   } catch (error) {
+
+    // Phase B2: attemptCounter>0(=少なくとも1回はCapability/Chat
+    // 呼び出しを試みてから失敗した場合)のみRunとして記録する。
+    // Retryが成功しなかった場合(exhausted)はここがその最後の
+    // (=2回目の)試行の記録先になる——onFirstAttemptFailedが既に
+    // 1回目を記録済みのため、2件のfailed Runが残る。
+    if (attemptCounter > 0) {
+
+      await recordAttempt(attemptCounter, task.assignedCapability ?? "chat", {
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+    }
 
     return {
 
@@ -537,7 +650,8 @@ export async function runTasks(
   ownerParams: LoadContextParams,
   governor: ConcurrencyGovernor,
   attachmentEvidence: AttachmentEvidence[] = [],
-  workspaceEvidence: LocalWorkspaceEvidence[] = []
+  workspaceEvidence: LocalWorkspaceEvidence[] = [],
+  hooks?: OrchestrationHooks
 ): Promise<TaskExecutionSummary[]> {
 
   const taskById = new Map(tasks.map((task) => [task.id, task]));
@@ -576,12 +690,18 @@ export async function runTasks(
 
         const task = taskById.get(id);
 
-        summaries.set(id, {
+        const summary: TaskExecutionSummary = {
           taskId: id,
           status: "cancelled",
           capability: task?.assignedCapability,
           error: "unresolved dependency (cycle or missing dependency)",
-        });
+        };
+
+        summaries.set(id, summary);
+
+        if (task) {
+          await hooks?.onTaskFinished?.(task, summary);
+        }
 
       }
 
@@ -603,12 +723,16 @@ export async function runTasks(
           // 絶対条件17: 依存先が失敗した場合、このTaskは実行せず
           // cancelledとして記録する(実行しないため追加コストは
           // 発生しない。TaskContext構築(Memory retrieval)も行わない)。
-          summaries.set(task.id, {
+          const summary: TaskExecutionSummary = {
             taskId: task.id,
             status: "cancelled",
             capability: task.assignedCapability,
             error: `dependency task ${failedDep} did not complete successfully`,
-          });
+          };
+
+          summaries.set(task.id, summary);
+
+          await hooks?.onTaskFinished?.(task, summary);
 
           return;
 
@@ -648,14 +772,18 @@ export async function runTasks(
 
         } catch (error) {
 
-          summaries.set(task.id, {
+          const summary: TaskExecutionSummary = {
             taskId: task.id,
             status: "failed",
             capability: task.assignedCapability,
             error:
               `task context build failed: ` +
               (error instanceof Error ? error.message : String(error)),
-          });
+          };
+
+          summaries.set(task.id, summary);
+
+          await hooks?.onTaskFinished?.(task, summary);
 
           return;
 
@@ -667,7 +795,7 @@ export async function runTasks(
 
         try {
 
-          summary = await executeTask(task, core, taskContext, attachmentEvidence, workspaceEvidence);
+          summary = await executeTask(task, core, taskContext, attachmentEvidence, workspaceEvidence, hooks);
 
         } finally {
 
@@ -680,6 +808,8 @@ export async function runTasks(
         }
 
         summaries.set(task.id, summary);
+
+        await hooks?.onTaskFinished?.(task, summary);
 
       })
     );

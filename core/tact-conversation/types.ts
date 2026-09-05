@@ -40,6 +40,16 @@ export interface Conversation {
   // しておく。
   artifactId?: string | null;
 
+  // Architecture Migration Phase B2: core/tact-work/(Canonical Work
+  // Model)のWork.idへのback-reference。ARCH-R2の原則通り、これは
+  // 「このConversationから現在activeなWorkを見つけるための
+  // compatibility link」であり、Work自身のidentityではない
+  // (Work.id ≠ Conversation.id、Work.primaryConversationIdが正規の
+  // 逆参照)。1 Conversationにつき高々1つのactive Workという単純な
+  // 運用をPhase B2の間は維持するが、Domain Model上はWorkが独立した
+  // Entityであることに変わりはない。
+  workId?: string | null;
+
   createdAt: string;
 
   updatedAt: string;

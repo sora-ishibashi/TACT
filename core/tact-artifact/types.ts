@@ -213,6 +213,15 @@ export interface Artifact {
   // 作らない)。未所属のArtifactも成立する。
   projectId?: string | null;
 
+  // Architecture Migration Phase B2: core/tact-work/(Canonical Work
+  // Model)のWork.idへの参照。Work経由で生成されたArtifactにのみ
+  // 設定される(既存のConversation.artifactIdによる紐付けは維持した
+  // ままの、temporary dual linkage——Phase B2指示Section13)。
+  // Provider固有概念は一切含まない(ARCH-R2 Section13、Artifact本体
+  // へProvider固有IDを持ち込まない方針をWork idにも適用: Work.idは
+  // TACT自身のCanonical Entity idであり、外部SaaS由来のIDではない)。
+  workId?: string | null;
+
   title: string;
 
   // Phase76: 構造化されたBlockの配列。常に非空配列(Legacy Artifactは

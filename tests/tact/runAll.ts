@@ -48,6 +48,8 @@ import { run as runConfidenceExecutorWiring } from "./confidence/executorWiring.
 import { run as runWorkTypes } from "./work/types.test";
 import { run as runWorkMapping } from "./work/mapping.test";
 import { run as runWorkStoreAuthorization } from "./work/storeAuthorization.test";
+import { run as runWorkIntake } from "./work/intake.test";
+import { run as runWorkExecution } from "./work/execution.test";
 import { run as runGenerateLLMAnswerRetry } from "./research/generateLLMAnswerRetry.test";
 import { run as runEvaluateTaskExecution } from "./evaluation/evaluateTaskExecution.test";
 import { run as runLearningSignalsWiring } from "./evaluation/learningSignalsWiring.test";
@@ -63,6 +65,7 @@ import { run as runClarificationPersistence } from "./conversation/clarification
 import { run as runTactConversationMapping } from "./conversation/tactConversationMapping.test";
 import { run as runTactConversationApi } from "./conversation/tactConversationApi.test";
 import { run as runTactConversationOrchestration } from "./conversation/tactConversationOrchestration.test";
+import { run as runWorkLinkRepair } from "./conversation/workLinkRepair.test";
 import { run as runTactConversationClarificationAnswer } from "./conversation/tactConversationClarificationAnswer.test";
 import { run as runTactConversationResearchCapability } from "./conversation/tactConversationResearchCapability.test";
 import { run as runTactArtifactMutation } from "./artifact/tactArtifactMutation.test";
@@ -130,6 +133,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/types", run: runWorkTypes },
   { name: "work/mapping", run: runWorkMapping },
   { name: "work/storeAuthorization", run: runWorkStoreAuthorization },
+  { name: "work/intake", run: runWorkIntake },
+  { name: "work/execution", run: runWorkExecution },
   { name: "research/generateLLMAnswerRetry", run: runGenerateLLMAnswerRetry },
   { name: "evaluation/evaluateTaskExecution", run: runEvaluateTaskExecution },
   { name: "evaluation/learningSignalsWiring", run: runLearningSignalsWiring },
@@ -145,6 +150,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "conversation/tactConversationMapping", run: runTactConversationMapping },
   { name: "conversation/tactConversationApi", run: runTactConversationApi },
   { name: "conversation/tactConversationOrchestration", run: runTactConversationOrchestration },
+  { name: "conversation/workLinkRepair", run: runWorkLinkRepair },
   { name: "conversation/tactConversationClarificationAnswer", run: runTactConversationClarificationAnswer },
   { name: "conversation/tactConversationResearchCapability", run: runTactConversationResearchCapability },
   { name: "artifact/tactArtifactMutation", run: runTactArtifactMutation },
