@@ -1,6 +1,7 @@
 // =========================
 // TACT Work — Approval Execution Boundary Regression
-// (Architecture Migration Phase B3)
+// (Architecture Migration Phase B3 + Final Fix: Terminal Work
+// Approval Safety)
 // =========================
 //
 // 対象: core/tact-work/approval.tsのrequestApproval()/approveApproval()/
@@ -11,7 +12,9 @@
 // 偽実装は、テストごとに独立したin-memoryのWork/Approval状態を持ち、
 // 「userIdが一致しない場合は常に見つからない扱いにする」という
 // 実store.ts(core/tact-work/store.ts)のownership defenseと同じ
-// 挙動を再現する。
+// 挙動を再現する。Work.statusも実際にtrackする(Final Fixの
+// work_not_resumableガードは、getWork()が返す"今のWork.status"を
+// 見て判定するため、偽実装が常に固定値を返すと検証にならない)。
 
 import {
   requestApproval,
@@ -20,7 +23,7 @@ import {
   type ApprovalExecutionDeps,
   type ApprovalRequest,
 } from "../../../core/tact-work/approval";
-import type { Approval, ApprovalStatus, Work } from "../../../core/tact-work/types";
+import type { Approval, ApprovalStatus, Work, WorkStatus } from "../../../core/tact-work/types";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeWork(overrides: Partial<Work> = {}): Work {
@@ -41,22 +44,28 @@ interface FakeBackend {
   workStatusUpdates: string[];
   taskStatusUpdates: { taskId: string; status: string }[];
   approvals: Map<string, Approval>;
+  setWorkStatus: (workId: string, status: WorkStatus) => void;
+  getWorkStatus: (workId: string) => WorkStatus | undefined;
 }
 
 // worksはworkId -> ownerUserIdの単純なmap(複数user/複数Workのシナリオ
-// をテストできるようにする)。
+// をテストできるようにする)。Work.statusは"running"を初期値として
+// 実際にtrackする。
 function makeFakeBackend(works: Record<string, string>): FakeBackend {
 
   const workStatusUpdates: string[] = [];
   const taskStatusUpdates: { taskId: string; status: string }[] = [];
   const approvals = new Map<string, Approval>();
+  const workStatuses = new Map<string, WorkStatus>(
+    Object.keys(works).map((id) => [id, "running" as WorkStatus])
+  );
   let nextApprovalId = 1;
 
   const getWork: ApprovalExecutionDeps["getWork"] = async (workId, userId) => {
     if (works[workId] !== userId) {
       return undefined;
     }
-    return makeWork({ id: workId, userId });
+    return makeWork({ id: workId, userId, status: workStatuses.get(workId) ?? "running" });
   };
 
   const deps: ApprovalExecutionDeps = {
@@ -141,8 +150,9 @@ function makeFakeBackend(works: Record<string, string>): FakeBackend {
 
     },
 
-    updateWorkStatus: async (_workId, _userId, _accessToken, status) => {
+    updateWorkStatus: async (workId, _userId, _accessToken, status) => {
       workStatusUpdates.push(status);
+      workStatuses.set(workId, status);
     },
 
     updateTaskStatus: async (_workId, _userId, _accessToken, taskId, status) => {
@@ -151,7 +161,14 @@ function makeFakeBackend(works: Record<string, string>): FakeBackend {
 
   };
 
-  return { deps, workStatusUpdates, taskStatusUpdates, approvals };
+  return {
+    deps,
+    workStatusUpdates,
+    taskStatusUpdates,
+    approvals,
+    setWorkStatus: (workId, status) => workStatuses.set(workId, status),
+    getWorkStatus: (workId) => workStatuses.get(workId),
+  };
 
 }
 
@@ -232,48 +249,149 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   }
 
   // =========================
-  // Multiple approvals
+  // Terminal Work Approval Safety (Final Fix)
   // =========================
 
-  // ---- 5. Work配下にpending A/B -> Aをapprove -> Bはpendingのまま
-  // -> Workはwaiting_for_approval維持(誤って早期resumeしない) ----
+  // ---- Required test 1: Approval A/B pending -> A reject -> Work failed -> B remains pending ----
+  let scenarioBackend!: ReturnType<typeof makeFakeBackend>;
+  let scenarioApprovalB!: Approval;
   {
     const backend = makeFakeBackend({ "work-1": "user-1" });
 
     const approvalA = await requestApproval(makeRequest({ taskId: "task-a" }), "user-1", "fake-token", backend.deps);
     const approvalB = await requestApproval(makeRequest({ taskId: "task-b" }), "user-1", "fake-token", backend.deps);
 
-    backend.workStatusUpdates.length = 0; // requestApproval分のログをリセットして、approve後の遷移だけを見る
+    await rejectApproval("work-1", "user-1", "fake-token", approvalA!.id, undefined, backend.deps);
 
-    const outcomeA = await approveApproval("work-1", "user-1", "fake-token", approvalA!.id, undefined, backend.deps);
+    const bAfterReject = await backend.deps.getApproval("work-1", "user-1", "fake-token", approvalB!.id);
 
     results.push(
       check(
-        "[5] 複数pending中の1件だけapprove -> workResumed=false、Workをrunningへ戻さない",
-        outcomeA.status === "approved" &&
-          outcomeA.workResumed === false &&
-          !backend.workStatusUpdates.includes("running")
+        "[Required1] A reject -> Work failed、Bはpendingのまま残る",
+        backend.getWorkStatus("work-1") === "failed" && bAfterReject?.status === "pending"
       )
     );
 
-    // ---- 6. 最後のpending(B)もapprove -> Work resume可能 ----
-    const outcomeB = await approveApproval("work-1", "user-1", "fake-token", approvalB!.id, undefined, backend.deps);
+    scenarioBackend = backend;
+    scenarioApprovalB = approvalB!;
+  }
+
+  // ---- Required test 2: 上記状態でB approve -> Work failed維持(runningへ戻らない) ----
+  {
+    const beforeStatus = scenarioBackend.getWorkStatus("work-1");
+
+    const outcome = await approveApproval(
+      "work-1", "user-1", "fake-token", scenarioApprovalB.id, undefined, scenarioBackend.deps
+    );
 
     results.push(
       check(
-        "[6] 最後のpendingをapprove -> workResumed=true、Workがrunningへ戻る",
-        outcomeB.status === "approved" &&
-          outcomeB.workResumed === true &&
-          backend.workStatusUpdates[backend.workStatusUpdates.length - 1] === "running"
+        "[Required2] failed WorkでのB approve -> work_not_resumableで安全に拒否され、Workはfailed維持のまま",
+        outcome.status === "work_not_resumable" &&
+          outcome.workStatus === "failed" &&
+          beforeStatus === "failed" &&
+          scenarioBackend.getWorkStatus("work-1") === "failed"
+      )
+    );
+
+    const bStillPending = await scenarioBackend.deps.getApproval("work-1", "user-1", "fake-token", scenarioApprovalB.id);
+
+    results.push(
+      check(
+        "[Required2] work_not_resumable時、ApprovalのDB状態自体もpendingのまま変更されない(通常のapproveとして解決しない)",
+        bStillPending?.status === "pending"
+      )
+    );
+  }
+
+  // ---- Required test 3: failed Work + pending Approval -> approve attempt -> safe domain result ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
+    backend.setWorkStatus("work-1", "failed"); // 他の経路でWorkがfailedへ確定したことを模す
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[Required3] failed Work -> approve attemptはwork_not_resumableで拒否される",
+        outcome.status === "work_not_resumable" && backend.getWorkStatus("work-1") === "failed"
+      )
+    );
+  }
+
+  // ---- Required test 4: cancelled Work + pending Approval -> approve attempt -> Work remains cancelled ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
+    backend.setWorkStatus("work-1", "cancelled");
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[Required4] cancelled Work -> approve attemptはwork_not_resumableで拒否され、Workはcancelledのまま",
+        outcome.status === "work_not_resumable" && backend.getWorkStatus("work-1") === "cancelled"
+      )
+    );
+  }
+
+  // ---- Required test 5: completed Work + pending Approval -> approve attempt -> Work remains completed ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
+    backend.setWorkStatus("work-1", "completed");
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[Required5] completed Work -> approve attemptはwork_not_resumableで拒否され、Workはcompletedのまま",
+        outcome.status === "work_not_resumable" && backend.getWorkStatus("work-1") === "completed"
+      )
+    );
+  }
+
+  // ---- Required test 6: waiting_for_approval + 最後の1件 -> approve -> running(正常resumeが壊れていない) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[Required6] waiting_for_approval + 最後の1件 -> approveでrunningへ正しく戻る(regressionなし)",
+        outcome.status === "approved" &&
+          outcome.workResumed === true &&
+          backend.getWorkStatus("work-1") === "running"
+      )
+    );
+  }
+
+  // ---- Required test 7: waiting_for_approval + multiple pending -> 1件approve -> waiting_for_approval維持 ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approvalA = await requestApproval(makeRequest({ taskId: "task-a" }), "user-1", "fake-token", backend.deps);
+    await requestApproval(makeRequest({ taskId: "task-b" }), "user-1", "fake-token", backend.deps);
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approvalA!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[Required7] 複数pending中の1件approve -> workResumed=false、Workはwaiting_for_approval維持(regressionなし)",
+        outcome.status === "approved" &&
+          outcome.workResumed === false &&
+          backend.getWorkStatus("work-1") === "waiting_for_approval"
       )
     );
   }
 
   // =========================
-  // Authorization
+  // Authorization (既存、維持確認)
   // =========================
 
-  // ---- 7/8. 他userのApprovalは取得・approve/reject不可 ----
+  // ---- 8. 他userのApprovalは取得・approve/reject不可 ----
   {
     const backend = makeFakeBackend({ "work-1": "user-1" });
     const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
@@ -282,7 +400,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[7] 他userはApprovalを取得できない(Work ownership経由のdefense)",
+        "[8] 他userはApprovalを取得できない(Work ownership経由のdefense)",
         foreignGet === undefined
       )
     );
@@ -297,7 +415,6 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       )
     );
 
-    // 実際には状態が変化していないことも確認する。
     const stillPending = await backend.deps.getApproval("work-1", "user-1", "fake-token", approval!.id);
 
     results.push(
@@ -309,10 +426,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   }
 
   // =========================
-  // Idempotency
+  // Idempotency (既存、維持確認)
   // =========================
 
-  // ---- 10. approved Approvalの再approve -> 二重resumeなし(already_resolved) ----
+  // ---- 9. approved Approvalの再approve -> 二重resumeなし(already_resolved) ----
   {
     const backend = makeFakeBackend({ "work-1": "user-1" });
     const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
@@ -326,13 +443,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[10] approved済みの再approveはalready_resolvedを返し、Work statusを再度更新しない(二重resumeなし)",
+        "[9] approved済みの再approveはalready_resolvedを返し、Work statusを再度更新しない(二重resumeなし)",
         secondOutcome.status === "already_resolved" && runningCountAfter === runningCountBefore
       )
     );
   }
 
-  // ---- 11. rejected Approvalをapproveへ変更不可 ----
+  // ---- rejected Approvalをapproveへ変更不可 ----
   {
     const backend = makeFakeBackend({ "work-1": "user-1" });
     const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
@@ -344,13 +461,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[11] rejected -> approveを試みてもinvalid_transition、実データもrejectedのまま",
+        "[9] rejected -> approveを試みてもinvalid_transition、実データもrejectedのまま",
         flipAttempt.status === "invalid_transition" && stored?.status === "rejected"
       )
     );
   }
 
-  // ---- 12. terminal(rejected)状態からのreject再送も不正遷移として扱われない(idempotent) ----
+  // ---- terminal(rejected)状態からのreject再送も安全にidempotent ----
   {
     const backend = makeFakeBackend({ "work-1": "user-1" });
     const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
@@ -360,7 +477,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[12] rejected済みの再rejectはalready_resolvedを返す(terminal stateからの不正遷移を拒否しつつ、正常なdouble-click再送は安全)",
+        "[9] rejected済みの再rejectはalready_resolvedを返す(terminal stateからの不正遷移を拒否しつつ、正常なdouble-click再送は安全)",
         secondReject.status === "already_resolved"
       )
     );
