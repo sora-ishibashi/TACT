@@ -45,6 +45,9 @@ import { run as runExecutor } from "./orchestrator/executor.test";
 import { run as runCapabilityInvocationDecoupling } from "./orchestrator/capabilityInvocationDecoupling.test";
 import { run as runDeriveAnswerConfidence } from "./confidence/deriveAnswerConfidence.test";
 import { run as runConfidenceExecutorWiring } from "./confidence/executorWiring.test";
+import { run as runWorkTypes } from "./work/types.test";
+import { run as runWorkMapping } from "./work/mapping.test";
+import { run as runWorkStoreAuthorization } from "./work/storeAuthorization.test";
 import { run as runGenerateLLMAnswerRetry } from "./research/generateLLMAnswerRetry.test";
 import { run as runEvaluateTaskExecution } from "./evaluation/evaluateTaskExecution.test";
 import { run as runLearningSignalsWiring } from "./evaluation/learningSignalsWiring.test";
@@ -124,6 +127,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "orchestrator/capabilityInvocationDecoupling", run: runCapabilityInvocationDecoupling },
   { name: "confidence/deriveAnswerConfidence", run: runDeriveAnswerConfidence },
   { name: "confidence/executorWiring", run: runConfidenceExecutorWiring },
+  { name: "work/types", run: runWorkTypes },
+  { name: "work/mapping", run: runWorkMapping },
+  { name: "work/storeAuthorization", run: runWorkStoreAuthorization },
   { name: "research/generateLLMAnswerRetry", run: runGenerateLLMAnswerRetry },
   { name: "evaluation/evaluateTaskExecution", run: runEvaluateTaskExecution },
   { name: "evaluation/learningSignalsWiring", run: runLearningSignalsWiring },
