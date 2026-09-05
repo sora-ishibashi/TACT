@@ -36,6 +36,9 @@ import type { AttachmentEvidence } from "../tact-attachment/types";
 // LW-P3: attachmentEvidenceと並行する、Local Workspace由来の
 // Evidence(type-onlyのimportのため、Browser固有実装への依存は生じない)。
 import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
+// Phase A(Capability Invocation Decoupling): CapabilityInvocationRequest
+// が「Taskごとに絞り込み済みのCoreContext」を表すために使う。
+import type { CoreContext } from "../tact-core/context/types";
 
 // =========================
 // Memory Reference
@@ -213,6 +216,89 @@ export interface OrchestrationRequest {
 import type { TaskExecutionSummary } from "./task";
 import type { MemoryWriteOutcome } from "./memoryWriter";
 import type { LearningSignal } from "./evaluation";
+
+// =========================
+// Capability Invocation Contract (Architecture Migration Phase A:
+// Capability Invocation Decoupling)
+// =========================
+//
+// 背景: executor.ts(executeTask())には従来
+// `if (task.assignedCapability === "research") { ... }`という
+// 文字列直書きの分岐があり、その中でOrchestratorがResearchParams
+// (core/tact-research/types.ts)の内部構造(options.llmProvider/
+// llmModel/tableSchema等)を直接組み立て、戻り値のResearchResultの
+// フィールド(evidence/keyFindings/presentations等)を直接読んで
+// TaskExecutionSummaryへ転記していた。「research以外の登録済み
+// Capability」は全く別の、貧弱な経路(query/contextのみ・Provider/
+// Model未伝達)を通っており、Capability名によって扱いが非対称
+// だった。
+//
+// 目的: Orchestrator → Capability Registry
+// (core/tact-core/capabilities/registry.ts) → Capability、という
+// 経路をCapability名に関わらず単一化する。この2つの型は、
+// Orchestrator(executor.ts)がCapability名を問わず構築できる
+// 「入力」と、Capability側(の薄いAdapter、例:
+// core/tact-research/capabilityAdapter.ts)から受け取ってよい
+// 「出力」を表す、Orchestrator自身の語彙。個々のCapabilityの公開型
+// (ResearchParams/ResearchResult・DesignParams/DesignResult)は
+// 変更しない——executor.tsはそれらを一切importせず、この語彙だけを
+// 扱う。
+export interface CapabilityInvocationRequest {
+
+  query: string;
+
+  // Taskごとに絞り込み済みのCoreContext(taskContext.coreContext)を
+  // そのまま渡す。
+  context: CoreContext;
+
+  provider?: Provider;
+
+  model?: string;
+
+  attachmentEvidence?: AttachmentEvidence[];
+
+  workspaceEvidence?: LocalWorkspaceEvidence[];
+
+  // Phase90由来。research以外のCapabilityは無視してよい。
+  tableSchema?: {
+    columns: string[];
+    requestedRowCount?: number;
+  };
+
+}
+
+// TaskExecutionSummary(task.ts)が既に持つ語彙をそのまま再利用する
+// (絶対条件: Researchの結果フィールド名・型は一切変えない。新しい
+// フィールド名を増やさない)。taskId/status/capability/durationMs/
+// retried/provider/modelはexecutor.ts自身が決定する制御情報のため
+// 対象外とする。
+export type CapabilityInvocationResult = Partial<
+  Pick<
+    TaskExecutionSummary,
+    | "memoryUsed"
+    | "researchExecutionMode"
+    | "evidenceCount"
+    | "evidence"
+    | "keyFindings"
+    | "answerConfidence"
+    | "uncertaintyNote"
+    | "presentations"
+    | "presentationWarnings"
+    | "presentationRequested"
+    | "frameworkArtifacts"
+    | "frameworkArtifactRequested"
+    | "analysisArtifactPlan"
+    | "cortexArtifactPlanRequested"
+  >
+> & {
+
+  success: boolean;
+
+  output?: string;
+
+  errorMessage?: string;
+
+};
 
 // =========================
 // Orchestration Result

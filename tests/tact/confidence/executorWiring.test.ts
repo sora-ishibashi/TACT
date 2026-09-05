@@ -12,6 +12,16 @@
 // このHarnessプロセス内ではbootstrapTactCapabilities()を呼んでいない
 // ため、実際のResearch実装を上書きすることはない。実LLM/Search API
 // 呼び出みは一切発生しない。
+//
+// Architecture Migration Phase A(Capability Invocation Decoupling)
+// 以降、core/tact-orchestrator/executor.ts自身はResearchResultの
+// 内部構造を直接読まなくなり、core/tact-research/capabilityAdapter.ts
+// のrunResearchCapability()がinvokeCapability("research", ...)経由で
+// (このtestが登録したmockを含む)結果を取得し、
+// mapResearchResultToCapabilityResult()で変換してから
+// executor.tsへ返す。このtest自体は変更していない
+// (executeTask()を直接呼ぶ既存の検証方法がPhase A後も引き続き
+// 成立することを確認済み)。
 
 import { registerCapability } from "../../../core/tact-core/capabilities/registry";
 import { createMockCoreCapability } from "../../../core/tact-core/mockCoreCapability";

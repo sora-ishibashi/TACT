@@ -36,8 +36,13 @@ export {
   deriveExecutionCapability,
   buildClarificationResendInput,
   findPrecedingUserInput,
-  // BOT-P2
+  // BOT-P2 / BOT-P2.5: runConversationTurn()はshared conversation turn
+  // logic(token-agnostic)。新しい呼び出し元は、これを直接呼ばず
+  // runConversationTurnAsAuthenticatedUser()(Web境界)、または
+  // core/tact-bot/execution/trustedConversationTurn.tsの
+  // runConversationTurnAsTrustedActor()(Bot境界)を経由すること。
   runConversationTurn,
+  runConversationTurnAsAuthenticatedUser,
 } from "./orchestration";
 export type {
   ConversationTurnResult,

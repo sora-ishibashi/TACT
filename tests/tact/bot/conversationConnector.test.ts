@@ -1,19 +1,29 @@
 // =========================
-// TACT Bot — Conversation Connector Regression (BOT-P2)
+// TACT Bot — Conversation Connector Regression (BOT-P2 / BOT-P2.5)
 // =========================
 //
 // 対象: core/tact-bot/connector/conversationConnector.tsの
 // createConversationBotCoreConnector()(実行部分のみを、fakeな
-// runTurn/findLink/createLink/getAccessTokenへ差し替えてテストする)。
+// runTrustedTurn/findLink/createLinkへ差し替えてテストする)。
 //
 // 環境制約: 実Supabase・実LLM・実Search APIは一切呼ばない。
 // createConversationBotCoreConnector()自体は依存を全てDIで受け取る
-// 設計のため、fakeのみでロジック(identity/service role gate・
-// conversation link解決・retry・BotAction変換)を検証できる。
-// 本番配線(createSupabaseConversationBotCoreConnector())自体は
-// 実Supabaseアクセスを伴うため、この既存repository方針
+// 設計のため、fakeのみでロジック(identity gate・trusted execution
+// boundaryのnot-configured gate・conversation link解決・retry・
+// BotAction変換・cross-user access防止)を検証できる。
+//
+// BOT-P2.5: このConnectorのDeps interfaceにはaccessToken/service role
+// key等のCredentialを表すfieldが存在しない(型定義自体がそれを
+// 強制する)。このtestでも、fakeなrunTrustedTurnはtactUserIdだけを
+// 受け取り、Credential文字列を一切扱わない。
+//
+// 本番配線(createSupabaseConversationBotCoreConnector())・Trusted Bot
+// Execution Boundary自体(core/tact-bot/execution/
+// trustedConversationTurn.ts)の「service role設定済み」経路は実
+// Supabaseアクセスを伴うため、既存repository方針
 // (core/tact-attachment/repository.ts等と同じ)によりここではテスト
-// しない。
+// しない(tests/tact/bot/trustedConversationTurn.test.tsで、
+// 「未設定時は安全にfallbackする」経路のみを実関数で確認する)。
 
 import "dotenv/config";
 import {
@@ -23,9 +33,9 @@ import {
   type ConversationLinkLookup,
 } from "../../../core/tact-bot/connector/conversationConnector";
 import type {
-  RunConversationTurnParams,
-  RunConversationTurnResult,
-} from "../../../core/tact-conversation";
+  RunConversationTurnAsTrustedActorParams,
+  RunConversationTurnAsTrustedActorResult,
+} from "../../../core/tact-bot/execution/trustedConversationTurn";
 import type { Conversation, ConversationMessage } from "../../../core/tact-conversation/types";
 import type { BotContext, BotIncomingMessage } from "../../../core/tact-bot/types";
 import { buildBotContext } from "../../../core/tact-bot/context/buildBotContext";
@@ -75,7 +85,7 @@ function makeMessageRow(overrides: Partial<ConversationMessage> = {}): Conversat
 function okResult(overrides: {
   conversation?: Partial<Conversation>;
   message?: Partial<ConversationMessage>;
-} = {}): Extract<RunConversationTurnResult, { ok: true }> {
+} = {}): Extract<RunConversationTurnAsTrustedActorResult, { ok: true }> {
 
   const conversation = makeConversation(overrides.conversation);
   const message = makeMessageRow(overrides.message);
@@ -91,18 +101,18 @@ function okResult(overrides: {
 
 interface RecordingDeps {
   deps: ConversationBotCoreConnectorDeps;
-  runTurnCalls: RunConversationTurnParams[];
+  runTrustedTurnCalls: RunConversationTurnAsTrustedActorParams[];
   findLinkCalls: ConversationLinkLookup[];
   createLinkCalls: ConversationLinkCreate[];
 }
 
 function recordingDeps(options: {
-  accessToken?: string | null;
+  serviceRoleConfigured?: boolean;
   existingTactConversationId?: string | null;
-  runTurnResults?: RunConversationTurnResult[];
+  runTurnResults?: RunConversationTurnAsTrustedActorResult[];
 } = {}): RecordingDeps {
 
-  const runTurnCalls: RunConversationTurnParams[] = [];
+  const runTrustedTurnCalls: RunConversationTurnAsTrustedActorParams[] = [];
   const findLinkCalls: ConversationLinkLookup[] = [];
   const createLinkCalls: ConversationLinkCreate[] = [];
 
@@ -111,11 +121,18 @@ function recordingDeps(options: {
 
   const deps: ConversationBotCoreConnectorDeps = {
 
-    async runTurn(params) {
-      runTurnCalls.push(params);
+    async runTrustedTurn(params) {
+
+      runTrustedTurnCalls.push(params);
+
+      if (options.serviceRoleConfigured === false) {
+        return { ok: false, error: "trusted_execution_not_configured" };
+      }
+
       const result = results[Math.min(callIndex, results.length - 1)];
       callIndex += 1;
       return result;
+
     },
 
     async findLink(params) {
@@ -128,13 +145,9 @@ function recordingDeps(options: {
       return true;
     },
 
-    getAccessToken() {
-      return options.accessToken === undefined ? "service-role-key-fixture" : options.accessToken;
-    },
-
   };
 
-  return { deps, runTurnCalls, findLinkCalls, createLinkCalls };
+  return { deps, runTrustedTurnCalls, findLinkCalls, createLinkCalls };
 
 }
 
@@ -154,7 +167,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ==========================================================
 
   {
-    const { deps, runTurnCalls, findLinkCalls, createLinkCalls } = recordingDeps();
+    const { deps, runTrustedTurnCalls, findLinkCalls, createLinkCalls } = recordingDeps();
     const connector = createConversationBotCoreConnector(deps);
     const context = contextWithIdentity(makeMessage(), null);
 
@@ -169,8 +182,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Security-2] identity未解決時、runTurn/findLink/createLinkのいずれも呼ばれない(業務実行しない絶対条件)",
-        runTurnCalls.length === 0 && findLinkCalls.length === 0 && createLinkCalls.length === 0
+        "[Security-2] identity未解決時、runTrustedTurn/findLink/createLinkのいずれも呼ばれない(業務実行しない絶対条件)",
+        runTrustedTurnCalls.length === 0 && findLinkCalls.length === 0 && createLinkCalls.length === 0
       )
     );
 
@@ -195,36 +208,56 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   }
 
   // ==========================================================
-  // Security: service role未設定時は業務実行しない
+  // Security: Trusted Bot Execution Boundaryが未設定(service role未設定)
+  // の場合は業務実行しない
   // ==========================================================
 
   {
-    const { deps, runTurnCalls } = recordingDeps({ accessToken: null });
+    const { deps, runTrustedTurnCalls, createLinkCalls } = recordingDeps({ serviceRoleConfigured: false });
     const connector = createConversationBotCoreConnector(deps);
 
     const actions = await connector.handle(contextWithIdentity(makeMessage(), "tact-user-1"));
 
     results.push(
       check(
-        "[Security-4] service role未設定時、reply1件を返しrunTurnを呼ばない",
-        actions.length === 1 && actions[0].kind === "reply" && runTurnCalls.length === 0
+        "[Security-4] Trusted Bot Execution Boundary未設定時、reply1件を返しretryせずcreateLinkも呼ばない",
+        actions.length === 1 &&
+          actions[0].kind === "reply" &&
+          runTrustedTurnCalls.length === 1 &&
+          createLinkCalls.length === 0
       )
     );
 
   }
 
   // ==========================================================
-  // Security: userIdは常にresolve済みのtactUserId(外部messageの
-  // 値をそのまま信用しない)
+  // Security: ConversationBotCoreConnectorDepsにCredential(access
+  // token/service role key)を表すfieldが存在しない(型レベルの保証)
+  // ==========================================================
+
+  results.push(
+    check(
+      "[Security-4b] Deps interfaceはrunTrustedTurn/findLink/createLink/accountLinkingUrlのみを持つ(Credential概念を持ち込まない)",
+      (() => {
+        const { deps } = recordingDeps();
+        const keys = Object.keys(deps).sort();
+        return JSON.stringify(keys) === JSON.stringify(["createLink", "findLink", "runTrustedTurn"]);
+      })()
+    )
+  );
+
+  // ==========================================================
+  // Security: tactUserIdは常にresolve済みのidentity(外部messageの
+  // 値をそのまま信用しない、cross-user spoof不可)
   // ==========================================================
 
   {
-    const { deps, runTurnCalls } = recordingDeps();
+    const { deps, runTrustedTurnCalls } = recordingDeps();
     const connector = createConversationBotCoreConnector(deps);
 
     // actor.externalUserIdが仮に他人のTACT user idと同じ文字列
-    // だったとしても、runTurnへ渡るuserIdは常にidentity.tactUserId
-    // (resolverが検証済みの値)であることを確認する。
+    // だったとしても、runTrustedTurnへ渡るtactUserIdは常に
+    // identity.tactUserId(resolverが検証済みの値)であることを確認する。
     const spoofLikeMessage = makeMessage({ actor: { externalUserId: "tact-user-victim" } });
     const context = contextWithIdentity(spoofLikeMessage, "tact-user-1-correctly-resolved");
 
@@ -232,8 +265,56 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Security-5] runTurnへ渡るuserIdはidentity.tactUserIdであり、外部actor.externalUserIdではない",
-        runTurnCalls[0]?.userId === "tact-user-1-correctly-resolved"
+        "[Security-5] runTrustedTurnへ渡るtactUserIdはidentity.tactUserIdであり、外部actor.externalUserIdではない",
+        runTrustedTurnCalls[0]?.tactUserId === "tact-user-1-correctly-resolved"
+      )
+    );
+
+  }
+
+  // ==========================================================
+  // Security: stale/wrong conversation linkは他userのConversationへの
+  // アクセスを許さない(user Aとしてresolveされたrequestがuser Bの
+  // Conversationを取得できない)
+  // ==========================================================
+
+  {
+    // findLinkが返したconversationIdが、実際にはtactUserIdの所有物では
+    // ない(=他userのConversation、または削除済み)場合、
+    // runConversationTurnAsTrustedActor()→getConversation()の所有者
+    // フィルタにより"conversation_not_found"として拒否される
+    // (core/tact-conversation/orchestration.ts参照)。ここではその
+    // 拒否結果を受けたConnector側の挙動(他userのConversationへは
+    // 一切アクセスせず、新規Conversationへ安全にfallbackする)を確認する。
+    const { deps, runTrustedTurnCalls, createLinkCalls } = recordingDeps({
+      existingTactConversationId: "conv-belongs-to-other-user",
+      runTurnResults: [
+        { ok: false, error: "conversation_not_found" },
+        okResult({ conversation: { id: "conv-fresh-for-this-user" } }),
+      ],
+    });
+    const connector = createConversationBotCoreConnector(deps);
+
+    const actions = await connector.handle(contextWithIdentity(makeMessage(), "tact-user-1"));
+
+    results.push(
+      check(
+        "[Security-6] 他userのConversationを指すlinkは1回目でconversation_not_foundとして拒否され、その内容がBotActionへ漏れない",
+        runTrustedTurnCalls[0].conversationId === "conv-belongs-to-other-user" &&
+          !actions.some(
+            (action) =>
+              (action.kind === "reply" && action.text.includes("conv-belongs-to-other-user")) ||
+              (action.kind === "deliver_result" && action.resultText?.includes("conv-belongs-to-other-user"))
+          )
+      )
+    );
+
+    results.push(
+      check(
+        "[Security-7] 拒否後は新規Conversationとして1回だけ再試行し、そのConversationのみでlinkを更新する(他userのidは二度と使わない)",
+        runTrustedTurnCalls.length === 2 &&
+          runTrustedTurnCalls[1].conversationId === undefined &&
+          createLinkCalls[0]?.tactConversationId === "conv-fresh-for-this-user"
       )
     );
 
@@ -244,7 +325,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ==========================================================
 
   {
-    const { deps, runTurnCalls, findLinkCalls, createLinkCalls } = recordingDeps({
+    const { deps, runTrustedTurnCalls, findLinkCalls, createLinkCalls } = recordingDeps({
       existingTactConversationId: null,
     });
     const connector = createConversationBotCoreConnector(deps);
@@ -253,8 +334,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Test1-1] 既存linkが無い場合、conversationId未指定でrunTurnを呼ぶ(新規作成)",
-        runTurnCalls.length === 1 && runTurnCalls[0].conversationId === undefined
+        "[Test1-1] 既存linkが無い場合、conversationId未指定でrunTrustedTurnを呼ぶ(新規作成)",
+        runTrustedTurnCalls.length === 1 && runTrustedTurnCalls[0].conversationId === undefined
       )
     );
 
@@ -288,15 +369,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ==========================================================
 
   {
-    const { deps, runTurnCalls } = recordingDeps({ existingTactConversationId: "conv-existing" });
+    const { deps, runTrustedTurnCalls } = recordingDeps({ existingTactConversationId: "conv-existing" });
     const connector = createConversationBotCoreConnector(deps);
 
     await connector.handle(contextWithIdentity(makeMessage(), "tact-user-1"));
 
     results.push(
       check(
-        "[Test2-1] 既存linkがある場合、そのconversationIdでrunTurnを呼ぶ(同一thread続き)",
-        runTurnCalls[0]?.conversationId === "conv-existing"
+        "[Test2-1] 既存linkがある場合、そのconversationIdでrunTrustedTurnを呼ぶ(同一thread続き)",
+        runTrustedTurnCalls[0]?.conversationId === "conv-existing"
       )
     );
 
@@ -349,44 +430,6 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   }
 
   // ==========================================================
-  // stale link(conversation_not_found) → 1回だけ新規作成にfallback
-  // ==========================================================
-
-  {
-    const { deps, runTurnCalls, createLinkCalls } = recordingDeps({
-      existingTactConversationId: "conv-deleted",
-      runTurnResults: [{ ok: false, error: "conversation_not_found" }, okResult({ conversation: { id: "conv-fresh" } })],
-    });
-    const connector = createConversationBotCoreConnector(deps);
-
-    const actions = await connector.handle(contextWithIdentity(makeMessage(), "tact-user-1"));
-
-    results.push(
-      check(
-        "[Test5-1] stale linkの場合、conversationId未指定で1回だけ再試行する",
-        runTurnCalls.length === 2 &&
-          runTurnCalls[0].conversationId === "conv-deleted" &&
-          runTurnCalls[1].conversationId === undefined
-      )
-    );
-
-    results.push(
-      check(
-        "[Test5-2] 再試行成功後、新しいconversation.idでlinkを更新する",
-        createLinkCalls[0]?.tactConversationId === "conv-fresh"
-      )
-    );
-
-    results.push(
-      check(
-        "[Test5-3] 再試行成功後は通常通りBotActionを返す",
-        actions.length === 1 && actions[0].kind === "reply"
-      )
-    );
-
-  }
-
-  // ==========================================================
   // 再試行後も失敗した場合は安全なエラーreplyを返す
   // ==========================================================
 
@@ -404,7 +447,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Test6-1] 再試行後も失敗した場合、例外を投げず安全なエラーreplyを返す",
+        "[Test5-1] 再試行後も失敗した場合、例外を投げず安全なエラーreplyを返す",
         actions.length === 1 && actions[0].kind === "reply"
       )
     );
@@ -416,7 +459,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ==========================================================
 
   {
-    const { deps, findLinkCalls, createLinkCalls, runTurnCalls } = recordingDeps();
+    const { deps, findLinkCalls, createLinkCalls, runTrustedTurnCalls } = recordingDeps();
     const connector = createConversationBotCoreConnector(deps);
 
     const message = makeMessage({ channel: "unknown" });
@@ -424,14 +467,16 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Test7-1] unknown channelはfindLink/createLinkを呼ばず、常に新規Conversationとして扱う",
-        findLinkCalls.length === 0 && createLinkCalls.length === 0 && runTurnCalls[0]?.conversationId === undefined
+        "[Test6-1] unknown channelはfindLink/createLinkを呼ばず、常に新規Conversationとして扱う",
+        findLinkCalls.length === 0 &&
+          createLinkCalls.length === 0 &&
+          runTrustedTurnCalls[0]?.conversationId === undefined
       )
     );
 
     results.push(
       check(
-        "[Test7-2] unknown channelでも通常通り応答は返る",
+        "[Test6-2] unknown channelでも通常通り応答は返る",
         actions.length === 1
       )
     );

@@ -16,3 +16,10 @@
 
 export * from "./types";
 export { runResearch } from "./runResearch";
+// Architecture Migration Phase A(Capability Invocation Decoupling):
+// core/tact-bootstrap.tsがCapability Registryへ"research"として
+// 登録するのは、runResearch()自身ではなくこのAdapter。
+export {
+  runResearchCapability,
+  mapResearchResultToCapabilityResult,
+} from "./capabilityAdapter";

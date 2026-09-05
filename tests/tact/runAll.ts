@@ -42,6 +42,7 @@ import { run as runEpisode } from "./orchestrator/episode.test";
 import { run as runModelRouter } from "./orchestrator/modelRouter.test";
 import { run as runTaskContext } from "./orchestrator/taskContext.test";
 import { run as runExecutor } from "./orchestrator/executor.test";
+import { run as runCapabilityInvocationDecoupling } from "./orchestrator/capabilityInvocationDecoupling.test";
 import { run as runDeriveAnswerConfidence } from "./confidence/deriveAnswerConfidence.test";
 import { run as runConfidenceExecutorWiring } from "./confidence/executorWiring.test";
 import { run as runGenerateLLMAnswerRetry } from "./research/generateLLMAnswerRetry.test";
@@ -102,6 +103,7 @@ import { run as runBotReceiveBotMessage } from "./bot/receiveBotMessage.test";
 import { run as runBotExecuteBotActions } from "./bot/executeBotActions.test";
 import { run as runBotIdentityStore } from "./bot/identityStore.test";
 import { run as runBotConversationConnector } from "./bot/conversationConnector.test";
+import { run as runBotTrustedConversationTurn } from "./bot/trustedConversationTurn.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -119,6 +121,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "orchestrator/modelRouter", run: runModelRouter },
   { name: "orchestrator/taskContext", run: runTaskContext },
   { name: "orchestrator/executor", run: runExecutor },
+  { name: "orchestrator/capabilityInvocationDecoupling", run: runCapabilityInvocationDecoupling },
   { name: "confidence/deriveAnswerConfidence", run: runDeriveAnswerConfidence },
   { name: "confidence/executorWiring", run: runConfidenceExecutorWiring },
   { name: "research/generateLLMAnswerRetry", run: runGenerateLLMAnswerRetry },
@@ -179,6 +182,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "bot/executeBotActions", run: runBotExecuteBotActions },
   { name: "bot/identityStore", run: runBotIdentityStore },
   { name: "bot/conversationConnector", run: runBotConversationConnector },
+  { name: "bot/trustedConversationTurn", run: runBotTrustedConversationTurn },
 ];
 
 async function main() {

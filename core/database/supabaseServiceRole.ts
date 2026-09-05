@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // =========================
-// Supabase Service Role Client (BOT-P2)
+// Supabase Service Role Client (BOT-P2 / BOT-P2.5)
 // =========================
 //
 // core/database/supabase.ts(既存、anon key固定)とは別の、TACT内で
@@ -17,18 +17,23 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 //       20260830010000_create_tact_bot_identity_tables.sql参照)
 //   - core/tact-bot/conversationLink/supabaseConversationLinkStore.ts
 //       (tact_bot_conversation_links: 同上)
-//   - core/tact-bot/connector/conversationConnector.ts
-//       (既存core/tact-conversation/store.tsの各関数へ、通常のuser
-//       access tokenの代わりにservice role keyを「accessToken」として
-//       渡す。store.ts側は auth.uid()=user_id等のRLSに依存する
-//       Stage1テーブル(tact_conversations等)を対象とするため、RLSは
-//       bypassされるが、store.tsの各関数は同時に明示的な
-//       `.eq("user_id", userId)`等のapplication-level filterも
-//       行っている(store.ts冒頭コメント参照)。呼び出し元
-//       (conversationConnector.ts)が、外部Channel userの主張ではなく
-//       identity resolver(core/tact-bot/identity/)がserver側で
-//       解決した正規のtact_user_idだけをこのuserIdとして渡す限り、
-//       他userのConversationへは到達しない)。
+//   - core/tact-bot/execution/trustedConversationTurn.ts
+//       (Trusted Bot Execution Boundary、BOT-P2.5。既存
+//       core/tact-conversation/store.tsの各関数へ、通常のuser access
+//       tokenの代わりにservice role keyを渡す。store.ts側は
+//       auth.uid()=user_id等のRLSに依存するStage1テーブル
+//       (tact_conversations等)を対象とするため、RLSはbypassされるが、
+//       store.tsの各関数は同時に明示的な`.eq("user_id", userId)`等の
+//       application-level filterも行っている(store.ts冒頭コメント
+//       参照)。呼び出し元(trustedConversationTurn.ts)が、外部Channel
+//       userの主張ではなくidentity resolver(core/tact-bot/identity/)
+//       がserver側で解決した正規のtact_user_idだけをこのuserIdとして
+//       渡す限り、他userのConversationへは到達しない。
+//       BOT-P2.5: この境界より外側(core/tact-bot/connector/
+//       conversationConnector.ts含む)は、service role keyという値
+//       そのものを一切扱わない——「Botがservice role JWTを使って
+//       ユーザー本人として認証されたように見せる」構造を避けるため、
+//       key読み出しをこの1関数だけに閉じ込める)。
 //
 // それ以外のCore module(core/tact-research・core/tact-orchestrator・
 // core/tact-core等)からは一切importしないこと。
@@ -44,10 +49,14 @@ export function isServiceRoleConfigured(): boolean {
 
 }
 
-// service role keyの生の文字列。既存のcore/tact-conversation/store.ts
-// のcreateRequestScopedClient(accessToken)へ、通常のuser access token
+// service role keyの生の文字列。core/tact-bot/execution/
+// trustedConversationTurn.ts(Trusted Bot Execution Boundary)だけが
+// 呼び出し、既存のcore/tact-conversation/store.tsの
+// createRequestScopedClient(accessToken)へ、通常のuser access token
 // の代わりにそのまま渡す(store.ts自体は変更しない、token-agnostic
-// design)ためのもの。
+// design)。それ以外のcode(core/tact-bot/connector/等)はこの関数を
+// 直接呼ばない——生のkey文字列がtrustedConversationTurn.tsの外へ
+// 出ないようにするため。
 export function getServiceRoleKey(): string | null {
 
   return isServiceRoleConfigured() ? process.env.SUPABASE_SERVICE_ROLE_KEY! : null;

@@ -30,6 +30,17 @@ export function bootstrapTactCapabilities(): void {
     return;
   }
 
+  // Architecture Migration Phase A(Capability Invocation
+  // Decoupling)後も、"research"として登録する実体はrunResearch()
+  // 自身のまま変更していない(既存の多数のtest——
+  // registerCapability<ResearchParams, ResearchResult>("research", mock)
+  // で"research"を上書きするCategory B Harness、Phase20〜93で確立
+  // 済み——が変更無しでそのまま機能するため)。ResearchParams/
+  // ResearchResultの内部構造をcore/tact-orchestrator/executor.tsへ
+  // 持ち込まないという目的は、executor.ts側がCapability名"research"の
+  // 場合にcore/tact-research/capabilityAdapter.tsのrunResearchCapability()
+  // (invokeCapability("research", ...)経由でこの登録を引く薄い
+  // Adapter)を呼ぶことで達成する(executor.ts参照)。
   registerCapability("research", runResearch);
 
   registerCapability("design", runDesign);

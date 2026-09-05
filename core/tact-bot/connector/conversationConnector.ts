@@ -1,5 +1,5 @@
 // =========================
-// TACT Bot — Conversation Connector (BOT-P2)
+// TACT Bot — Conversation Connector (BOT-P2 / BOT-P2.5)
 // =========================
 //
 // BotCoreConnector(BOT-P1のtyped boundary)の、実際のTACT
@@ -10,38 +10,41 @@
 //   外部thread ⇄ TACT conversation解決
 //   (core/tact-bot/conversationLink/)
 //     ↓
+//   core/tact-bot/execution/trustedConversationTurn.tsの
+//   runConversationTurnAsTrustedActor()
+//   (BOT-P2.5、Trusted Bot Execution Boundary。内部では
 //   core/tact-conversation/orchestration.tsのrunConversationTurn()
-//   (BOT-P2で追加。Web(app/api/tact/tact-conversations/route.ts)と
-//   全く同じConversation解決+Orchestrator実行経路)
+//   [shared conversation turn logic]を呼ぶ——Web
+//   (app/api/tact/tact-conversations/route.ts)と全く同じConversation
+//   解決+Orchestrator実行経路)
 //     ↓
 //   ConversationMessage / Conversation
 //     ↓
 //   BotAction[](reply / deliver_result)
 //
-// Security設計(BOT-P2投資調査、詳細はcore/database/
-// supabaseServiceRole.tsのコメント参照): この関数はTACT userへの
-// 書き込みをidentity解決済み(context.identity !== null)の場合のみ
-// 行う。書き込みに使うuserIdは常にidentity resolver
-// (core/tact-bot/identity/)がserver側で解決した`context.identity.
-// tactUserId`であり、外部Channel messageが主張する値をそのまま
-// 信用することはない。accessTokenにはservice role keyを使うが、
-// この関数(および呼び出すrunConversationTurn→store.tsの各関数)は
-// 常にuserIdによる明示的なフィルタを伴うため、RLSがbypassされても
-// 他userのConversationへは到達しない。
+// Security設計(BOT-P2.5): このfileはservice role keyという値を
+// 一切扱わない(import・保持・DI経由での受け渡しのいずれも無い)。
+// Trusted Bot Execution Boundary(core/tact-bot/execution/
+// trustedConversationTurn.ts)だけがcore/database/
+// supabaseServiceRole.tsを読み、rawなkey文字列をこのfileの外へ
+// 渡さない。このfileはidentity解決済み(context.identity !== null)の
+// 場合のみ、その`context.identity.tactUserId`(server-side identity
+// resolverが検証済みの値、外部Channel messageが主張する値ではない)を
+// 渡してTrusted Bot Execution Boundaryを呼び出すだけであり、
+// Conversation business logic自体は一切複製しない。
 //
-// テスト容易性のため、実際の依存(runConversationTurn・
-// conversation link store・service role key)はConstructor Injection
-// する(createConversationBotCoreConnector())。本番配線は
+// テスト容易性のため、実際の依存(trusted actor turn実行・
+// conversation link store)はConstructor Injection する
+// (createConversationBotCoreConnector())。本番配線は
 // createSupabaseConversationBotCoreConnector()が行う
 // (BOT-P1のnotConnectedConnector.tsと同じ「pure logicとreal wiringを
 // 分離する」方針)。
 
-import type {
-  RunConversationTurnParams,
-  RunConversationTurnResult,
-} from "../../tact-conversation";
-import { runConversationTurn } from "../../tact-conversation";
-import { getServiceRoleKey } from "../../database/supabaseServiceRole";
+import {
+  runConversationTurnAsTrustedActor,
+  type RunConversationTurnAsTrustedActorParams,
+  type RunConversationTurnAsTrustedActorResult,
+} from "../execution/trustedConversationTurn";
 import {
   createConversationLink,
   findConversationLink,
@@ -66,16 +69,18 @@ export interface ConversationLinkCreate extends ConversationLinkLookup {
 
 export interface ConversationBotCoreConnectorDeps {
 
-  runTurn: (params: RunConversationTurnParams) => Promise<RunConversationTurnResult>;
+  // Trusted Bot Execution Boundary(core/tact-bot/execution/
+  // trustedConversationTurn.ts)を呼ぶ。このinterfaceにaccessToken/
+  // service role key等の生Credentialを表すfieldは存在しない
+  // (BOT-P2.5絶対条件: このConnectorはCredentialという概念自体を
+  // 扱わない)。
+  runTrustedTurn: (
+    params: RunConversationTurnAsTrustedActorParams
+  ) => Promise<RunConversationTurnAsTrustedActorResult>;
 
   findLink: (params: ConversationLinkLookup) => Promise<string | null>;
 
   createLink: (params: ConversationLinkCreate) => Promise<boolean>;
-
-  // service role key(またはBOT-P2以降の他の実行用token)。nullの場合、
-  // 「Botの実行基盤が未設定」として安全に停止する(typed boundary
-  // fallback、Coreへは一切書き込まない)。
-  getAccessToken: () => string | null;
 
   // 将来のaccount linking URL(BOT-P2ではSlack OAuth等の実UIは
   // 実装しない。文字列を差し込めるようにするだけ)。
@@ -118,7 +123,7 @@ function summarize(content: string): string {
 // Artifactが紐付いた場合→deliver_result。それ以外の新しいAction種別
 // (request_approval等)は今回作らない(BOT-P4のscope)。
 function toBotActions(
-  turn: Extract<RunConversationTurnResult, { ok: true }>,
+  turn: Extract<RunConversationTurnAsTrustedActorResult, { ok: true }>,
   target: BotActionTarget,
   inReplyToMessageId: string
 ): BotAction[] {
@@ -175,7 +180,8 @@ export function createConversationBotCoreConnector(
       const target = targetFor(context);
       const inReplyToMessageId = context.message.messageId;
 
-      // identity未解決 → 業務実行しない(絶対条件)。
+      // identity未解決 → 業務実行しない(絶対条件)。Trusted Bot
+      // Execution Boundaryは一切呼ばない。
       if (!context.identity) {
 
         return [
@@ -189,22 +195,7 @@ export function createConversationBotCoreConnector(
 
       }
 
-      const accessToken = deps.getAccessToken();
-
-      // Bot専用実行基盤(service role key)が未設定 → 安全に停止する
-      // (typed boundary fallback、Coreへは一切書き込まない)。
-      if (!accessToken) {
-
-        return [
-          {
-            kind: "reply",
-            target,
-            inReplyToMessageId,
-            text: "TACTとの接続はまだ設定が完了していません。しばらくお待ちください。",
-          },
-        ];
-
-      }
+      const tactUserId = context.identity.tactUserId;
 
       const { channel, conversation: externalConversation } = context.message;
       const linkable = isLinkableChannel(channel);
@@ -221,20 +212,42 @@ export function createConversationBotCoreConnector(
         ? await deps.findLink(linkLookup)
         : null;
 
-      let turn = await deps.runTurn({
-        userId: context.identity.tactUserId,
-        accessToken,
+      let turn = await deps.runTrustedTurn({
+        tactUserId,
         content: context.normalizedInput,
         conversationId: existingTactConversationId ?? undefined,
       });
 
-      // Link先のConversationが既に存在しない(削除済み等)場合のみ、
-      // 新規Conversationとして1回だけ再試行する(無限retryはしない)。
-      if (!turn.ok && existingTactConversationId) {
+      // Bot専用のTrusted Bot Execution Boundaryが未設定(service role
+      // key未設定)の場合、retryせず即座に安全なmessageを返す
+      // (「未設定」はConversationの状態とは無関係なため、
+      // conversationId無しで再試行しても意味が無い)。
+      if (!turn.ok && turn.error === "trusted_execution_not_configured") {
 
-        turn = await deps.runTurn({
-          userId: context.identity.tactUserId,
-          accessToken,
+        return [
+          {
+            kind: "reply",
+            target,
+            inReplyToMessageId,
+            text: "TACTとの接続はまだ設定が完了していません。しばらくお待ちください。",
+          },
+        ];
+
+      }
+
+      // Link先のConversationが既に存在しない(削除済み・他userへの
+      // 誤ったlink等)場合のみ、新規Conversationとして1回だけ再試行
+      // する(無限retryはしない。stale/wrongなlinkが他userの
+      // Conversationへのアクセスを許すことはない——
+      // runConversationTurnAsTrustedActor()→runConversationTurn()の
+      // getConversation()呼び出しは常にtactUserIdによる所有者確認を
+      // 経由するため、他user所有のconversationIdは"conversation_not_
+      // found"として拒否される、詳細はcore/tact-conversation/
+      // orchestration.ts参照)。
+      if (!turn.ok && turn.error === "conversation_not_found" && existingTactConversationId) {
+
+        turn = await deps.runTrustedTurn({
+          tactUserId,
           content: context.normalizedInput,
         });
 
@@ -283,10 +296,9 @@ export function createSupabaseConversationBotCoreConnector(
 ): BotCoreConnector {
 
   return createConversationBotCoreConnector({
-    runTurn: runConversationTurn,
+    runTrustedTurn: runConversationTurnAsTrustedActor,
     findLink: findConversationLink,
     createLink: createConversationLink,
-    getAccessToken: getServiceRoleKey,
     accountLinkingUrl: options.accountLinkingUrl,
   });
 

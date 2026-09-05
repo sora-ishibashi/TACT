@@ -381,7 +381,7 @@ export async function runConversationOrchestration(
 }
 
 // =========================
-// runConversationTurn (BOT-P2)
+// runConversationTurn — shared conversation turn logic (BOT-P2/BOT-P2.5)
 // =========================
 //
 // app/api/tact/tact-conversations/route.tsのPOST handlerが持つ
@@ -389,10 +389,7 @@ export async function runConversationOrchestration(
 // →runConversationOrchestration()→最新状態を再取得」という一連の
 // 流れを、HTTP(NextRequest/NextResponse)から独立した共通関数として
 // 抽出したもの。route.ts自体はこの関数を呼ぶよう変更していない
-// (既存Web挙動に一切影響を与えない、絶対条件)。core/tact-bot/の
-// Conversation Connector(BOT-P2)が、Web(route.ts)と全く同じ
-// Conversation/Orchestrator実行経路を再利用するために、ここから
-// 呼び出す。
+// (既存Web挙動に一切影響を与えない、絶対条件)。
 //
 // 「Botに独自のConversation管理を作らない」という方針を、
 // この関数自体がroute.tsのロジックを複製せず1箇所に集約することで
@@ -400,16 +397,21 @@ export async function runConversationOrchestration(
 // 意図的に含めない(BOT-P2時点でBotはこれらを使わないため。将来
 // 必要になれば、この関数へoptional paramとして追加する)。
 //
-// 呼び出し元がuserId/accessTokenとしてどんな値を渡すかは、この関数の
-// 関知するところではない(既存のstore.ts関数と同じ、token-agnostic
-// design)。Web routeは実Supabase Auth JWTを渡す。Bot Conversation
-// Connector(core/tact-bot/connector/conversationConnector.ts)は、
-// identity resolver(core/tact-bot/identity/)で解決済みのtactUserIdと、
-// Bot専用のservice role keyを渡す——「identity解決済みの場合のみ・
-// 狭いconnector内だけでservice roleを使う」というBOT-P2のsecurity
-// 設計は、この関数の外側(呼び出し元)の責務であり、この関数自体は
-// 何がaccessTokenとして渡されたかを判断しない(token-agnostic)。
-
+// BOT-P2.5(投資調査): この関数自体はaccessTokenが「本物のuser JWTか、
+// それ以外のtrusted credentialか」を判断しない(token-agnostic、既存
+// store.tsの設計と同じ)。BOT-P2時点ではcore/tact-bot/の
+// Conversation ConnectorがこのToken-agnosticな性質を利用し、Bot用の
+// service role keyを"accessToken"としてこの関数へ直接渡していたが、
+// これは「service role keyをuser access tokenの代用品として扱う」
+// ように見える設計であり、Web(本物のuser JWT)とBot(server-side
+// trusted execution)の認証境界が曖昧になっていた(BOT-P2.5で修正)。
+//
+// この関数は「shared conversation turn logic」というレイヤーに
+// 意図的に留め、代わりに以下の2つの明示的な境界関数を経由させる
+// (このファイル内のrunConversationTurnAsAuthenticatedUser、および
+// core/tact-bot/execution/trustedConversationTurn.tsの
+// runConversationTurnAsTrustedActor)。この関数を直接呼ぶ新しい
+// 呼び出し元を増やさないこと——必ずどちらかの境界関数を経由する。
 export interface RunConversationTurnParams {
 
   userId: string;
@@ -488,6 +490,30 @@ export async function runConversationTurn(
     (await getConversation(conversation.id, userId, accessToken)) ?? turn.conversation;
 
   return { ok: true, ...turn, conversation: refreshedConversation };
+
+}
+
+// =========================
+// runConversationTurnAsAuthenticatedUser — Web authenticated execution
+// boundary (BOT-P2.5)
+// =========================
+//
+// Web(app/api/tact/tact-conversations/route.ts等、将来この共通関数へ
+// 移行する場合)が呼ぶ想定の、唯一のWeb向け境界。呼び出し元は
+// accessTokenが「core/auth/getAuthenticatedUser.ts(Supabase
+// auth.getUser())で検証済みの、まさにparams.userId本人のSupabase Auth
+// JWTである」ことを保証してから呼び出すこと——このrelation自体は
+// この関数の外側(呼び出し元)の責務であり、この関数自体は追加の
+// 検証を行わない(既存のgetCurrentUserContext()の役割を重複させない)。
+//
+// 実装はrunConversationTurn()(shared conversation turn logic)を
+// そのまま呼ぶだけであり、Web固有の追加ロジックは持たない
+// (Web/Botで「どのCredentialを使うか」という境界の意味だけが違う)。
+export async function runConversationTurnAsAuthenticatedUser(
+  params: RunConversationTurnParams
+): Promise<RunConversationTurnResult> {
+
+  return runConversationTurn(params);
 
 }
 

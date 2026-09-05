@@ -2,13 +2,19 @@ import { invokeCapability } from "../tact-core/capabilities/registry";
 import { runChat } from "../tact-intent/chatHandler";
 import { buildTaskContext } from "./taskContext";
 import { resolveModelRouting } from "./modelRouter";
-import { deriveAnswerConfidence } from "./confidence";
+// Architecture Migration Phase A: "research"の場合のみ、Capability
+// InvocationRequest⇄ResearchParams/ResearchResultの変換を担う薄い
+// Adapter(core/tact-research/capabilityAdapter.ts参照)。
+// ResearchParams/ResearchResult自体はここではimportしない。
+import { runResearchCapability } from "../tact-research/capabilityAdapter";
 import { LLMProviderError } from "../llm/types";
 import type { LLMProviderFailureReason } from "../llm/types";
 import type { CoreCapability, LoadContextParams } from "../tact-core/types";
-import type { ResearchResult, ResearchParams } from "../tact-research/types";
 import type { Task, TaskExecutionSummary } from "./task";
-import type { MemoryReference } from "./types";
+import type {
+  CapabilityInvocationRequest,
+  CapabilityInvocationResult,
+} from "./types";
 import type { TaskContext } from "./taskContext";
 import type { ConcurrencyGovernor } from "./concurrencyGovernor";
 import type { AttachmentEvidence } from "../tact-attachment/types";
@@ -20,9 +26,10 @@ import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspa
 // 一時的失敗の最小限のRetry (Phase 19)
 // =========================
 //
-// 対象範囲: chat経路・research以外のCapability経路(いずれもExecutor
-// から見て「単発の外部呼び出し1回」であり、Retryのコスト増加が
-// 呼び出し1回分に限定できる)。research経路は対象外とする——
+// 対象範囲: chat経路・Capability Registry経由の経路(いずれも
+// Executorから見て「単発の外部呼び出し1回」であり、Retryのコスト
+// 増加が呼び出し1回分に限定できる)。ただし"research"は
+// RETRY_EXEMPT_CAPABILITIESにより明示的に除外する——
 // invokeCapability("research", ...)はSearch(既に自前でTavily→Brave
 // fallbackを持つ、STEP151)+LLM 1回という複数ステップの内部パイプ
 // ラインであり、Task全体をRetryするとSearch呼び出しごと再実行され、
@@ -32,6 +39,13 @@ import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspa
 // Capability境界付近の最小変更」を超える)。ResearchResult.metadata.
 // llmFailureReason(STEP184で既に構造化済み)は将来Research自身が
 // 内部Retryを持つ場合の判定材料として使えるが、今回は変更しない。
+//
+// Architecture Migration Phase A(Capability Invocation Decoupling)
+// 以降、Capability呼び出し自体はCapability名に関わらず単一の経路を
+// 通るため、この「research以外だけRetryする」という区別を、コード
+// 分岐ではなくこの1つの許可リストとして明示する(絶対条件: 「何を
+// Retryしないか」を暗黙のCapability名一致に埋め込まない)。
+const RETRY_EXEMPT_CAPABILITIES: ReadonlySet<string> = new Set(["research"]);
 //
 // core/llm/runLLMWithFallback.ts(STEP168、Legacy Workflow向けの
 // Provider横断フォールバック層)とは意図的に依存しない
@@ -110,6 +124,26 @@ export async function withTemporaryFailureRetry<T>(
 
 }
 
+// Architecture Migration Phase A: invokeCapability()の戻り値
+// (unknown)が、Orchestratorの語彙(CapabilityInvocationResult、
+// core/tact-orchestrator/types.ts)に沿って結果を返すCapability
+// (Adapter)由来かどうかを判定する。判定条件は「successフィールドを
+// 持つオブジェクトかどうか」だけであり、Capability名による分岐では
+// ない(絶対条件: Capability固有分岐を増やさない)。持たない場合は
+// 既存(Phase4〜)の汎用duck-typing経路(`answer`フィールド or
+// JSON.stringify)にfall backする。
+function isCapabilityInvocationResult(
+  value: unknown
+): value is CapabilityInvocationResult {
+
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "success" in value
+  );
+
+}
+
 // =========================
 // executeTask / runTasks (Phase 3、Phase 4でTaskContext対応)
 // =========================
@@ -125,45 +159,6 @@ export async function withTemporaryFailureRetry<T>(
 // core/tact-research・core/tact-designのどちらもOrchestrator/Task
 // 概念を一切知らないため、Sub-agentがさらにSub-agentを生成する経路は
 // 構造的に存在しない。
-
-// =========================
-// buildMemoryReferences(Research実行結果から)
-// =========================
-//
-// STEP208時点でPersistent CoreはUser Scopeのみ実装のため、scopeは
-// 常に"user"として扱う。Organization/Project/Conversation Scope対応時
-// はここも合わせて拡張する。
-//
-// 重要(Phase 4での位置づけの明確化): これはTaskContext.memoryReferences
-// (「Taskに提示された=関連候補として渡した」)とは別物で、「Researchが
-// 実際に回答へ使った」実データ(ResearchMetadata.usedKnowledgeIds等)
-// から作る。「渡した」と「使った」を混同しない(STEP195以来の既存方針)。
-//
-// Phase 20: isTemporaryFailure()と同じ理由でexportする(Step10)。
-// Research Evidence flow(ResearchResult.metadata.used*Ids →
-// MemoryReference[])をEvaluation Harnessが実LLM/Search無しで検証
-// できるようにするための最小限の変更。
-export function buildMemoryReferencesFromResearch(
-  result: ResearchResult
-): MemoryReference[] {
-
-  const refs: MemoryReference[] = [];
-
-  for (const id of result.metadata.usedKnowledgeIds) {
-    refs.push({ kind: "knowledge", id, scope: "user" });
-  }
-
-  for (const id of result.metadata.usedMemoryIds) {
-    refs.push({ kind: "memory", id, scope: "user" });
-  }
-
-  for (const id of result.metadata.usedExampleIds) {
-    refs.push({ kind: "example", id, scope: "user" });
-  }
-
-  return refs;
-
-}
 
 // =========================
 // composeInputWithDependencies
@@ -198,19 +193,42 @@ function composeInputWithDependencies(
 // executeTask
 // =========================
 //
-// assignedCapabilityが指定されている場合のみ、既存Capability Registry
+// assignedCapabilityが指定されている場合、既存Capability Registry
 // (core/tact-core/capabilities/registry.ts、STEP176)のinvokeCapability()
 // を経由する。新しいCapability呼び出し機構は作らない(絶対条件3)。
-// Research(assignedCapability === "research")には、taskContext.coreContext
-// (このTask専用に絞り込み済みのCoreContext)をそのまま渡す。既存の
-// ResearchParams.context契約(core/tact-research/types.ts)は変更しない
-// ——値の中身をOrchestrator側で絞り込むだけであり、型は同じ
-// CoreContextのまま(絶対条件: 既存APIを変更せずOrchestrator側で
-// Contextを構築する)。
+//
+// Architecture Migration Phase A(Capability Invocation Decoupling):
+// 以前はここに`if (task.assignedCapability === "research")`という
+// 分岐があり、その中でResearchParams(core/tact-research/types.ts)の
+// 内部構造(options.llmProvider/llmModel/tableSchema等)をOrchestrator
+// 自身が組み立て、戻り値のResearchResultの各フィールド(evidence/
+// keyFindings/presentations等)を直接読んでTaskExecutionSummaryへ
+// 転記していた。現在はCapability名に関わらず同じRequest構築・同じ
+// Retry方針・同じ結果転記(TaskExecutionSummaryの語彙をそのまま転記
+// するだけ)を1つの経路で行う。ResearchParams/ResearchResultの
+// 構築・解釈自体は、Requestを実際にCapabilityへ渡す直前の1点
+// (下記invoke、"research"の場合のみ)に切り出し、
+// core/tact-research/capabilityAdapter.tsのrunResearchCapability()
+// (CapabilityInvocationRequest⇄ResearchParams/ResearchResultの
+// 変換を担う薄いAdapter)へ委譲する——このためexecuteTask()自体は
+// ResearchParams/ResearchResultを一切importしない。"research"だけの
+// 名前分岐がinvoke()の中に残っているのは、Researchが唯一
+// Orchestrator語彙とは別の公開契約(ResearchParams/ResearchResult)を
+// 持つCapabilityであり、かつ多数の既存test(Phase20〜93、
+// registerCapability<ResearchParams, ResearchResult>("research", mock)
+// で"research"を上書きするCategory B Harness)がその契約に依存して
+// いるため、後方互換性を保ったままParams構築/Result解釈だけを
+// executor.tsから追い出すための最小限の分岐である(絶対条件12
+// 「Capability固有分岐を増やさない」はTaskExecutionSummaryへの転記
+// ロジック自体には適用されている——research以外のCapabilityが将来
+// 増えても、転記ロジックを変更する必要はない)。Research自体の実処理
+// ・結果内容は一切変更していない(絶対条件: Researchの挙動を
+// 変えない)。
 //
 // assignedCapability未指定の場合は、core/tact-intent/chatHandler.ts
 // (STEP216)のrunChat()を直接呼ぶ。chatはCapability Registryへ
-// registerCapability()されていない既存の位置づけを変更しない。
+// registerCapability()されていない既存の位置づけを変更しない
+// (今回のPhaseでも変更しない)。
 //
 // Phase 7: 実行前に必ずmodelRouter.tsのresolveModelRouting(task)を
 // 呼ぶ(STEP4)。解決に失敗した場合(未知のProvider・未実装Provider・
@@ -259,114 +277,141 @@ export async function executeTask(
 
   try {
 
-    if (task.assignedCapability === "research") {
+    if (task.assignedCapability) {
 
-      const result = await invokeCapability<ResearchParams, ResearchResult>(
-        "research",
-        {
-          query: input,
-          context: taskContext.coreContext,
-          attachmentEvidence: selectAttachmentEvidence(input, attachmentEvidence),
-          // LW-P3: workspaceEvidenceは既にclient側のWorkspace Context
-          // Resolver(core/tact-context-source/localWorkspace/resolver.ts)
-          // でbounded済み(最大3file・合計最大5万文字)のため、
-          // attachmentEvidenceのようなTask単位の追加selectionは行わず
-          // そのまま渡す(絶対条件10: 追加のLLM/API呼び出しを増やさない
-          // 範囲での最小変更)。
-          workspaceEvidence,
-          // Phase90: task.tableSchema(Table要求を事前検知できた場合の
-          // 列構成・要求件数)をResearchOptionsへそのまま橋渡しする。
-          // 省略時(既存Phase1〜89のTask)はundefinedのまま、既存挙動を
-          // 維持する。
-          options: { llmProvider: provider, llmModel: model, tableSchema: task.tableSchema },
-        },
-        core
-      );
+      const capabilityName = task.assignedCapability;
 
-      return {
+      // Architecture Migration Phase A: Capability名に関わらず同じ
+      // Requestを構築する。Research以外のCapabilityがattachmentEvidence/
+      // workspaceEvidence/provider/model/tableSchemaを使うかどうかは
+      // 各Capability(のAdapter)側の裁量であり、Orchestratorは強制しない
+      // (絶対条件12: Capability固有分岐を増やさない)。
+      const request: CapabilityInvocationRequest = {
 
-        taskId: task.id,
+        query: input,
 
-        status: result.success ? "completed" : "failed",
-
-        capability: "research",
+        context: taskContext.coreContext,
 
         provider,
 
         model,
 
-        memoryUsed: buildMemoryReferencesFromResearch(result),
+        attachmentEvidence: selectAttachmentEvidence(input, attachmentEvidence),
 
-        durationMs: Date.now() - startedAt,
+        // LW-P3: workspaceEvidenceは既にclient側のWorkspace Context
+        // Resolver(core/tact-context-source/localWorkspace/resolver.ts)
+        // でbounded済み(最大3file・合計最大5万文字)のため、
+        // attachmentEvidenceのようなTask単位の追加selectionは行わず
+        // そのまま渡す(絶対条件10: 追加のLLM/API呼び出しを増やさない
+        // 範囲での最小変更)。
+        workspaceEvidence,
 
-        error: result.success ? undefined : result.errorMessage,
-
-        output: result.success ? result.answer : undefined,
-
-        // Phase 5: memoryCandidateBuilder.tsが「Coreに既にあった情報の
-        // 再掲か、Web検索で得た新しい情報か」を区別するために使う。
-        researchExecutionMode: result.metadata.executionMode,
-
-        evidenceCount: result.evidence.length,
-
-        // Phase76: これまでevidenceCountのみが転記され、実際の
-        // Evidence配列自体は破棄されていた(Repository Evidence)。
-        // TACT Artifact Mutation(core/tact-conversation/orchestration.ts)
-        // がEvidence Blockを構築できるよう、result.evidenceをそのまま
-        // 透過する(新しいRetrieval/LLM呼び出しは発生しない)。
-        evidence: result.evidence,
-
-        keyFindings: result.keyFindings,
-
-        // Phase 21: confidence.tsのderiveAnswerConfidence()(純粋関数、
-        // 新しいLLM呼び出し無し)。result.success===falseの場合は
-        // undefinedを返す(Execution confidenceとの混同を避ける)。
-        answerConfidence: deriveAnswerConfidence(result),
-
-        uncertaintyNote: result.uncertainty,
-
-        presentations: result.presentations,
-
-        presentationWarnings: result.presentationWarnings,
-
-        presentationRequested: result.presentationRequested,
-        frameworkArtifacts: result.frameworkArtifacts,
-        frameworkArtifactRequested: result.frameworkArtifactRequested,
-        analysisArtifactPlan: result.analysisArtifactPlan,
-        cortexArtifactPlanRequested: result.cortexArtifactPlanRequested,
+        // Phase90: task.tableSchema(Table要求を事前検知できた場合の
+        // 列構成・要求件数)をそのまま橋渡しする。省略時(既存Task)は
+        // undefinedのまま、既存挙動を維持する。
+        tableSchema: task.tableSchema,
 
       };
 
-    }
+      // "research"のみ、core/tact-research/capabilityAdapter.tsの
+      // runResearchCapability()を経由する——ResearchParams(options.
+      // llmProvider/llmModel/tableSchema等)の組み立てとResearchResult
+      // の解釈(evidence/answerConfidence等)はそちらへ移設済みであり、
+      // executor.tsはResearchParams/ResearchResultを一切importしない。
+      // runResearchCapability()自体もinvokeCapability("research", ...)
+      // 経由でCapability Registryを引くため、"research"の実行境界は
+      // 引き続きCapability Registryである(絶対条件: Registryを
+      // 迂回しない)。research以外のCapabilityは汎用のinvokeCapability()
+      // を直接呼ぶ(絶対条件12: Capability固有分岐を増やさない)。
+      const invoke = (): Promise<unknown> =>
+        capabilityName === "research"
+          ? runResearchCapability(request, core)
+          : invokeCapability<CapabilityInvocationRequest, unknown>(
+              capabilityName,
+              request,
+              core
+            );
 
-    if (task.assignedCapability) {
+      // "research"は内部にSearch+LLMという複数ステップの独自パイプ
+      // ラインを持ち、Task全体をRetryすると「一時的失敗1回につき
+      // 最大+1 call」という絶対条件(Step6)を満たせないため、
+      // RETRY_EXEMPT_CAPABILITIESにより明示的に除外する(Phase19以来の
+      // 既存方針、上部コメント参照)。
+      const { result: raw, retried } = RETRY_EXEMPT_CAPABILITIES.has(capabilityName)
+        ? { result: await invoke(), retried: false }
+        : await withTemporaryFailureRetry(invoke);
 
-      // research以外の登録済みCapability(例: "design")を、汎用の
-      // 形のまま呼び出す。Orchestrator側でCapability固有の分岐を
-      // 増やさない(絶対条件12)。Research(ResearchOptions)のような
-      // Provider/Model差し込み口を持つとは限らないため、resolveした
-      // provider/modelは強制注入せず記録のみに留める(呼び出し先の
-      // 契約を推測しない)。Phase 4のテスト範囲では実際には到達しない
-      // 経路(Decomposerがresearch以外を割り当てないため)だが、
-      // Task.assignedCapabilityが将来他の値を持つ場合に備えて
-      // Capability Registry経由の呼び出し自体は塞がない。
-      // Phase 19: 単発の外部呼び出しであるため(research経路とは異なり
-      // 内部に複数ステップを持たない)、一時的失敗のRetry対象にする。
-      const { result, retried } = await withTemporaryFailureRetry(() =>
-        invokeCapability<unknown, unknown>(
-          task.assignedCapability!,
-          { query: input, context: taskContext.coreContext },
-          core
-        )
-      );
+      // Capability Registryへ登録された各Capability(のAdapter)が、
+      // CapabilityInvocationResultの語彙(success/output/errorMessage/
+      // memoryUsed/researchExecutionMode/evidence/...)に沿って結果を
+      // 返している場合、Orchestratorはそれをそのまま転記するだけで
+      // よい(値の意味を解釈しない)。"research"は
+      // core/tact-research/capabilityAdapter.tsがこの語彙で返す。
+      if (isCapabilityInvocationResult(raw)) {
 
+        const succeeded = raw.success !== false;
+
+        return {
+
+          taskId: task.id,
+
+          status: succeeded ? "completed" : "failed",
+
+          capability: capabilityName,
+
+          provider,
+
+          model,
+
+          retried: retried || undefined,
+
+          durationMs: Date.now() - startedAt,
+
+          error: succeeded ? undefined : raw.errorMessage,
+
+          output: raw.output,
+
+          memoryUsed: raw.memoryUsed,
+
+          researchExecutionMode: raw.researchExecutionMode,
+
+          evidenceCount: raw.evidenceCount,
+
+          evidence: raw.evidence,
+
+          keyFindings: raw.keyFindings,
+
+          answerConfidence: raw.answerConfidence,
+
+          uncertaintyNote: raw.uncertaintyNote,
+
+          presentations: raw.presentations,
+
+          presentationWarnings: raw.presentationWarnings,
+
+          presentationRequested: raw.presentationRequested,
+          frameworkArtifacts: raw.frameworkArtifacts,
+          frameworkArtifactRequested: raw.frameworkArtifactRequested,
+          analysisArtifactPlan: raw.analysisArtifactPlan,
+          cortexArtifactPlanRequested: raw.cortexArtifactPlanRequested,
+
+        };
+
+      }
+
+      // CapabilityInvocationResultの語彙(successフィールド)を持たない
+      // Capability(例: "design"、テスト専用Capability)向けの、既存
+      // (Phase4〜)の汎用duck-typing経路。Orchestrator側でCapability
+      // 固有の分岐を増やさない(絶対条件12)。挙動はPhase A以前と
+      // 完全に同じ(呼び出しが例外を投げない限りstatus:"completed"、
+      // `answer`フィールドがあればそれをoutputとして使う)。
       return {
 
         taskId: task.id,
 
         status: "completed",
 
-        capability: task.assignedCapability,
+        capability: capabilityName,
 
         provider,
 
@@ -377,9 +422,9 @@ export async function executeTask(
         durationMs: Date.now() - startedAt,
 
         output:
-          typeof result === "object" && result !== null && "answer" in result
-            ? String((result as { answer: unknown }).answer)
-            : JSON.stringify(result),
+          typeof raw === "object" && raw !== null && "answer" in raw
+            ? String((raw as { answer: unknown }).answer)
+            : JSON.stringify(raw),
 
       };
 
