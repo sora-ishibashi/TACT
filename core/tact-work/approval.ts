@@ -164,22 +164,27 @@ export async function requestApproval(
 //     からapproved/rejectedへは絶対に遷移させない
 //     ("invalid_transition")。
 //
-// Phase B3 Final Fix(Terminal Work Approval Safety): Work terminal
-// conditionもresolution invariantとして扱う。Approval resolutionから
-// Workをresumeできるのは`Work.status === "waiting_for_approval"`の
-// 場合だけであり、それ以外(completed/failed/cancelled、またはその他
-// のnon-waiting state)では、Approvalだけを理由にWorkを一切変更しない
-// ("work_not_resumable")。
+// Phase B3 Final Fix / Final Final Fix(Canonical invariant):
+//   Approval can transition a Work only while
+//   Work.status === "waiting_for_approval".
+//     approve: waiting_for_approval -> running
+//     reject:  waiting_for_approval -> failed
+//   Terminal Work(completed/failed/cancelled、またはその他の
+//   non-waiting state)は、approve/rejectのいずれからも一切変更
+//   できない("work_not_resumable")——Approval自体もpendingのまま
+//   残り、通常のapprove/rejectとして解決されない。
 //
-// 背景(発見された穴): WorkにApproval A/Bがpendingの状態でAをreject
-// するとWorkはfailedへ進むが、Bはpendingのまま残る。この状態でBを
-// approveすると、「他にpendingが残っていない」という条件だけを見て
-// Workをrunningへ戻してしまい、rejectによって既にterminalへ確定した
-// Workが復活してしまっていた。この修正により、Work.statusが
-// "waiting_for_approval"であることを確認してからでなければ、
-// Approval自体を"approved"へ進めることすらしない(pending Approvalを
-// 通常のapproveとして解決しない、Phase B3 Final Fix指示Section
-// 「Required approve behavior」Case C/D)。
+// 背景(発見された穴、Final Fix): WorkにApproval A/Bがpendingの状態で
+// Aをrejectすると Workはfailedへ進むが、Bはpendingのまま残る。この
+// 状態でBをapproveすると、「他にpendingが残っていない」という条件
+// だけを見てWorkをrunningへ戻してしまい、rejectによって既に
+// terminalへ確定したWorkが復活してしまっていた(approve側で修正)。
+//
+// 背景(発見された穴、Final Final Fix): 対称的に、既にcompleted等で
+// 確定したWorkに対して古いpending Approvalをrejectすると、そのWork
+// をfailedへ後退させてしまう余地が残っていた(「terminal Workの
+// 復活」とは逆方向の「terminal Workの後退」)。reject側にも同じ
+// guardを適用することで解消した。
 export type ApprovalResolutionOutcome =
   | { status: "not_found" }
   | { status: "already_resolved"; approval: Approval }
@@ -269,14 +274,16 @@ export async function approveApproval(
 // pending Approvalが残っている場合でも、それらを自動でcancelしない
 // (複雑なApproval graphの構築を避けるための意図的な単純化)。
 //
-// Known scope limitation(Phase B3 Final Fix、完了報告に記載):
-// approveApproval()と対称的に、rejectApproval()自体にはWork terminal
-// guardを追加していない(Final Fix指示のRequired testsがapprove側の
-// シナリオのみを対象としているため、今回はscopeを広げない)。理論上、
-// 既にcompleted等で確定したWorkに対して古いpending Approvalを
-// rejectすると、そのWorkをfailedへ後退させてしまう余地が残っている
-// (「terminal Workの復活」とは逆方向の「terminal Workの後退」)。
-// 将来のPhaseで対称的なguardを検討する価値がある。
+// Phase B3 Final Final Fix(Reject Terminal Work Guard): approveApproval()
+// と全く同じCanonical invariant——「Approval resolutionがWorkを
+// 変更できるのはWork.status === "waiting_for_approval"の場合だけ」
+// ——をrejectにも適用する。既にcompleted/failed/cancelled(またはその
+// 他のnon-waiting state)であるWorkに対して古いpending Approvalを
+// rejectしても、そのWorkをfailedへ後退させてはならない
+// ("Approval resolution must never mutate a terminal Work")。
+// approve側と同じ"work_not_resumable"を再利用し、新しいresult
+// variantは追加しない(呼び出し元からは「このApprovalはもう
+// Work操作の対象にならない」という同じ意味として扱える)。
 export async function rejectApproval(
   workId: string,
   userId: string,
@@ -298,6 +305,22 @@ export async function rejectApproval(
 
   if (approval.status !== "pending") {
     return { status: "invalid_transition", approval };
+  }
+
+  // Phase B3 Final Final Fix: Approval/Task/WorkのいずれのUPDATEより
+  // 前に、Workが実際に"waiting_for_approval"であることを確認する。
+  // Work自体が(他の経路・他のApproval経由で)既にterminalまたは
+  // その他のnon-waiting stateへ進んでいた場合は、このApprovalを
+  // 通常のrejectとして解決しない——Approval/Task/Workのいずれも
+  // 一切変更せず、"work_not_resumable"で安全に拒否するだけ。
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return { status: "not_found" };
+  }
+
+  if (work.status !== "waiting_for_approval") {
+    return { status: "work_not_resumable", approval, workStatus: work.status };
   }
 
   await deps.updateApprovalStatus(workId, userId, accessToken, approvalId, "rejected", response);

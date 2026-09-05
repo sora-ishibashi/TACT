@@ -352,6 +352,114 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // =========================
+  // Reject Terminal Work Guard (Final Final Fix)
+  // =========================
+  //
+  // Approval resolution must never mutate a terminal Work——この
+  // 不変条件はreject側にも同様に適用される(approve側と対称)。
+
+  // ---- Final-Final Required 1: failed Work + pending Approval -> reject
+  // -> Work failed維持、Approval pending維持、Task変更なし ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest({ taskId: "task-1" }), "user-1", "fake-token", backend.deps);
+    backend.setWorkStatus("work-1", "failed"); // 他の経路でWorkがfailedへ確定したことを模す
+
+    const outcome = await rejectApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    const stored = await backend.deps.getApproval("work-1", "user-1", "fake-token", approval!.id);
+
+    results.push(
+      check(
+        "[FinalFinal1] failed Work -> reject attemptはwork_not_resumableで拒否され、Work/Approval/Taskいずれも変更されない",
+        outcome.status === "work_not_resumable" &&
+          backend.getWorkStatus("work-1") === "failed" &&
+          stored?.status === "pending" &&
+          backend.taskStatusUpdates.length === 0
+      )
+    );
+  }
+
+  // ---- Final-Final Required 2: completed Work + pending Approval -> reject
+  // -> Work completed維持、Approval pending維持、Task変更なし ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest({ taskId: "task-1" }), "user-1", "fake-token", backend.deps);
+    backend.setWorkStatus("work-1", "completed");
+
+    const outcome = await rejectApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    const stored = await backend.deps.getApproval("work-1", "user-1", "fake-token", approval!.id);
+
+    results.push(
+      check(
+        "[FinalFinal2] completed Work -> reject attemptはwork_not_resumableで拒否され、Work/Approval/Taskいずれも変更されない",
+        outcome.status === "work_not_resumable" &&
+          backend.getWorkStatus("work-1") === "completed" &&
+          stored?.status === "pending" &&
+          backend.taskStatusUpdates.length === 0
+      )
+    );
+  }
+
+  // ---- Final-Final Required 3: cancelled Work + pending Approval -> reject
+  // -> Work cancelled維持、Approval pending維持、Task変更なし ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest({ taskId: "task-1" }), "user-1", "fake-token", backend.deps);
+    backend.setWorkStatus("work-1", "cancelled");
+
+    const outcome = await rejectApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    const stored = await backend.deps.getApproval("work-1", "user-1", "fake-token", approval!.id);
+
+    results.push(
+      check(
+        "[FinalFinal3] cancelled Work -> reject attemptはwork_not_resumableで拒否され、Work/Approval/Taskいずれも変更されない",
+        outcome.status === "work_not_resumable" &&
+          backend.getWorkStatus("work-1") === "cancelled" &&
+          stored?.status === "pending" &&
+          backend.taskStatusUpdates.length === 0
+      )
+    );
+  }
+
+  // ---- Final-Final Required 4: waiting_for_approval + pending Approval -> reject
+  // -> 既存の正常reject挙動を維持(Approval rejected, Task failed, Work failed) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest({ taskId: "task-1" }), "user-1", "fake-token", backend.deps);
+
+    const outcome = await rejectApproval("work-1", "user-1", "fake-token", approval!.id, "却下", backend.deps);
+
+    results.push(
+      check(
+        "[FinalFinal4] waiting_for_approvalでのreject -> 既存正常挙動を維持(rejected/Task failed/Work failed、regressionなし)",
+        outcome.status === "rejected" &&
+          backend.taskStatusUpdates.some((u) => u.taskId === "task-1" && u.status === "failed") &&
+          backend.getWorkStatus("work-1") === "failed"
+      )
+    );
+  }
+
+  // ---- Final-Final Required 5: cross-user reject protectionのregression確認 ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
+
+    const foreignReject = await rejectApproval("work-1", "attacker", "fake-token", approval!.id, undefined, backend.deps);
+
+    const stored = await backend.deps.getApproval("work-1", "user-1", "fake-token", approval!.id);
+
+    results.push(
+      check(
+        "[FinalFinal5] 他userのreject試行はnot_foundで安全に拒否され、Approvalはpendingのまま(regressionなし)",
+        foreignReject.status === "not_found" && stored?.status === "pending"
+      )
+    );
+  }
+
   // ---- Required test 6: waiting_for_approval + 最後の1件 -> approve -> running(正常resumeが壊れていない) ----
   {
     const backend = makeFakeBackend({ "work-1": "user-1" });
