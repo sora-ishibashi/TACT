@@ -1,0 +1,239 @@
+import { createClient } from "@supabase/supabase-js";
+import type {
+  Connection,
+  ConnectionStatus,
+  ConnectionProviderKind,
+  IntegrationService,
+} from "./types";
+
+// =========================
+// TACT Integration — Connection Store (Architecture Migration Phase C1)
+// =========================
+//
+// core/tact-integration/のConnection永続化層。supabase/migrations/
+// 20260907000000_create_tact_connections.sqlを対象とする
+// (Stage1 RLS、auth.uid()=user_id)。
+//
+// 重要(core/tact-conversation/store.ts・core/tact-work/store.tsと
+// 全く同じ理由・同じPattern): core/database/supabase.tsの共有
+// クライアントはanonキーのみで生成されておりSupabaseセッションを
+// 引き継がないため、検証済みのaccess_tokenをAuthorizationヘッダー
+// として持つ、リクエストごとのクライアントを構築する。
+//
+// 絶対条件(RLSをAPIの代わりとして扱わない、既存方針そのまま):
+// RLS前提のクライアントを使う場合でも、各関数は明示的に`.eq(...)`を
+// 伴うクエリを組み立てる。RLSは最後の防御層として維持し、所有者
+// 判定の主たるロジックはこのファイル(アプリケーション層)に置く。
+//
+// Service role keyはこのfileへ一切importしない(core/database/
+// supabaseServiceRole.tsの既存方針通り、Bot Trusted Actor経路でも
+// 通常のuser access token/service role tokenをaccessTokenとして
+// 受け取るだけで、Credentialという値そのものをこのfileが扱うことは
+// 無い)。
+
+function createRequestScopedClient(accessToken: string) {
+
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      global: {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    }
+  );
+
+}
+
+// =========================
+// DB row 型
+// =========================
+
+export interface ConnectionRow {
+  id: string;
+  user_id: string;
+  service: IntegrationService;
+  status: ConnectionStatus;
+  provider: ConnectionProviderKind;
+  provider_connection_ref: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function toConnection(row: ConnectionRow): Connection {
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    service: row.service,
+    status: row.status,
+    provider: row.provider,
+    providerConnectionRef: row.provider_connection_ref,
+    metadata: row.metadata,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+
+}
+
+const CONNECTION_COLUMNS =
+  "id, user_id, service, status, provider, provider_connection_ref, metadata, created_at, updated_at";
+
+// =========================
+// createConnection
+// =========================
+//
+// 絶対条件(Phase C1指示Section8/12): token/credential/secretは
+// paramsにも列にも一切含めない——呼び出し元(Composio Adapter/
+// connection link boundary)はprovider_connection_ref(参照文字列)
+// だけを渡す。
+
+export interface CreateConnectionParams {
+
+  service: IntegrationService;
+
+  provider: ConnectionProviderKind;
+
+  providerConnectionRef: string;
+
+  status?: ConnectionStatus;
+
+  metadata?: Record<string, unknown> | null;
+
+}
+
+export async function createConnection(
+  userId: string,
+  accessToken: string,
+  params: CreateConnectionParams
+): Promise<Connection> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_connections")
+    .insert({
+      user_id: userId,
+      service: params.service,
+      provider: params.provider,
+      provider_connection_ref: params.providerConnectionRef,
+      status: params.status ?? "pending",
+      metadata: params.metadata ?? null,
+    })
+    .select(CONNECTION_COLUMNS)
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return toConnection(data as ConnectionRow);
+
+}
+
+// =========================
+// getConnection
+// =========================
+//
+// 所有者不一致・存在しない場合のいずれもundefinedを返す
+// (core/tact-conversation/store.tsのgetConversation()・
+// core/tact-work/store.tsのgetWork()と同じ既存規約)。
+export async function getConnection(
+  connectionId: string,
+  userId: string,
+  accessToken: string
+): Promise<Connection | undefined> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_connections")
+    .select(CONNECTION_COLUMNS)
+    .eq("id", connectionId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    return undefined;
+  }
+
+  return toConnection(data as ConnectionRow);
+
+}
+
+// =========================
+// listConnectionsForUser
+// =========================
+
+export async function listConnectionsForUser(
+  userId: string,
+  accessToken: string,
+  service?: IntegrationService
+): Promise<Connection[]> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  let query = client
+    .from("tact_connections")
+    .select(CONNECTION_COLUMNS)
+    .eq("user_id", userId);
+
+  if (service) {
+    query = query.eq("service", service);
+  }
+
+  const { data, error } = await query.order("created_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((row) => toConnection(row as ConnectionRow));
+
+}
+
+// =========================
+// updateConnectionStatus
+// =========================
+//
+// Provider側の詳細status(例: Composioの"INITIALIZING"等)は
+// metadataへ格納する呼び出し元の責務とし、この関数自体は
+// Canonical statusとmetadataの更新だけを行う。
+
+export async function updateConnectionStatus(
+  connectionId: string,
+  userId: string,
+  accessToken: string,
+  status: ConnectionStatus,
+  metadata?: Record<string, unknown> | null
+): Promise<void> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const update: Record<string, unknown> = {
+    status,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (metadata !== undefined) {
+    update.metadata = metadata;
+  }
+
+  const { error } = await client
+    .from("tact_connections")
+    .update(update)
+    .eq("id", connectionId)
+    .eq("user_id", userId);
+
+  if (error) {
+    throw error;
+  }
+
+}

@@ -112,6 +112,11 @@ import { run as runBotIdentityStore } from "./bot/identityStore.test";
 import { run as runBotConversationConnector } from "./bot/conversationConnector.test";
 import { run as runBotTrustedConversationTurn } from "./bot/trustedConversationTurn.test";
 import { run as runBotApproval } from "./bot/approval.test";
+import { run as runIntegrationMapping } from "./integration/mapping.test";
+import { run as runIntegrationComposioClient } from "./integration/composioClient.test";
+import { run as runIntegrationGateway } from "./integration/gateway.test";
+import { run as runIntegrationPropose } from "./integration/propose.test";
+import { run as runIntegrationExecution } from "./integration/execution.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -199,6 +204,11 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "bot/conversationConnector", run: runBotConversationConnector },
   { name: "bot/trustedConversationTurn", run: runBotTrustedConversationTurn },
   { name: "bot/approval", run: runBotApproval },
+  { name: "integration/mapping", run: runIntegrationMapping },
+  { name: "integration/composioClient", run: runIntegrationComposioClient },
+  { name: "integration/gateway", run: runIntegrationGateway },
+  { name: "integration/propose", run: runIntegrationPropose },
+  { name: "integration/execution", run: runIntegrationExecution },
 ];
 
 async function main() {

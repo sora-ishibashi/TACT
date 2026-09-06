@@ -8,10 +8,10 @@
 // (core/tact-orchestrator/commander.tsのrunOrchestration()は一切
 // 参照しない)。
 //
-// 依存方向についての補足: このファイルはcore/agent/types.ts
-// (Provider)・core/llm/types.ts(LLMCost)・core/tact-orchestrator/
-// types.ts(CapabilityInvocationResult、Phase Aで新設)を型のみ
-// import する。core/tact-orchestrator側からこのモジュールへの
+// 依存方向についての補足: このファイルはcore/llm/types.ts(LLMCost)・
+// core/tact-orchestrator/types.ts(CapabilityInvocationResult、
+// Phase Aで新設)を型のみimportする。core/tact-orchestrator側から
+// このモジュールへの
 // import は無い(新しい一方向の依存であり、循環参照にはならない。
 // Phase AでCapability Adapterがcore/tact-orchestrator/types.tsを
 // 型のみimportしたのと同じ「共通語彙を再利用する消費者」パターン)。
@@ -24,7 +24,6 @@
 // 実行結果フィールドはRunへ再配置、というARCH-R2の設計をそのまま
 // 反映)。
 
-import type { Provider } from "../agent/types";
 import type { LLMCost } from "../llm/types";
 import type { CapabilityInvocationResult } from "../tact-orchestrator/types";
 
@@ -235,7 +234,16 @@ export interface Run {
 
   capability: string;
 
-  provider?: Provider | null;
+  // Architecture Migration Phase C1: capability(既にstring、Capability
+  // Registryの登録名を自由文字列で持つ)と対称に、providerも自由
+  // 文字列へ拡張した(以前はLLM専用のProvider型("openai"|"gemini"|
+  // "claude")に限定されていた)。Runは元々LLMベースのCapability
+  // attemptだけでなく、Integration Gateway(core/tact-integration/)
+  // 経由のexternal Tool実行attempt(例: "composio")も表す汎用概念で
+  // あり、LLM Provider限定の型では表現できなかった。既存のLLM
+  // Provider値("openai"等)はstringのsubsetとしてそのまま有効
+  // (後方互換、型を緩めただけで意味・既存値は一切変更していない)。
+  provider?: string | null;
 
   model?: string | null;
 
