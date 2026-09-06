@@ -119,6 +119,23 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           !JSON.stringify(state.capturedPayloadAction).toLowerCase().includes("apikey")
       )
     );
+
+    // Architecture Migration Phase C2.1c-a: proposeIntegrationAction()
+    // 経路がproduction routing path(core/tact-work/execution.tsの
+    // onTaskFinished())と同じcanonical lifecycle(proposal時点では
+    // Taskをcompleted/runningへ進めない)を守っていることを直接
+    // 確認する。ProposeIntegrationActionDepsという型自体に
+    // updateTaskStatusが存在しない(下のcompile-time assertion)ため、
+    // この関数はTask statusを一切更新できない——createTask()が返す
+    // WorkTask.status("pending")がそのままApproval作成後も変わらない
+    // ことを、返り値と独立したdeps呼び出し履歴の両方で確認する。
+    results.push(
+      check(
+        "[Phase C2.1c-a] proposeIntegrationAction()はProposeIntegrationActionDepsという型構造上Task statusを更新する手段を持たない(updateTaskStatusが存在しない)ため、createTask()が返すWorkTask.statusは常にpendingのまま(completed/runningへの更新なし)",
+        Object.keys(deps).sort().join(",") === "createTask,requestApproval" &&
+          !("updateTaskStatus" in deps)
+      )
+    );
   }
 
   // ---- Work ownershipが解決できない場合、Approval自体を作らない ----

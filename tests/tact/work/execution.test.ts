@@ -699,6 +699,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         result.answer === "下書きを作成しました"
       )
     );
+
+    results.push(
+      check(
+        "[Phase C2.1c-a] approvalRequirementを返したTaskはupdateTaskStatus()が一切呼ばれず、completedとしてpersistされない(kind='external_write_test'という非Integration汎用approvalRequirementでも同様、Approvalはcompletion前のgateであるという原則を維持)",
+        calls.updateTaskStatusCalls.length === 0
+      )
+    );
   }
 
   // =========================
@@ -811,6 +818,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         calls.requestApprovalCalls.length === 1 &&
           calls.workStatusUpdates[calls.workStatusUpdates.length - 1] === "waiting_for_approval" &&
           !calls.workStatusUpdates.includes("completed")
+      )
+    );
+
+    results.push(
+      check(
+        "[Case1(C2.1c-a)] Approval proposal段階ではupdateTaskStatus()が一切呼ばれず、Taskはcreated時の初期status(pending)のまま(completedとしてpersistしない、Approvalはcompletion前のgate)",
+        calls.updateTaskStatusCalls.length === 0
       )
     );
 

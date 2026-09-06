@@ -19,7 +19,7 @@
 //   - 所有権を偽装したuserId(cross-user)では一切実行に到達しない
 
 import { executeApprovedIntegrationAction, type ExecuteApprovedIntegrationActionDeps } from "../../../core/tact-integration/execution";
-import type { Work, Approval, Run } from "../../../core/tact-work/types";
+import type { Work, Approval, Run, WorkTask } from "../../../core/tact-work/types";
 import type { Connection, IntegrationExecutionResult } from "../../../core/tact-integration/types";
 import { check, summarize, type CheckResult } from "../lib/check";
 
@@ -81,6 +81,20 @@ function makeConnection(overrides: Partial<Connection> = {}): Connection {
   };
 }
 
+// Architecture Migration Phase C2.1c-a-fix: 既定はpending(canonical
+// lifecycle上、Approval承認直後のTaskが実際に持つ状態)。
+function makeTask(overrides: Partial<WorkTask> = {}): WorkTask {
+  return {
+    id: "task-1",
+    workId: "work-1",
+    description: "test",
+    status: "pending",
+    createdAt: "2026-09-07T00:00:00.000Z",
+    updatedAt: "2026-09-07T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function makeRun(overrides: Partial<Run> = {}): Run {
   return {
     id: "run-1",
@@ -105,6 +119,7 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
     getWorkCalls: 0,
     getApprovalCalls: 0,
     getConnectionCalls: 0,
+    listTasksForWorkCalls: 0,
     listRunsForTaskCalls: 0,
     createRunCalls: 0,
     completeRunCalls: 0,
@@ -132,6 +147,11 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
       calls.getConnectionCalls += 1;
       if (userId !== OWNER_USER_ID) return undefined;
       return makeConnection({ id: connectionId });
+    },
+
+    listTasksForWork: async () => {
+      calls.listTasksForWorkCalls += 1;
+      return [makeTask()];
     },
 
     listRunsForTask: async () => {
@@ -351,6 +371,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
+        "[Phase C2.1c-a] Task status update historyが厳密に['running','completed']の順序のみ(completed→runningという巻き戻しが存在しないことの直接証拠)",
+        JSON.stringify(calls.updateTaskStatusCalls.map((c) => c.status)) === JSON.stringify(["running", "completed"])
+      )
+    );
+
+    results.push(
+      check(
         "[Phase C2.1a] 成功後、reconcileWorkCompletionStatus()が呼ばれる(architecture debt A解消)",
         calls.reconcileWorkCompletionStatusCalls === 1
       )
@@ -379,6 +406,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[失敗系] Taskもfailedへ更新される",
         calls.updateTaskStatusCalls[calls.updateTaskStatusCalls.length - 1]?.status === "failed"
+      )
+    );
+
+    results.push(
+      check(
+        "[Phase C2.1c-a] Task status update historyが厳密に['running','failed']の順序のみ(completedを一度も挟まない)",
+        JSON.stringify(calls.updateTaskStatusCalls.map((c) => c.status)) === JSON.stringify(["running", "failed"])
       )
     );
 
@@ -429,6 +463,12 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   }
 
   // ---- Execution deduplication(絶対条件Section21) ----
+  // ---- Case6(C2.1c-a-fix): Taskがcompleted(=実際に成功済みの状態)
+  // であっても、既存completed Run/externalRefがあればalready_executed
+  // semanticsが維持される(Phase C2.1c-a-fixで追加したTask state
+  // preconditionが、このC1.5 dedupより"後"に置かれているため、
+  // completed Taskをtask_not_executableとして誤って弾かないこと
+  // を確認する、最重要regression) ----
   {
     const existingRun = makeRun({
       id: "run-existing",
@@ -437,6 +477,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     });
 
     const { deps, calls } = makeDeps({
+      listTasksForWork: async () => {
+        calls.listTasksForWorkCalls += 1;
+        return [makeTask({ status: "completed" })];
+      },
       listRunsForTask: async () => {
         calls.listRunsForTaskCalls += 1;
         return [existingRun];
@@ -447,11 +491,138 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Dedup] 同一approvalIdで既に成功済みのRunがある場合、already_executedを返しComposioを再実行しない",
+        "[Dedup/Case6] 同一approvalIdで既に成功済みのRunがある場合、Taskがcompletedでもalready_executedを返しComposioを再実行しない(task_not_executableへ誤って倒れない)",
         outcome.status === "already_executed" &&
           (outcome as { run: Run }).run.id === "run-existing" &&
           calls.executeIntegrationActionCalls === 0 &&
-          calls.createRunCalls === 0
+          calls.createRunCalls === 0 &&
+          calls.updateTaskStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- Case1(C2.1c-a-fix): Task pending -> execution開始可能 ----
+  // (既存の「正常系: 承認後...」ブロック(makeDeps()の既定Task=pending
+  // を使用)と、そこに追加済みの['running','completed']厳密一致
+  // assertionが、このCase1の内容をそのまま検証済みのため、重複した
+  // testは追加しない。)
+
+  // ---- Case2(C2.1c-a-fix): Task completed(既存completed Run無し) ->
+  // 新規executionを開始せず安全に停止する ----
+  {
+    const { deps, calls } = makeDeps({
+      listTasksForWork: async () => {
+        calls.listTasksForWorkCalls += 1;
+        return [makeTask({ status: "completed" })];
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Case2] completed Task(既存completed Run無し) -> task_not_executable、provider call 0・Run新規作成0・Task update 0",
+        outcome.status === "task_not_executable" &&
+          (outcome as { taskStatus: string }).taskStatus === "completed" &&
+          calls.executeIntegrationActionCalls === 0 &&
+          calls.createRunCalls === 0 &&
+          calls.updateTaskStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- Case3(C2.1c-a-fix): Task failed(既存completed Run無し) ----
+  {
+    const { deps, calls } = makeDeps({
+      listTasksForWork: async () => {
+        calls.listTasksForWorkCalls += 1;
+        return [makeTask({ status: "failed" })];
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Case3] failed Task(既存completed Run無し) -> task_not_executable、provider call 0・Run新規作成0・Task update 0",
+        outcome.status === "task_not_executable" &&
+          (outcome as { taskStatus: string }).taskStatus === "failed" &&
+          calls.executeIntegrationActionCalls === 0 &&
+          calls.createRunCalls === 0 &&
+          calls.updateTaskStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- Case4(C2.1c-a-fix): Task cancelled(既存completed Run無し) ----
+  {
+    const { deps, calls } = makeDeps({
+      listTasksForWork: async () => {
+        calls.listTasksForWorkCalls += 1;
+        return [makeTask({ status: "cancelled" })];
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Case4] cancelled Task(既存completed Run無し) -> task_not_executable、provider call 0・Run新規作成0・Task update 0",
+        outcome.status === "task_not_executable" &&
+          (outcome as { taskStatus: string }).taskStatus === "cancelled" &&
+          calls.executeIntegrationActionCalls === 0 &&
+          calls.createRunCalls === 0 &&
+          calls.updateTaskStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- Case5(C2.1c-a-fix): Task running(既存completed dedup Run無し)
+  // -> 新規provider callを勝手に開始しない(既存Run dedupとは別の
+  // 防御層——dedupはcompletedのRunだけを見るため、completedに至らず
+  // runningのまま取り残されたケースをここで捕捉する) ----
+  {
+    const { deps, calls } = makeDeps({
+      listTasksForWork: async () => {
+        calls.listTasksForWorkCalls += 1;
+        return [makeTask({ status: "running" })];
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Case5] running Task(既存completed dedup Run無し) -> 新規provider callを開始しない(task_not_executable)",
+        outcome.status === "task_not_executable" &&
+          (outcome as { taskStatus: string }).taskStatus === "running" &&
+          calls.executeIntegrationActionCalls === 0 &&
+          calls.createRunCalls === 0 &&
+          calls.updateTaskStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- Case7(C2.1c-a-fix): Approval.taskIdに対応するTaskが存在しない
+  // (missing/invalid Task、Work/Task/Approvalの対応が壊れている場合を
+  // 含む) ----
+  {
+    const { deps, calls } = makeDeps({
+      listTasksForWork: async () => {
+        calls.listTasksForWorkCalls += 1;
+        return []; // 対応するTaskが見つからない
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Case7] Approval.taskIdに対応するTaskが存在しない -> not_found、provider call 0・Run新規作成0・Task update 0",
+        outcome.status === "not_found" &&
+          calls.executeIntegrationActionCalls === 0 &&
+          calls.createRunCalls === 0 &&
+          calls.updateTaskStatusCalls.length === 0
       )
     );
   }

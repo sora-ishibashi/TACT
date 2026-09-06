@@ -122,6 +122,28 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- Architecture Migration Phase C2.1c-a: Integration write
+  // proposalの実際のシナリオ(Task 1件がpending、同一Taskに紐づく
+  // Approvalがpending) -> Workはterminalへ遷移しない(Case2の直接
+  // 再現) ----
+  {
+    const { deps, calls } = makeDeps(
+      [makeTask({ status: "pending" })],
+      [makeApproval({ status: "pending" })]
+    );
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[C2.1c-a Case2] Task pending + Approval pending(Integration write proposal中)-> Workはcompletedへ確定しない",
+        outcome.status === "no_change" &&
+          outcome.reason === "tasks_not_all_terminal" &&
+          calls.updateWorkStatusCalls.length === 0
+      )
+    );
+  }
+
   // ---- Case 4: Task 2件(failed + pending) -> Workはterminalへ遷移しない ----
   {
     const { deps, calls } = makeDeps([

@@ -246,6 +246,23 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           backend.workStatusUpdates[backend.workStatusUpdates.length - 1] === "failed"
       )
     );
+
+    // Architecture Migration Phase C2.1c-a: rejectApproval()は
+    // ApprovalExecutionDeps経由でもTaskの事前state(getTask相当)を
+    // 一切読まない(型構造上、ApprovalExecutionDepsにTask取得APIが
+    // 存在しない)。そのため、Canonical Work modelの新lifecycle
+    // (Integration write proposal中はTaskがpendingのまま)の下では、
+    // このtask-1へのTask status update呼び出しは実質的に
+    // "pending -> failed"という1回だけの単調な遷移になる
+    // (rejectApproval()自身が複数回のTask status更新を行わないことを
+    // 直接証明する)。
+    results.push(
+      check(
+        "[Phase C2.1c-a] Task status update historyがtask-1について厳密に1回・'failed'のみ(pending -> failedという単調な遷移、completed経由の巻き戻しが無いことの直接証拠)",
+        backend.taskStatusUpdates.filter((u) => u.taskId === "task-1").length === 1 &&
+          backend.taskStatusUpdates.filter((u) => u.taskId === "task-1")[0]?.status === "failed"
+      )
+    );
   }
 
   // =========================

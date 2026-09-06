@@ -317,86 +317,97 @@ export async function runWorkTurn(
         return;
       }
 
-      // Architecture Migration Phase C2.1b-fix2(絶対条件、最重要):
-      // completed→pendingという巻き戻しをTask status historyへ
-      // 持ち込まない。そのため、Integration Taskがaction.kind===
-      // "integration_action"のapprovalRequirementを持つ場合は、
-      // Task statusをpersistする「前」にConnection解決を行い、
-      // 解決できない(none/multiple)場合はupdateTaskStatus()自体を
-      // 呼ばない——createTask()が既に付与した初期status(pending)の
-      // まま据え置く。新しいTask statusは追加しない。
-      if (
-        summary.status === "completed" &&
-        summary.approvalRequirement?.action?.kind === "integration_action"
-      ) {
+      // Architecture Migration Phase C2.1c-a(絶対条件、最重要):
+      // Approvalは「Task completionの後に付随するレビュー」ではなく
+      // 「Task completionそのものの前提となるgate」である(既存の
+      // protected external write sequence: prepare/propose → Approval
+      // → execute external side effectがそのまま根拠——Approvalが
+      // 実行を許可するまで、そのTaskが表す仕事はまだ何も完了していない)。
+      // そのため、approvalRequirementを返したTaskは、この時点では
+      // 一切completedとしてpersistしない——createTask()が付与した
+      // 初期status(pending)のまま据え置く。Approvalが承認され、
+      // 実際にexecuteApprovedIntegrationAction()が実行を開始する
+      // 時点で初めてpending→runningへ進み、その結果でrunning→
+      // completed/failedへ進む(絶対条件: terminal stateから
+      // 非terminalへ戻る、または一度completedにしてから他statusへ
+      // 動かすような非単調な遷移をTask status historyへ持ち込まない)。
+      if (summary.approvalRequirement) {
 
-        const metadata = summary.approvalRequirement.action.metadata as
-          | { service?: unknown }
-          | undefined;
+        if (summary.approvalRequirement.action?.kind === "integration_action") {
 
-        const service = typeof metadata?.service === "string" ? metadata.service : undefined;
+          // Architecture Migration Phase C2.1b由来: Connection解決は
+          // 「Approvalを実際に作ってよいか」を決めるための前段判定
+          // であり、Task status persistenceには一切関与しない
+          // (Provider resolution自体はここへ持ち込まない、
+          // deps.resolveIntegrationConnection()が返す既に
+          // canonical化された結果だけを見る)。
+          const metadata = summary.approvalRequirement.action.metadata as
+            | { service?: unknown }
+            | undefined;
 
-        if (service) {
+          const service = typeof metadata?.service === "string" ? metadata.service : undefined;
 
-          const connectionResolution = await deps.resolveIntegrationConnection({
-            service,
-            userId,
-            accessToken,
-          });
+          if (service) {
 
-          if (connectionResolution.status !== "single") {
+            const connectionResolution = await deps.resolveIntegrationConnection({
+              service,
+              userId,
+              accessToken,
+            });
 
-            // Connection未解決。この依頼はまだ完了していないため、
-            // Taskをcompletedとしてpersistしない(pendingのまま)。
-            // Approvalも作らない(approvalRequirementsへpushしない)。
-            integrationConnectionIssues.push(
-              connectionResolution.status === "none"
-                ? { service, status: "none" }
-                : { service, status: "multiple", count: connectionResolution.count }
-            );
+            if (connectionResolution.status !== "single") {
+
+              // Connection未解決。Approvalを作らない
+              // (approvalRequirementsへpushしない)。Taskは
+              // updateTaskStatus()を一切呼ばずpendingのまま据え置く。
+              integrationConnectionIssues.push(
+                connectionResolution.status === "none"
+                  ? { service, status: "none" }
+                  : { service, status: "multiple", count: connectionResolution.count }
+              );
+
+              return;
+
+            }
+
+            // status === "single": 解決できたconnectionIdをmetadataへ
+            // 追加してからApproval requirementへ積む。Taskは
+            // ここでもcompletedへ進めない(pendingのまま)。
+            approvalRequirements.push({
+              workTaskId,
+              capability: summary.capability,
+              requirement: {
+                ...summary.approvalRequirement,
+                action: {
+                  ...summary.approvalRequirement.action,
+                  metadata: { ...metadata, connectionId: connectionResolution.connectionId },
+                },
+              },
+            });
 
             return;
 
           }
 
-          // status === "single": 解決できたconnectionIdをmetadataへ
-          // 追加した上で、通常通りcompletedとして永続化しApproval
-          // requirementへ積む(既存Phase B3 semantics: Approval待ちの
-          // 提案attempt自体はcompletedとして記録される、を維持)。
-          await deps.updateTaskStatus(work.id, userId, accessToken, workTaskId, summary.status);
-
-          approvalRequirements.push({
-            workTaskId,
-            capability: summary.capability,
-            requirement: {
-              ...summary.approvalRequirement,
-              action: {
-                ...summary.approvalRequirement.action,
-                metadata: { ...metadata, connectionId: connectionResolution.connectionId },
-              },
-            },
-          });
-
-          return;
-
         }
 
-      }
-
-      // TaskExecutionSummary.statusは既にWorkTaskのTaskStatusと同じ
-      // 値集合(pending/running/completed/failed/cancelled)を使う
-      // (ARCH-R2 Section4、Phase B1で既に揃えてある)。
-      await deps.updateTaskStatus(work.id, userId, accessToken, workTaskId, summary.status);
-
-      if (summary.approvalRequirement) {
-
+        // 汎用のapprovalRequirement(kind!=="integration_action"、
+        // またはservice未解決の防御的fallback)。Taskをcompletedへ
+        // 進めず、そのままApproval requirementへ積む。
         approvalRequirements.push({
           workTaskId,
           capability: summary.capability,
           requirement: summary.approvalRequirement,
         });
 
+        return;
+
       }
+
+      // approvalRequirementが無い通常Task: 従来通りTaskExecutionSummary.
+      // statusをそのままpersistする(pending/running/completed/failed/
+      // cancelled、ARCH-R2 Section4、Phase B1で既に揃えてある)。
+      await deps.updateTaskStatus(work.id, userId, accessToken, workTaskId, summary.status);
 
     },
 

@@ -1,6 +1,7 @@
 import {
   getWork,
   getApproval,
+  listTasksForWork,
   listRunsForTask,
   createRun,
   completeRun,
@@ -10,7 +11,7 @@ import {
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "../tact-work/completion";
 import { executeIntegrationAction as defaultExecuteIntegrationAction } from "./gateway";
 import { getConnection as defaultGetConnection } from "./connection";
-import type { Approval, ApprovalStatus, Run, WorkStatus } from "../tact-work/types";
+import type { Approval, ApprovalStatus, Run, TaskStatus, WorkStatus } from "../tact-work/types";
 import type { IntegrationAction, IntegrationService } from "./types";
 
 // =========================
@@ -30,6 +31,11 @@ import type { IntegrationAction, IntegrationService } from "./types";
 //   4. Workの実行可能state確認 (running)
 //   5. Connection ownership確認 (getConnection)
 //   6. action取得 (Approval.payloadから)
+//   6.5. Execution dedup確認 (Section21、既存completed Runの有無)
+//   6.6. Task state precondition確認 (Phase C2.1c-a-fix、新規:
+//        dedupを通過した後、Taskがpendingであることを確認してから
+//        初めて新規Runを作る——completed/failed/cancelled/runningの
+//        いずれからも新規external executionを開始しない)
 //   7. Integration Gatewayへdispatch
 //   8. Run lifecycle記録
 //   9. result返却
@@ -58,6 +64,15 @@ export interface ExecuteApprovedIntegrationActionDeps {
 
   getConnection: typeof defaultGetConnection;
 
+  // Architecture Migration Phase C2.1c-a-fix: 新規external execution
+  // を開始する前に、Taskの現在stateがpendingであることを確認する
+  // ためだけに使う(既存store APIの再利用、新しいDB queryを追加
+  // しない)。単一Task取得APIがcore/tact-work/store.tsに存在しない
+  // ため、listTasksForWork()から対象taskIdを絞り込む
+  // (core/tact-work/completion.tsのreconcileWorkCompletionStatus()と
+  // 同じ既存パターン)。
+  listTasksForWork: typeof listTasksForWork;
+
   listRunsForTask: typeof listRunsForTask;
 
   createRun: typeof createRun;
@@ -83,6 +98,7 @@ const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
   getWork,
   getApproval,
   getConnection: defaultGetConnection,
+  listTasksForWork,
   listRunsForTask,
   createRun,
   completeRun,
@@ -130,6 +146,13 @@ export type IntegrationActionExecutionOutcome =
   | { status: "connection_unavailable" }
   | { status: "invalid_action"; reason: string }
   | { status: "already_executed"; run: Run }
+  // Architecture Migration Phase C2.1c-a-fix: 新規external execution
+  // を開始できるTask stateはpendingだけである、というcanonical
+  // precondition invariantを、この境界自身に持たせる(既存の
+  // work_not_runnableと同じ命名規則)。dedup確認(already_executed)を
+  // 通過した後、Taskがpending以外(completed/failed/cancelled/
+  // running)であればここで安全に停止する。
+  | { status: "task_not_executable"; taskStatus: TaskStatus }
   | { status: "completed"; run: Run }
   | { status: "failed"; run: Run };
 
@@ -250,6 +273,37 @@ export async function executeApprovedIntegrationAction(
 
   if (alreadyExecuted) {
     return { status: "already_executed", run: alreadyExecuted };
+  }
+
+  // Architecture Migration Phase C2.1c-a-fix(絶対条件): dedup確認
+  // (既に成功済みのRunが無い場合)を通過して初めて、Taskの現在stateを
+  // 確認する——「既に正常実行済みのcompleted Taskはalready_executed
+  // として扱う」という既存C1.5 dedup semanticsを壊さないため、この
+  // precondition確認は必ずdedup確認の"後"に置く。ここへ到達した時点で
+  // Taskがpending以外(completed/failed/cancelled/running)であれば、
+  // 新規external executionを開始せず安全に停止する(Run作成・Task
+  // status変更・Work status変更・provider呼び出しのいずれも行わない)。
+  // 単一Task取得APIが無いため、既存listTasksForWork()を再利用する
+  // (新しいDB queryを追加しない)。
+  const tasksForWork = await deps.listTasksForWork(workId, userId, accessToken);
+  const task = tasksForWork.find((t) => t.id === taskId);
+
+  if (!task) {
+    // Approval.taskIdが指す先が存在しない、またはWork/Task/Approvalの
+    // 対応が壊れている(既存Store APIのownership defenseにより、
+    // 他user所有のTaskも同様にここで見つからない扱いになる)。
+    return { status: "not_found" };
+  }
+
+  if (task.status !== "pending") {
+    // completed/failed/cancelledはterminal状態からの再実行を許さない
+    // (絶対条件: terminal→non-terminalという巻き戻しを作らない)。
+    // runningは、既に別のexecution attemptが進行中(または異常終了で
+    // 取り残された)可能性があるため、新しいprovider callを勝手に
+    // 開始しない(既存Run dedupとは別の防御層——dedupは"completed"の
+    // 既存Runだけを見るため、completedに至らないままrunningで
+    // 止まっているケースをここで捕捉する)。
+    return { status: "task_not_executable", taskStatus: task.status };
   }
 
   const nextAttempt =
