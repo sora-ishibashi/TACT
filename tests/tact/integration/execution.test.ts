@@ -111,6 +111,7 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
     failRunCalls: 0,
     updateTaskStatusCalls: [] as { taskId: string; status: string }[],
     executeIntegrationActionCalls: 0,
+    reconcileWorkCompletionStatusCalls: 0,
   };
 
   const deps: ExecuteApprovedIntegrationActionDeps = {
@@ -158,6 +159,11 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
     executeIntegrationAction: async (): Promise<IntegrationExecutionResult> => {
       calls.executeIntegrationActionCalls += 1;
       return { status: "completed", providerExecutionRef: "log-1", output: { ok: true } };
+    },
+
+    reconcileWorkCompletionStatus: async () => {
+      calls.reconcileWorkCompletionStatusCalls += 1;
+      return { status: "no_change", reason: "tasks_not_all_terminal" };
     },
 
     ...overrides,
@@ -342,6 +348,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           calls.updateTaskStatusCalls[calls.updateTaskStatusCalls.length - 1]?.status === "completed"
       )
     );
+
+    results.push(
+      check(
+        "[Phase C2.1a] 成功後、reconcileWorkCompletionStatus()が呼ばれる(architecture debt A解消)",
+        calls.reconcileWorkCompletionStatusCalls === 1
+      )
+    );
   }
 
   // ---- 失敗系: Providerがfailedを返した場合 ----
@@ -372,6 +385,44 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     results.push(
       check(
         "[失敗系] 失敗時もexecuteIntegrationAction()は1回のみ(自動retryしない)",
+        calls.executeIntegrationActionCalls === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Phase C2.1a] 失敗後も、reconcileWorkCompletionStatus()が呼ばれる(architecture debt A解消)",
+        calls.reconcileWorkCompletionStatusCalls === 1
+      )
+    );
+  }
+
+  // ---- Phase C2.1a絶対条件(Case9): reconciliation自体が失敗しても、
+  // 既に確定した外部side effect(successful)をfailedへ巻き戻したり
+  // retry可能な失敗として扱ってはいけない ----
+  {
+    const { deps, calls } = makeDeps({
+      reconcileWorkCompletionStatus: async () => {
+        calls.reconcileWorkCompletionStatusCalls += 1;
+        throw new Error("simulated reconciliation failure (e.g. transient DB error)");
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Phase C2.1a絶対条件] reconciliation失敗時も、外部executionがsuccessfulだった結果はcompletedのまま変わらない(failedへ巻き戻さない)",
+        outcome.status === "completed" &&
+          calls.completeRunCalls === 1 &&
+          calls.failRunCalls === 0 &&
+          calls.reconcileWorkCompletionStatusCalls === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Phase C2.1a絶対条件] reconciliation失敗時も、executeIntegrationAction()(=Composio/Slack呼び出し)は再実行されない(1回のまま)",
         calls.executeIntegrationActionCalls === 1
       )
     );

@@ -16,6 +16,7 @@ import {
   failRun,
 } from "./store";
 import { requestApproval as defaultRequestApproval } from "./approval";
+import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "./completion";
 import type { Work } from "./types";
 
 // =========================
@@ -76,6 +77,13 @@ export interface RunWorkTurnDeps {
   // Architecture Migration Phase B3(Approval Execution)。
   requestApproval: typeof defaultRequestApproval;
 
+  // Architecture Migration Phase C2.1a(Work Completion Reconciliation)。
+  // 以前はこのfile内にインライン実装されていたWork completion
+  // judgment(anyFailed ? failed : completed)を、Integration経由の
+  // 実行とも共有できる責務としてcore/tact-work/completion.tsへ
+  // 切り出した。
+  reconcileWorkCompletionStatus: typeof defaultReconcileWorkCompletionStatus;
+
 }
 
 const defaultDeps: RunWorkTurnDeps = {
@@ -88,6 +96,7 @@ const defaultDeps: RunWorkTurnDeps = {
   failRun,
   runOrchestration: defaultRunOrchestration,
   requestApproval: defaultRequestApproval,
+  reconcileWorkCompletionStatus: defaultReconcileWorkCompletionStatus,
 };
 
 export interface RunWorkTurnParams {
@@ -323,9 +332,18 @@ export async function runWorkTurn(
 
   } else {
 
-    const anyFailed = result.tasks.some((task) => task.status === "failed");
-
-    await deps.updateWorkStatus(work.id, userId, accessToken, anyFailed ? "failed" : "completed");
+    // Architecture Migration Phase C2.1a: 以前はこのTurnの
+    // OrchestrationResult.tasksだけを見てWork全体のcompleted/failedを
+    // 即断していたが、Workが所有する全Task(過去のTurn分も含む)を見て
+    // 判定する共有責務(reconcileWorkCompletionStatus())へ委譲する。
+    // Approval一覧も内部で確認するため、Task自体はterminalに見えても
+    // pending Approvalが残っている(Phase B3のapprovalRequirement
+    // pattern)場合はWork statusを変更しない——この安全側の判定は
+    // 既存のテストされている挙動を変えない(このelse分岐へ到達する
+    // のはapprovalRequirements.length===0の場合のみであり、既存の
+    // regression testはいずれも単一Turン内で完結するため、Workが
+    // 所有する全Taskの集合はこのTurnのresult.tasksと一致する)。
+    await deps.reconcileWorkCompletionStatus(work.id, userId, accessToken);
 
   }
 

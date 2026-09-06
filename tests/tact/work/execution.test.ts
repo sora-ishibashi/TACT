@@ -151,6 +151,48 @@ function makeRecordingDeps(
       };
     },
 
+    // Architecture Migration Phase C2.1a: 実core/tact-work/completion.ts
+    // のreconcileWorkCompletionStatus()を呼ばず、この既存test fixture
+    // (実Supabase・実Task storeを持たない)内で、これまでの
+    // updateTaskStatus()呼び出しから各Taskの最終statusを再構成して
+    // 同じアルゴリズム(全Task terminal かつ pending Approval無しなら、
+    // failedが1件でもあればfailed、それ以外にcompletedが1件でも
+    // あればcompleted)を模倣する。既存のrunWorkTurn()テストは全て
+    // 単一Turn内で完結するため、この方法で実装と同じ判定結果になる。
+    reconcileWorkCompletionStatus: async () => {
+
+      const latestStatusByTaskId = new Map<string, string>();
+
+      for (const c of calls.updateTaskStatusCalls) {
+        latestStatusByTaskId.set(c.taskId, c.status);
+      }
+
+      const statuses = Array.from(latestStatusByTaskId.values());
+
+      if (statuses.length === 0) {
+        return { status: "no_change", reason: "no_tasks" };
+      }
+
+      const terminal = ["completed", "failed", "cancelled"];
+
+      if (!statuses.every((s) => terminal.includes(s))) {
+        return { status: "no_change", reason: "tasks_not_all_terminal" };
+      }
+
+      if (statuses.includes("failed")) {
+        calls.workStatusUpdates.push("failed");
+        return { status: "reconciled", workStatus: "failed" };
+      }
+
+      if (statuses.includes("completed")) {
+        calls.workStatusUpdates.push("completed");
+        return { status: "reconciled", workStatus: "completed" };
+      }
+
+      return { status: "undetermined", reason: "all_tasks_cancelled_no_existing_precedent" };
+
+    },
+
   };
 
   return { deps, calls, taskDbIdByDescription };

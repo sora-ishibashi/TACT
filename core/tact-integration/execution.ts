@@ -7,6 +7,7 @@ import {
   failRun,
   updateTaskStatus,
 } from "../tact-work/store";
+import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "../tact-work/completion";
 import { executeIntegrationAction as defaultExecuteIntegrationAction } from "./gateway";
 import { getConnection as defaultGetConnection } from "./connection";
 import type { Approval, ApprovalStatus, Run, WorkStatus } from "../tact-work/types";
@@ -69,6 +70,13 @@ export interface ExecuteApprovedIntegrationActionDeps {
 
   executeIntegrationAction: typeof defaultExecuteIntegrationAction;
 
+  // Architecture Migration Phase C2.1a(Work Completion Reconciliation、
+  // architecture debt A解消)。Task状態確定後にWork全体の集約判定を
+  // 行う共有責務。失敗してもこのboundaryの戻り値(既に確定した
+  // Run/Task状態)には影響させない(下記reconcileAfterTaskUpdate()
+  // 参照)。
+  reconcileWorkCompletionStatus: typeof defaultReconcileWorkCompletionStatus;
+
 }
 
 const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
@@ -81,7 +89,39 @@ const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
   failRun,
   updateTaskStatus,
   executeIntegrationAction: defaultExecuteIntegrationAction,
+  reconcileWorkCompletionStatus: defaultReconcileWorkCompletionStatus,
 };
+
+// 絶対条件(Phase C2.1a指示、最重要): reconciliation自体が失敗しても、
+// 既に確定した外部side effect(Composio/Slack実行結果)やRun/Task状態を
+// 「実行失敗」「retry可能」に見せかけてはいけない。Run.status/Task.
+// statusは既にcompleteRun()/failRun()/updateTaskStatus()で確定済みで
+// あり、reconciliationはその後の「Work全体の集計」でしかない。この
+// 関数は例外を外へ伝播させず、失敗時はconsole.warnで内部ログに残す
+// だけにとどめる(既存core/codeAgent/store.ts等と同じ「非致命的な
+// 副次処理はconsole.warnでbest-effort化する」既存パターンを踏襲)。
+async function reconcileAfterTaskUpdate(
+  deps: ExecuteApprovedIntegrationActionDeps,
+  workId: string,
+  userId: string,
+  accessToken: string
+): Promise<void> {
+
+  try {
+
+    await deps.reconcileWorkCompletionStatus(workId, userId, accessToken);
+
+  } catch (error) {
+
+    console.warn(
+      "[tact-integration/execution] reconcileWorkCompletionStatus() failed after protected action execution; " +
+      "Run/Task状態は既に確定済みのため、この内部集計の失敗によってexternal side effectの成否判定は変更しない。",
+      error
+    );
+
+  }
+
+}
 
 export type IntegrationActionExecutionOutcome =
   | { status: "not_found" }
@@ -255,6 +295,12 @@ export async function executeApprovedIntegrationAction(
 
     await deps.updateTaskStatus(workId, userId, accessToken, taskId, "completed");
 
+    // Architecture Migration Phase C2.1a: Run/Taskが確定した後に
+    // Work全体の集約判定を行う。この呼び出し自体が失敗しても、既に
+    // 確定した"completed"という結果は変更しない(reconcileAfter
+    // TaskUpdate()参照)。
+    await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
+
     return {
       status: "completed",
       run: { ...run, status: "completed", externalRef: { approvalId, providerExecutionRef: result.providerExecutionRef ?? null } },
@@ -268,6 +314,10 @@ export async function executeApprovedIntegrationAction(
   });
 
   await deps.updateTaskStatus(workId, userId, accessToken, taskId, "failed");
+
+  // Architecture Migration Phase C2.1a: 失敗時も同様に、Run/Taskが
+  // 確定した後にWork全体の集約判定を行う。
+  await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
 
   return {
     status: "failed",
