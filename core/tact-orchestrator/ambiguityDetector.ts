@@ -1,3 +1,5 @@
+import { extractSlackSendIntent } from "../tact-intent/ruleRouter";
+
 // =========================
 // detectAmbiguity (Phase 15)
 // =========================
@@ -19,7 +21,10 @@
 //       カテゴリ語」である場合(「競合について」「資料を」等——
 //       「競合」も「資料」も、それ単体では「何の競合か」「何のため
 //       の資料か」が原理的に定まらない)
-// の2パターンのみ。この2パターン以外は、どれだけ短い・一般的な語
+//   (c) Architecture Migration Phase C2.1b: Slackへの送信を試みている
+//       ことは明確(「Slack」+送信系動詞)だが、channel(#channel形式)
+//       またはtext(引用符で囲まれた本文)が欠けている場合
+// の3パターンのみ。この3パターン以外は、どれだけ短い・一般的な語
 // (「トヨタ」「生成AI」等)であっても曖昧とは判定しない。
 
 export interface AmbiguityResult {
@@ -58,6 +63,22 @@ const VAGUE_SUBJECT_QUESTIONS: ReadonlyMap<string, string> = new Map([
   ["競合", "どの競合について調べればいいですか?"],
   ["資料", "どんな資料を作りたいですか?"],
 ]);
+
+// =========================
+// Slack send_message欠落チェック (Architecture Migration Phase C2.1b)
+// =========================
+//
+// core/tact-orchestrator/commander.tsはdetectAmbiguity()を
+// decomposeTask()(延いてはclassifyIntent())より先に呼ぶため、
+// 「Slackへ送る意図はあるがchannel/textが欠けている」場合はここで
+// 検出し、既存clarification flow(Work→waiting_for_input)へ倒す。
+// 独自のBot質問システムは作らない(絶対条件)。
+const MISSING_SLACK_CHANNEL_QUESTION =
+  "どのSlackチャンネルへ送りますか?(例: #general)";
+const MISSING_SLACK_TEXT_QUESTION =
+  "Slackへ何を送りますか?メッセージ本文を「」で囲んで教えてください。";
+const MISSING_SLACK_BOTH_QUESTION =
+  "どのSlackチャンネルへ、何を送りますか?例:「#generalに『明日の会議は10時です』って送って」";
 
 // 「について|を」の直前までを主語として取り出す。「の」は境界に
 // 含めない(「日本のスポーツ市場について」のような、主語自体に「の」を
@@ -101,6 +122,25 @@ export function detectAmbiguity(input: string): AmbiguityResult {
       return { ambiguous: true, question: vagueQuestion };
 
     }
+
+  }
+
+  // Architecture Migration Phase C2.1b: Slack送信の意図は明確だが
+  // channel/textが欠けている場合。extractSlackSendIntent()は
+  // core/tact-intent/ruleRouter.tsのclassifyIntent()と同じ判定ロジック
+  // を再利用する(新しい判定ロジックを二重に持たない)。
+  const slackSendMatch = extractSlackSendIntent(trimmed);
+
+  if (slackSendMatch.matched && "missing" in slackSendMatch) {
+
+    const question =
+      slackSendMatch.missing === "channel"
+        ? MISSING_SLACK_CHANNEL_QUESTION
+        : slackSendMatch.missing === "text"
+          ? MISSING_SLACK_TEXT_QUESTION
+          : MISSING_SLACK_BOTH_QUESTION;
+
+    return { ambiguous: true, question };
 
   }
 

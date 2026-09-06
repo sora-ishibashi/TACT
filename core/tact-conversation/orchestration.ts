@@ -7,8 +7,10 @@ import { getSimpleChatResponse } from "../tact-intent/ruleRouter";
 // この存在を一切知らない(依存方向はcore/tact-conversation →
 // core/tact-work → core/tact-orchestratorの一方向、core/tact-work/
 // index.tsのコメント参照)。
-import { resolveWork, runWorkTurn } from "../tact-work";
-import type { WorkIntakeSource, ActorReference } from "../tact-work";
+import { resolveWork, runWorkTurn, defaultRunWorkTurnDeps } from "../tact-work";
+import type { WorkIntakeSource, ActorReference, ResolveIntegrationConnection } from "../tact-work";
+import { listConnectionsForUser } from "../tact-integration";
+import type { IntegrationService } from "../tact-integration";
 
 import type {
   Conversation,
@@ -1629,6 +1631,43 @@ const defaultResolveAndRunWorkDeps: ResolveAndRunWorkDeps = {
   runWorkTurn,
 };
 
+// =========================
+// resolveIntegrationConnectionViaTactIntegration
+// (Architecture Migration Phase C2.1b)
+// =========================
+//
+// core/tact-work/execution.tsのrunWorkTurn()は、循環参照を避けるため
+// core/tact-integrationを一切importしない(resolveIntegrationConnection
+// という汎用の拡張点の型だけを知る、OrchestrationHooksと同じ設計)。
+// core/tact-conversation/はcore/tact-workにもcore/tact-integrationにも
+// 依存してよい合成ルート的な位置(どちらからもimportされない)のため、
+// この1箇所だけが両者を実際に結び付ける。
+//
+// 絶対条件: TACT Connectionのcredential/token/providerConnectionRef
+// はここでも一切扱わない——listConnectionsForUser()が返すCanonical
+// Connection.idだけを使う。
+const resolveIntegrationConnectionViaTactIntegration: ResolveIntegrationConnection = async (
+  params
+) => {
+
+  const connections = await listConnectionsForUser(
+    params.userId,
+    params.accessToken,
+    params.service as IntegrationService
+  );
+
+  if (connections.length === 0) {
+    return { status: "none" };
+  }
+
+  if (connections.length > 1) {
+    return { status: "multiple", count: connections.length };
+  }
+
+  return { status: "single", connectionId: connections[0].id };
+
+};
+
 export async function resolveAndRunWork(
   conversation: Conversation,
   accessToken: string,
@@ -1663,12 +1702,24 @@ export async function resolveAndRunWork(
 
   }
 
-  return deps.runWorkTurn({
-    work,
-    userId: conversation.userId,
-    accessToken,
-    orchestrationRequest,
-  });
+  // Architecture Migration Phase C2.1b: runWorkTurn()自体はConnection
+  // 解決の実装を知らない(既定は常に"none"を返す安全なfallback)。
+  // ここがその唯一の実配線点(deps.runWorkTurnが実runWorkTurnの場合は
+  // defaultRunWorkTurnDepsをベースに上書きする。テストがdeps.
+  // runWorkTurn自体を偽実装に差し替えている場合はこの第2引数は
+  // 単に無視される、既存のtest互換性への影響は無い)。
+  return deps.runWorkTurn(
+    {
+      work,
+      userId: conversation.userId,
+      accessToken,
+      orchestrationRequest,
+    },
+    {
+      ...defaultRunWorkTurnDeps,
+      resolveIntegrationConnection: resolveIntegrationConnectionViaTactIntegration,
+    }
+  );
 
 }
 

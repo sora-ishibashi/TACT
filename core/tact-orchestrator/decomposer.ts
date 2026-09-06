@@ -185,8 +185,18 @@ export function decomposeTask(
   // 判定するために使う(Section3)。
   const decision = classifyIntent(input, request.previousUserInput);
 
+  // Architecture Migration Phase C2.1b: "integration_slack_send_message"
+  // intentを、Capability Registry(core/tact-core/capabilities/
+  // registry.ts、core/tact-bootstrap.tsが登録)へ実際に登録される
+  // capability名"integration.slack.send_message"へ変換する。この
+  // 変換自体はProvider(Composio)を一切知らない——Canonical
+  // capability idという交通整理の語彙の変換にとどまる。
   const assignedCapability =
-    decision.intent === "research" ? "research" : undefined;
+    decision.intent === "research"
+      ? "research"
+      : decision.intent === "integration_slack_send_message"
+        ? "integration.slack.send_message"
+        : undefined;
 
   // =========================
   // Phase88: 直前Turnの主題をTask.descriptionへ補完する

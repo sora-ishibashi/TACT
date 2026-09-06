@@ -21,6 +21,7 @@
 import { registerCapability } from "./tact-core";
 import { runResearch } from "./tact-research";
 import { runDesign } from "./tact-design";
+import { runIntegrationSlackSendMessageCapability } from "./tact-integration";
 
 let bootstrapped = false;
 
@@ -44,6 +45,11 @@ export function bootstrapTactCapabilities(): void {
   registerCapability("research", runResearch);
 
   registerCapability("design", runDesign);
+
+  // Architecture Migration Phase C2.1b: core/tact-integration/
+  // capability.tsはDBアクセス・Composio呼び出しを一切行わない
+  // pure関数のため、research/designと全く同じ配線パターンで登録できる。
+  registerCapability("integration.slack.send_message", runIntegrationSlackSendMessageCapability);
 
   bootstrapped = true;
 

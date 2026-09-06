@@ -36,6 +36,18 @@ const cases: Case[] = [
   // Phase18/19 Regressionで再確認済みの境界(疑問文はAmbiguityの対象外)
   { phase: "Phase18-regress", input: "日本の首相は誰ですか？", expectedAmbiguous: false },
 
+  // Architecture Migration Phase C2.1b: Slack送信意図はあるが
+  // channel/textが欠けている場合はambiguous(Case4/5、独自Bot質問
+  // システムを作らず既存clarification flowを使う)。
+  { phase: "C2.1b-Case4", input: "Slackに『明日の会議は10時です』って送って", expectedAmbiguous: true },
+  { phase: "C2.1b-Case5", input: "Slackの#tactへ送っておいて", expectedAmbiguous: true },
+  { phase: "C2.1b-both-missing", input: "Slackに送って", expectedAmbiguous: true },
+
+  // Architecture Migration Phase C2.1b: channel/textが両方揃っている
+  // 場合はambiguousではない(classifyIntent()側でintegration_slack_
+  // send_messageとして処理される、絶対条件: False Positiveを増やさない)。
+  { phase: "C2.1b-complete", input: "Slackの#tactに『明日の会議は10時です』って送って", expectedAmbiguous: false },
+
 ];
 
 export async function run(): Promise<{ pass: number; fail: number }> {

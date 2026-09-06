@@ -56,6 +56,48 @@ import type { Work } from "./types";
 // runOrchestration()。core/tact-bot/connector/conversationConnector.ts
 // と同じDIパターン)。
 
+// =========================
+// resolveIntegrationConnection (Architecture Migration Phase C2.1b)
+// =========================
+//
+// TACT Connection(core/tact-integration/connection.ts)は
+// Integration infrastructure領域の概念であり、core/tact-integration/は
+// core/tact-workへ依存する(一方向)——この逆方向(core/tact-work →
+// core/tact-integration)のimportを作ると循環参照になるため、
+// このfileはtact-integrationを一切importしない。
+//
+// 代わりに、core/tact-orchestrator/types.tsのOrchestrationHooksと
+// 全く同じ設計思想(「下位層は汎用の拡張点だけを持ち、実際の配線は
+// 合成ルート/上位層が行う」)を採用する: このfile自身はConnection
+// 解決の「型」だけを知り、実装はRunWorkTurnDeps経由で呼び出し元
+// (core/tact-conversation/orchestration.ts、runWorkTurn()の唯一の
+// 呼び出し元)が注入する。既定実装(defaultResolveIntegrationConnection)
+// は常に"none"を返す安全なfallbackであり、実Supabase/tact-integration
+// への依存を一切持たない(呼び出し元が実装を注入しない限り、
+// Integration機能は安全に無効のまま)。
+export interface ResolveIntegrationConnectionParams {
+
+  service: string;
+
+  userId: string;
+
+  accessToken: string;
+
+}
+
+export type ResolveIntegrationConnectionOutcome =
+  | { status: "none" }
+  | { status: "single"; connectionId: string }
+  | { status: "multiple"; count: number };
+
+export type ResolveIntegrationConnection = (
+  params: ResolveIntegrationConnectionParams
+) => Promise<ResolveIntegrationConnectionOutcome>;
+
+async function defaultResolveIntegrationConnection(): Promise<ResolveIntegrationConnectionOutcome> {
+  return { status: "none" };
+}
+
 export interface RunWorkTurnDeps {
 
   updateWorkStatus: typeof updateWorkStatus;
@@ -84,9 +126,18 @@ export interface RunWorkTurnDeps {
   // 切り出した。
   reconcileWorkCompletionStatus: typeof defaultReconcileWorkCompletionStatus;
 
+  // Architecture Migration Phase C2.1b。既定はdefaultResolveIntegration
+  // Connection(常に"none")——実Connection lookupが必要な呼び出し元
+  // (core/tact-conversation/orchestration.ts)がこのfieldを上書きする。
+  resolveIntegrationConnection: ResolveIntegrationConnection;
+
 }
 
-const defaultDeps: RunWorkTurnDeps = {
+// core/tact-conversation/orchestration.ts(runWorkTurn()の唯一の
+// 呼び出し元)が、resolveIntegrationConnectionだけを実装(core/
+// tact-integration/connection.tsのlistConnectionsForUser())へ差し替え
+// つつ、他の全dependencyはこの既定値をそのまま使えるようexportする。
+export const defaultRunWorkTurnDeps: RunWorkTurnDeps = {
   updateWorkStatus,
   createTask,
   createTaskDependency,
@@ -97,6 +148,7 @@ const defaultDeps: RunWorkTurnDeps = {
   runOrchestration: defaultRunOrchestration,
   requestApproval: defaultRequestApproval,
   reconcileWorkCompletionStatus: defaultReconcileWorkCompletionStatus,
+  resolveIntegrationConnection: defaultResolveIntegrationConnection,
 };
 
 export interface RunWorkTurnParams {
@@ -113,7 +165,7 @@ export interface RunWorkTurnParams {
 
 export async function runWorkTurn(
   params: RunWorkTurnParams,
-  deps: RunWorkTurnDeps = defaultDeps
+  deps: RunWorkTurnDeps = defaultRunWorkTurnDeps
 ): Promise<OrchestrationResult> {
 
   const { work, userId, accessToken, orchestrationRequest } = params;
@@ -143,6 +195,18 @@ export async function runWorkTurn(
     workTaskId: string;
     capability?: string;
     requirement: TaskApprovalRequirement;
+  }[] = [];
+
+  // Architecture Migration Phase C2.1b-fix2: Integration Taskで
+  // Connection解決がnone/multipleだった場合の記録。onTaskFinished()
+  // はOrchestrationResult(result変数)が確定する前に呼ばれるため、
+  // ここでは呼び出し元へ見せるanswer文言の材料だけを集め、実際の
+  // result.answer上書き・Work→waiting_for_input遷移は
+  // runOrchestration()の戻り値を受け取った後(下記)で行う。
+  const integrationConnectionIssues: {
+    service: string;
+    status: "none" | "multiple";
+    count?: number;
   }[] = [];
 
   const hooks: OrchestrationHooks = {
@@ -253,6 +317,72 @@ export async function runWorkTurn(
         return;
       }
 
+      // Architecture Migration Phase C2.1b-fix2(絶対条件、最重要):
+      // completed→pendingという巻き戻しをTask status historyへ
+      // 持ち込まない。そのため、Integration Taskがaction.kind===
+      // "integration_action"のapprovalRequirementを持つ場合は、
+      // Task statusをpersistする「前」にConnection解決を行い、
+      // 解決できない(none/multiple)場合はupdateTaskStatus()自体を
+      // 呼ばない——createTask()が既に付与した初期status(pending)の
+      // まま据え置く。新しいTask statusは追加しない。
+      if (
+        summary.status === "completed" &&
+        summary.approvalRequirement?.action?.kind === "integration_action"
+      ) {
+
+        const metadata = summary.approvalRequirement.action.metadata as
+          | { service?: unknown }
+          | undefined;
+
+        const service = typeof metadata?.service === "string" ? metadata.service : undefined;
+
+        if (service) {
+
+          const connectionResolution = await deps.resolveIntegrationConnection({
+            service,
+            userId,
+            accessToken,
+          });
+
+          if (connectionResolution.status !== "single") {
+
+            // Connection未解決。この依頼はまだ完了していないため、
+            // Taskをcompletedとしてpersistしない(pendingのまま)。
+            // Approvalも作らない(approvalRequirementsへpushしない)。
+            integrationConnectionIssues.push(
+              connectionResolution.status === "none"
+                ? { service, status: "none" }
+                : { service, status: "multiple", count: connectionResolution.count }
+            );
+
+            return;
+
+          }
+
+          // status === "single": 解決できたconnectionIdをmetadataへ
+          // 追加した上で、通常通りcompletedとして永続化しApproval
+          // requirementへ積む(既存Phase B3 semantics: Approval待ちの
+          // 提案attempt自体はcompletedとして記録される、を維持)。
+          await deps.updateTaskStatus(work.id, userId, accessToken, workTaskId, summary.status);
+
+          approvalRequirements.push({
+            workTaskId,
+            capability: summary.capability,
+            requirement: {
+              ...summary.approvalRequirement,
+              action: {
+                ...summary.approvalRequirement.action,
+                metadata: { ...metadata, connectionId: connectionResolution.connectionId },
+              },
+            },
+          });
+
+          return;
+
+        }
+
+      }
+
       // TaskExecutionSummary.statusは既にWorkTaskのTaskStatusと同じ
       // 値集合(pending/running/completed/failed/cancelled)を使う
       // (ARCH-R2 Section4、Phase B1で既に揃えてある)。
@@ -290,6 +420,11 @@ export async function runWorkTurn(
 
   }
 
+  // Architecture Migration Phase C2.1b-fix2: onTaskFinished()の時点で
+  // Connection解決(none/single/multiple)・connectionId注入は既に
+  // 完了しているため、approvalRequirementsに積まれた各entryは
+  // 「そのままrequestApproval()してよいもの」だけになった(絶対条件
+  // Phase B3をそのまま踏襲、既存のシンプルな形へ戻す)。
   if (approvalRequirements.length > 0) {
 
     // Architecture Migration Phase B3: 人間の承認待ちは、Clarification
@@ -322,12 +457,43 @@ export async function runWorkTurn(
 
     }
 
-  } else if (result.clarification) {
+  }
+
+  if (approvalRequirements.length > 0) {
+
+    // requestApproval()が既にWork→waiting_for_approvalへの遷移を
+    // 行っているため、ここでは何もしない。
+
+  } else if (result.clarification || integrationConnectionIssues.length > 0) {
 
     // Phase B2 Section11/12: Clarificationが必要な場合、Workは
     // "waiting_for_input"のまま(または遷移する)。ユーザーが回答すると
     // 次回のTurnでonTasksPlanned()が呼ばれ、"running"へ戻る
     // (Clarification subsystem自体は変更していない)。
+    //
+    // Architecture Migration Phase C2.1b-fix2: Connection未解決
+    // (none/multiple、onTaskFinished()で検出済み)も同じ
+    // waiting_for_inputを使う。ambiguityDetector経由の古典的
+    // Clarification(pending_clarification_message_id等の専用
+    // persistence/resend機構)へは乗せない——今回発生しているのは
+    // 「入力が曖昧だった」のではなく「Integration実行に必要な外部
+    // 前提条件(Connection)が満たされていない」という別種のruntime
+    // required inputであり、既存Clarification answer resendロジックを
+    // 誤って作動させないため。Work statusの値自体だけを共有する。
+    if (integrationConnectionIssues.length > 0 && !result.clarification) {
+
+      const issue = integrationConnectionIssues[0];
+
+      result = {
+        ...result,
+        answer:
+          issue.status === "none"
+            ? `${issue.service}連携が見つかりません。先に連携を行ってください。`
+            : `${issue.service}連携が複数見つかりました。現在、複数連携からの選択には対応していません。`,
+      };
+
+    }
+
     await deps.updateWorkStatus(work.id, userId, accessToken, "waiting_for_input");
 
   } else {

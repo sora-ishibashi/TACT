@@ -28,6 +28,77 @@ import type { IntentDecision } from "./types";
 const CORE_PUSH_PATTERN =
   /(覚え|記憶し|保存し|登録し)(て|ておいて|てほしい|てもらえる)/;
 
+// =========================
+// Slack send_message検出 (Architecture Migration Phase C2.1b)
+// =========================
+//
+// 目的: 「Slackの#channelに『本文』って送って」のような、外部SaaS
+// (Slack)への投稿を依頼する入力から、Provider非依存のcanonical
+// input({channel, text})を安全に抽出する。LLMは一切使わない
+// (Rule Routerと同じ絶対条件: コストゼロ、決定論的)。
+//
+// 絶対条件(Accuracy > Coverage、既存ambiguityDetector.ts/ruleRouter.ts
+// と同じ設計哲学): 「Slack」という語と、送信を表す動詞語幹+依頼の
+// 活用形の組み合わせが無ければ、そもそもSlack送信の試みとして扱わない
+// (SLACK_SEND_TRIGGER_PATTERN)。この組み合わせが揃った場合のみ、
+// channel(`#channelname`形式のみ、名前解決の曖昧さを避けるため)と
+// text(「」『』""で囲まれた引用部分)を抽出する。どちらか一方でも
+// 欠ける場合は、この関数の呼び出し元(ambiguityDetector.ts)が
+// 「曖昧」として扱えるよう、matched:trueかつmissingを返す
+// (絶対条件: 独自のBot質問システムを作らず、既存clarification flow
+// が呼び出し元で利用できる形にする)。
+const SLACK_SEND_TRIGGER_PATTERN =
+  /slack/i;
+
+const SEND_VERB_PATTERN =
+  /(送っ|送信し|投稿し)(て|てください|てほしい|てもらえる)/;
+
+// "#channelname"形式のみを対象にする(channel名の日本語表記揺れや
+// 「なんとかチャンネル」といった曖昧な言い回しからの名前解決は
+// 行わない——絶対条件: LLM出力や曖昧な自然文をそのままcanonical
+// inputへ流さない)。ASCII(英数字・ハイフン・アンダースコア)のみに
+// 限定する——日本語文字まで許すと「#tactに」のように後続の助詞
+// (「に」「へ」等、ひらがな範囲に含まれる)まで巻き込んで誤抽出する
+// (絶対条件: Accuracy > Coverage、曖昧な抽出よりchannel欠落として
+// clarificationへ倒す方を優先する)。
+const SLACK_CHANNEL_PATTERN = /#([A-Za-z0-9_-]+)/;
+
+// 「」『』""のいずれかで囲まれた引用部分をtextとして抽出する。
+const SLACK_QUOTED_TEXT_PATTERN = /[「『"](.+?)["』」]/;
+
+export type SlackSendExtractionResult =
+  | { matched: false }
+  | { matched: true; channel: string; text: string }
+  | { matched: true; missing: "channel" | "text" | "both" };
+
+// Phase C2.1b: core/tact-orchestrator/ambiguityDetector.ts(channel/text
+// 欠落時の既存clarification flow利用)とclassifyIntent()自身の両方が
+// 同じ判定ロジックを必要とするため、ここで1箇所だけ実装してexportする
+// (looksLikeAdditionalResearchRequest()等と同じ、既存の「1つの判定
+// ロジックを複数箇所から再利用する」既存パターンを踏襲)。
+export function extractSlackSendIntent(input: string): SlackSendExtractionResult {
+
+  const trimmed = input.trim();
+
+  if (!(SLACK_SEND_TRIGGER_PATTERN.test(trimmed) && SEND_VERB_PATTERN.test(trimmed))) {
+    return { matched: false };
+  }
+
+  const channelMatch = trimmed.match(SLACK_CHANNEL_PATTERN);
+  const textMatch = trimmed.match(SLACK_QUOTED_TEXT_PATTERN);
+
+  if (channelMatch && textMatch) {
+    return { matched: true, channel: channelMatch[1], text: textMatch[1] };
+  }
+
+  if (!channelMatch && !textMatch) {
+    return { matched: true, missing: "both" };
+  }
+
+  return { matched: true, missing: channelMatch ? "text" : "channel" };
+
+}
+
 // 「調べ/調査/リサーチ」+ 依頼を表す活用形の組み合わせ。
 // 「調べるって」のような辞書形+「って」には一致しない
 // (「調べ」の直後が「て」ではなく「る」のため)。
@@ -329,6 +400,25 @@ export function classifyIntent(input: string, previousInput?: string): IntentDec
       // からの既定typeは"memory"に固定する。
       corePushType: "memory",
       reason: "matched core_push pattern (覚え/記憶/保存/登録 + 依頼表現)",
+    };
+
+  }
+
+  // Architecture Migration Phase C2.1b: channel/textが両方とも確実に
+  // 抽出できた場合のみintegration_slack_send_messageと判定する。
+  // channel/textの一方または両方が欠ける場合(missing)はここでは
+  // 判定せず素通りする——その場合はcore/tact-orchestrator/
+  // commander.tsがclassifyIntent()を呼ぶより先にdetectAmbiguity()を
+  // 呼んでおり、そちらが同じextractSlackSendIntent()を使って
+  // clarificationへ倒す(絶対条件: 独自のBot質問システムを作らず、
+  // 既存clarification flowを使う)。
+  const slackSendMatch = extractSlackSendIntent(trimmed);
+
+  if (slackSendMatch.matched && !("missing" in slackSendMatch)) {
+
+    return {
+      intent: "integration_slack_send_message",
+      reason: "matched slack send_message pattern (Slack + 送信系動詞 + #channel + 引用text)",
     };
 
   }

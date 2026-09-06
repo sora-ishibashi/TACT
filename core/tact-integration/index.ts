@@ -26,3 +26,8 @@ export * from "./connection";
 export * from "./gateway";
 export * from "./propose";
 export * from "./execution";
+// Architecture Migration Phase C2.1b: Capability Registry(core/tact-core/
+// capabilities/registry.ts)へ登録する"integration.slack.send_message"
+// capability本体。core/tact-bootstrap.tsだけがこのexportを使う想定
+// (research/designと同じ配線パターン)。
+export * from "./capability";

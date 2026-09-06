@@ -10,7 +10,14 @@
 // 増えることを想定し、Unionへ値を追加するだけで拡張できる形にする。
 // 現時点ではSTEP215のMenuBar.tsxのTactSection("research"|"core")とは
 // 別の概念(UIのタブ選択 vs 1メッセージごとの意図判定)であり、混同しない。
-export type TactIntent = "chat" | "research" | "core_push";
+//
+// Architecture Migration Phase C2.1b: "integration_slack_send_message"
+// を追加。Integration Capability(core/tact-integration/)は今回
+// service="slack"のsend_messageという1操作だけを対象とする(絶対条件:
+// 巨大なCapability一覧を先回りで作らない)。この値自体はProvider
+// (Composio)を一切知らない——「TACTのどのCapabilityへ渡すべきか」
+// という交通整理の語彙にとどまる。
+export type TactIntent = "chat" | "research" | "core_push" | "integration_slack_send_message";
 
 // STEP212のDirect Push契約(type: "knowledge"|"memory"|"example")と
 // 同じ型をここでも再利用する。Intent Routerがcore_pushと判定した際、

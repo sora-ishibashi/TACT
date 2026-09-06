@@ -118,6 +118,8 @@ import { run as runIntegrationComposioClient } from "./integration/composioClien
 import { run as runIntegrationGateway } from "./integration/gateway.test";
 import { run as runIntegrationPropose } from "./integration/propose.test";
 import { run as runIntegrationExecution } from "./integration/execution.test";
+import { run as runIntegrationCapability } from "./integration/capability.test";
+import { run as runIntentSlackSendIntent } from "./intent/slackSendIntent.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -211,6 +213,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "integration/gateway", run: runIntegrationGateway },
   { name: "integration/propose", run: runIntegrationPropose },
   { name: "integration/execution", run: runIntegrationExecution },
+  { name: "integration/capability", run: runIntegrationCapability },
+  { name: "intent/slackSendIntent", run: runIntentSlackSendIntent },
 ];
 
 async function main() {
