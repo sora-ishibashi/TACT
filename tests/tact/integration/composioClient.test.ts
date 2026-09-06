@@ -9,13 +9,25 @@
 // getSlackConnectionStatus()の「未設定時の安全なfallback」経路。
 //
 // 環境制約(core/tact-bot/execution/trustedConversationTurn.test.ts
-// と同じ既存方針): このtest実行環境にはCOMPOSIO_API_KEYが設定されて
-// いない(Phase C1時点の既定状態)。そのため、ここではmockを使わず
-// 実関数をそのまま呼び出し、「未設定時は一切実Composio APIへ
+// と同じ既存方針): このtest実行環境では通常COMPOSIO_API_KEYが設定
+// されていない(Phase C1時点の既定状態)。そのため、ここではmockを
+// 使わず実関数をそのまま呼び出し、「未設定時は一切実Composio APIへ
 // アクセスせず安全にfallbackする」という分岐だけを確認する
 // (Category A、pure/deterministic)。「設定済み」経路(実Composio呼び
 // 出し)はここではテストしない——live acceptance testは別途、実
-// credential入手後に実施する(完了報告に明記)。
+// credential入手後に実施する(Phase C1.5で実施済み)。
+//
+// Precondition guard(Phase C1.5 Live Acceptanceで発見・追加):
+// Live Acceptance session等、実行環境に実COMPOSIO_API_KEYが設定されて
+// いる場合、isComposioConfigured()がtrueになりcomposioIntegration
+// Provider.execute()等が実際にComposio clientを構築してしまうため、
+// 以下の「未設定時fallback」検証はそもそも成立しない(実APIへ到達
+// する・存在しないconnectedAccountIdに対する404が未catchで例外化する
+// おそれがある)。「CI/unit testsで実Composio APIを叩かない」という
+// 絶対条件を守るため、設定済みの場合はここで安全にskipし、以降の
+// 実API呼び出しを一切行わない。credential非漏洩自体の検証は
+// normalizeComposioError()の純粋関数test(tests/tact/integration/
+// mapping.test.ts)で引き続き担保されており、この分岐は無効化しない。
 
 import "dotenv/config";
 import { isComposioConfigured } from "../../../core/tact-integration/providers/composio/client";
@@ -30,6 +42,19 @@ import { check, summarize, type CheckResult } from "../lib/check";
 export async function run(): Promise<{ pass: number; fail: number }> {
 
   const results: CheckResult[] = [];
+
+  if (isComposioConfigured()) {
+
+    results.push(
+      check(
+        "[Precondition guard] COMPOSIO_API_KEYが設定されている環境のため、このfile本来の「未設定時fallback」検証は成立しない。実Composio APIへは一切アクセスせず安全にskipする(credential非漏洩の検証はtests/tact/integration/mapping.test.tsのnormalizeComposioError()テストで別途担保済み)",
+        true
+      )
+    );
+
+    return summarize("integration/composioClient", results);
+
+  }
 
   results.push(
     check(

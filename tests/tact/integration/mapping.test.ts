@@ -85,10 +85,11 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Slack mapping] channel/textがargumentsへそのまま渡る",
+        "[Slack mapping] channelはそのまま、textはComposio側の実schema(markdown_text)へ変換されてargumentsに渡る(Phase C1.5 Live Acceptanceで実機確認)",
         mapped.ok === true &&
           mapped.invocation.arguments.channel === "#general" &&
-          mapped.invocation.arguments.text === "こんにちは"
+          mapped.invocation.arguments.markdown_text === "こんにちは" &&
+          !("text" in mapped.invocation.arguments)
       )
     );
   }

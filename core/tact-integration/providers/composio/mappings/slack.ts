@@ -14,10 +14,13 @@ import type { IntegrationAction } from "../../../types";
 //     旧slugを使わない)
 //   - 必須入力: channel(投稿先のchannel ID/name・DM channel ID・
 //     private group)
-//   - 少なくとも1つの本文系フィールド(markdown_text/text/blocks/
-//     attachments)が必要。このAdapterはtext(プレーンテキスト)のみを
-//     Canonical inputとして受け付ける(絶対条件: 巨大なIntegrationを
-//     一度に作らない。Block Kit等の高度な入力はPhase C1のscope外)。
+//   - 本文は`markdown_text`(通常のMarkdown本文用)または`blocks`
+//     (Block Kit)のいずれか。`text`というfieldはschema上存在しない
+//     (Phase C1.5 Live Acceptanceで実機確認、additionalProperties:
+//     false)。このAdapterはCanonical input.text(プレーンテキスト)を
+//     受け取り、Composioへは`markdown_text`として渡す(絶対条件:
+//     巨大なIntegrationを一度に作らない。Block Kit等の高度な入力は
+//     Phase C1のscope外)。
 //
 // 絶対条件(Phase C1指示Section7): Tool slugそのものをTACT canonical
 // action identityにしない——この変換はcore/tact-integration/
@@ -86,7 +89,17 @@ export function mapSlackActionToComposioTool(
 
     invocation: {
       slug: SLACK_SEND_MESSAGE_TOOL_SLUG,
-      arguments: { channel, text },
+      // Phase C1.5 Live Acceptance(実機確認)で判明: 現在Composioが
+      // 実際にホストしているSlack toolkit(2026-09時点でtoolkit
+      // version 20260826_00がlatest解決先)のSLACK_SEND_MESSAGE
+      // schemaには`text`というfield自体が存在せず
+      // (additionalProperties: false)、通常テキスト本文は
+      // `markdown_text`で渡す仕様になっている(`blocks`使用時のみ
+      // `fallback_text`を使う設計、Phase C1時点のPhase C1実装
+      // ドキュメント作成時から仕様が変わっていた)。TACT Canonical
+      // Action(service/operation/input.text)は変更せず、この
+      // Provider固有のfield名変換だけをここに閉じ込める。
+      arguments: { channel, markdown_text: text },
     },
 
   };
