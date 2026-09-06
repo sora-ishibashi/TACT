@@ -56,6 +56,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
+        "[Phase C2.1c-b] workIdがApproval.workIdからそのまま転記される(decision受信側がgetApproval(workId,...)を再利用できるようにするため)",
+        action.workId === "work-1"
+      )
+    );
+
+    results.push(
+      check(
         "[基本] payload.actionが無い場合、summaryはreasonへフォールバックする",
         action.summary === "外部SaaSへの投稿には承認が必要です"
       )

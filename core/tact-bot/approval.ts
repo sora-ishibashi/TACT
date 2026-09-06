@@ -60,6 +60,13 @@ export function toBotRequestApprovalAction(
 
     inReplyToMessageId,
 
+    // Architecture Migration Phase C2.1c-b: decision受信側
+    // (BotApprovalDecision → 既存getApproval(workId, ...))が
+    // approvalIdだけでなくworkIdも必要なため、Approval Entity(既存
+    // canonical type)からそのまま転記する。新しいlookup APIは
+    // 追加しない。
+    workId: approval.workId,
+
     approvalId: approval.id,
 
     // action.summary(提案されたaction自体の説明)があればそちらを

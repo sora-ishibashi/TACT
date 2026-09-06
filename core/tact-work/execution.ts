@@ -446,7 +446,7 @@ export async function runWorkTurn(
     // 行う(1件ごとに呼んでも冪等——同じstatusへ複数回更新するだけ)。
     for (const { workTaskId, capability, requirement } of approvalRequirements) {
 
-      await deps.requestApproval(
+      const approval = await deps.requestApproval(
         {
           workId: work.id,
           taskId: workTaskId,
@@ -465,6 +465,25 @@ export async function runWorkTurn(
         userId,
         accessToken
       );
+
+      // Architecture Migration Phase C2.1c-b: 呼び出し元(Bot/Web両方が
+      // 経由するConversation層)が、このTurnで新規Approvalが発生した
+      // ことをOrchestrationResult経由で観測できるようにする
+      // (result.clarificationと同じ既存pattern)。複数件ある場合は
+      // 最初の1件を代表として設定する(絶対条件: 巨大なmulti-approval
+      // UIをこのPhaseで作らない、C2.1bと同じ単純化)。
+      if (approval && !result.pendingApproval) {
+
+        result = {
+          ...result,
+          pendingApproval: {
+            approvalId: approval.id,
+            summary: requirement.action?.summary ?? requirement.reason,
+            reason: requirement.reason,
+          },
+        };
+
+      }
 
     }
 

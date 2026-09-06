@@ -50,6 +50,7 @@ import {
   findConversationLink,
 } from "../conversationLink/supabaseConversationLinkStore";
 import { isLinkableChannel, type LinkableBotChannel } from "../identity/supabaseIdentityStore";
+import { toBotRequestApprovalAction } from "../approval";
 import type { BotAction, BotActionTarget, BotContext } from "../types";
 import type { BotCoreConnector } from "./types";
 
@@ -119,16 +120,25 @@ function summarize(content: string): string {
 }
 
 // ConversationTurnResult(core/tact-conversation)をBotAction[]へ変換する。
-// 最低限の対応: 通常回答→reply、clarification→reply(質問文)、
-// Artifactが紐付いた場合→deliver_result。それ以外の新しいAction種別
-// (request_approval等)は今回作らない(BOT-P4のscope)。
+// 対応: 通常回答→reply、clarification→reply(質問文)、Artifactが
+// 紐付いた場合→deliver_result。
+//
+// Architecture Migration Phase C2.1c-b: turn.pendingApproval(canonical
+// Approval Entity)が設定されている場合、既存のtoBotRequestApprovalAction()
+// (core/tact-bot/approval.ts、Phase B3で確立済みの純粋な変換関数)を
+// そのまま呼び、通常のreply/deliver_resultと併存させる(絶対条件:
+// 新しい別Approval UI rendererを作らない、既存answer textは併存可)。
 function toBotActions(
   turn: Extract<RunConversationTurnAsTrustedActorResult, { ok: true }>,
   target: BotActionTarget,
   inReplyToMessageId: string
 ): BotAction[] {
 
-  const { conversation, message } = turn;
+  const { conversation, message, pendingApproval } = turn;
+
+  const approvalAction: BotAction[] = pendingApproval
+    ? [toBotRequestApprovalAction(pendingApproval, target, inReplyToMessageId)]
+    : [];
 
   if (message.messageType === "clarification_question") {
 
@@ -139,6 +149,7 @@ function toBotActions(
         inReplyToMessageId,
         text: message.content,
       },
+      ...approvalAction,
     ];
 
   }
@@ -154,6 +165,7 @@ function toBotActions(
         resultText: message.content,
         artifactId: conversation.artifactId,
       },
+      ...approvalAction,
     ];
 
   }
@@ -165,6 +177,7 @@ function toBotActions(
       inReplyToMessageId,
       text: message.content,
     },
+    ...approvalAction,
   ];
 
 }

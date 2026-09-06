@@ -7,8 +7,8 @@ import { getSimpleChatResponse } from "../tact-intent/ruleRouter";
 // この存在を一切知らない(依存方向はcore/tact-conversation →
 // core/tact-work → core/tact-orchestratorの一方向、core/tact-work/
 // index.tsのコメント参照)。
-import { resolveWork, runWorkTurn, defaultRunWorkTurnDeps } from "../tact-work";
-import type { WorkIntakeSource, ActorReference, ResolveIntegrationConnection } from "../tact-work";
+import { resolveWork, runWorkTurn, defaultRunWorkTurnDeps, getApproval } from "../tact-work";
+import type { WorkIntakeSource, ActorReference, ResolveIntegrationConnection, Approval } from "../tact-work";
 import { listConnectionsForUser } from "../tact-integration";
 import type { IntegrationService } from "../tact-integration";
 
@@ -267,6 +267,39 @@ export function planConversationTurn(
 }
 
 // =========================
+// resolvePendingApproval (Architecture Migration Phase C2.1c-b)
+// =========================
+//
+// OrchestrationResult.pendingApproval(最小限のprimitive shapeのみ、
+// tact-orchestratorがApproval型を持たない一方向依存を維持するため)
+// から、core/tact-bot/connector/conversationConnector.tsが既存の
+// toBotRequestApprovalAction()をそのまま呼べるよう、完全なApproval
+// Entityを取得し直す。conversation.workId(resolveAndRunWork()が
+// 直前で解決/repair済みの値、同じ参照をmutateしているためこの時点で
+// 反映済み)とWork所有者(conversation.userId)によるownership確認は
+// 既存getApproval()自体が行う(絶対条件: 新しいownership検証を
+// 増やさない)。取得できない場合(理論上到達しないはずだが防御的に)は
+// undefinedのまま返し、通常のTurn応答自体は失敗させない。
+async function resolvePendingApproval(
+  result: OrchestrationResult,
+  conversation: Conversation,
+  accessToken: string
+): Promise<Approval | undefined> {
+
+  if (!result.pendingApproval || !conversation.workId) {
+    return undefined;
+  }
+
+  return getApproval(
+    conversation.workId,
+    conversation.userId,
+    accessToken,
+    result.pendingApproval.approvalId
+  );
+
+}
+
+// =========================
 // buildClarificationResendInput (純粋関数)
 // =========================
 //
@@ -354,6 +387,18 @@ export interface ConversationTurnResult {
   message: ConversationMessage;
 
   executionRecord?: ExecutionRecord;
+
+  // Architecture Migration Phase C2.1c-b: このTurnで新規に作られた
+  // Approval(canonical Entity、core/tact-work/types.ts)。設定される
+  // のはOrchestrationResult.pendingApprovalが返った場合のみ
+  // (core/tact-work/execution.tsのrunWorkTurn()参照)。core/tact-bot/
+  // connector/conversationConnector.tsが、既存のtoBotRequestApprovalAction()
+  // (core/tact-bot/approval.ts)をそのまま呼ぶために、projection化
+  // されていない完全なApproval Entityをここで保持する
+  // (tact-orchestrator層はApproval型を持たない一方向依存のため、
+  // approvalIdからこの層で再取得している、下記resolvePendingApproval()
+  // 参照)。
+  pendingApproval?: Approval;
 
 }
 
@@ -1834,7 +1879,9 @@ async function runNormalTurn(
     executionRecord.id
   );
 
-  return { conversation, userMessage, message, executionRecord };
+  const pendingApproval = await resolvePendingApproval(result, conversation, accessToken);
+
+  return { conversation, userMessage, message, executionRecord, pendingApproval };
 
 }
 
@@ -1966,6 +2013,8 @@ async function runClarificationAnswerTurn(
     await clearPendingClarification(conversation, accessToken, new Date().toISOString());
   }
 
-  return { conversation, userMessage, message, executionRecord };
+  const pendingApproval = await resolvePendingApproval(result, conversation, accessToken);
+
+  return { conversation, userMessage, message, executionRecord, pendingApproval };
 
 }

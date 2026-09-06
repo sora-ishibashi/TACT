@@ -37,6 +37,7 @@ import type {
   RunConversationTurnAsTrustedActorResult,
 } from "../../../core/tact-bot/execution/trustedConversationTurn";
 import type { Conversation, ConversationMessage } from "../../../core/tact-conversation/types";
+import type { Approval } from "../../../core/tact-work/types";
 import type { BotContext, BotIncomingMessage } from "../../../core/tact-bot/types";
 import { buildBotContext } from "../../../core/tact-bot/context/buildBotContext";
 import { check, summarize, type CheckResult } from "../lib/check";
@@ -85,6 +86,7 @@ function makeMessageRow(overrides: Partial<ConversationMessage> = {}): Conversat
 function okResult(overrides: {
   conversation?: Partial<Conversation>;
   message?: Partial<ConversationMessage>;
+  pendingApproval?: Approval;
 } = {}): Extract<RunConversationTurnAsTrustedActorResult, { ok: true }> {
 
   const conversation = makeConversation(overrides.conversation);
@@ -95,6 +97,44 @@ function okResult(overrides: {
     conversation,
     userMessage: makeMessageRow({ id: "user-msg-1", role: "user", content: "SROIについて調べて" }),
     message,
+    pendingApproval: overrides.pendingApproval,
+  };
+
+}
+
+// Architecture Migration Phase C2.1c-b: Integration proposalが実際に
+// 生成するApproval.payload(core/tact-work/execution.ts経由)を模した
+// fixture。provider-specific identifier(providerConnectionRef/
+// connectedAccountId/Composio tool slug等)は一切含めない
+// (実際のcanonical payloadにも含まれないため)。
+function makePendingApproval(overrides: Partial<Approval> = {}): Approval {
+
+  return {
+    id: "approval-1",
+    workId: "work-1",
+    taskId: "task-1",
+    requestedByActorKind: "ai",
+    requestedByActorId: "integration.slack.send_message",
+    requestedFromActorKind: "user",
+    requestedFromActorId: "tact-user-1",
+    status: "pending",
+    reason: "外部SaaS(Slack)への投稿には承認が必要です",
+    payload: {
+      scope: "task",
+      action: {
+        kind: "integration_action",
+        summary: "Slack「general」チャンネルへメッセージを送信します",
+        metadata: {
+          service: "slack",
+          operation: "send_message",
+          input: { channel: "general", text: "明日の会議は10時です" },
+          connectionId: "conn-1",
+        },
+      },
+    },
+    requestedAt: "2026-09-06T00:00:00.000Z",
+    createdAt: "2026-09-06T00:00:00.000Z",
+    ...overrides,
   };
 
 }
@@ -362,6 +402,73 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       )
     );
 
+    results.push(
+      check(
+        "[Case2] Approvalが無い通常Turnでは、request_approval Actionが一切追加されない(既存Bot response behavior無変更)",
+        actions.every((a) => a.kind !== "request_approval")
+      )
+    );
+
+  }
+
+  // ==========================================================
+  // Case1(Architecture Migration Phase C2.1c-b): Approval presentation
+  // ==========================================================
+
+  {
+    const pendingApproval = makePendingApproval();
+
+    const { deps } = recordingDeps({
+      runTurnResults: [
+        okResult({
+          message: { content: "Slack「general」チャンネルへメッセージを送信する準備ができました。承認をお願いします。" },
+          pendingApproval,
+        }),
+      ],
+    });
+
+    const connector = createConversationBotCoreConnector(deps);
+    const context = contextWithIdentity(makeMessage(), "tact-user-1");
+
+    const actions = await connector.handle(context);
+
+    const approvalAction = actions.find((a) => a.kind === "request_approval");
+
+    results.push(
+      check(
+        "[Case1] pending Approvalが存在する場合、outbound BotActionsにrequest_approval Actionが含まれる(通常replyと併存)",
+        actions.some((a) => a.kind === "reply") && !!approvalAction
+      )
+    );
+
+    results.push(
+      check(
+        "[Case1] request_approval ActionにapprovalId(callback識別用)とoptions(approve/reject)が含まれる",
+        approvalAction?.kind === "request_approval" &&
+          approvalAction.approvalId === "approval-1" &&
+          approvalAction.workId === "work-1" &&
+          JSON.stringify(approvalAction.options) === JSON.stringify(["approve", "reject"])
+      )
+    );
+
+    results.push(
+      check(
+        "[Case1] visible text(summary)にprovider固有識別子(providerConnectionRef/connectedAccountId/Composio tool slug/内部connectionId)が含まれない",
+        approvalAction?.kind === "request_approval" &&
+          !approvalAction.summary.toLowerCase().includes("composio") &&
+          !approvalAction.summary.toLowerCase().includes("providerconnectionref") &&
+          !approvalAction.summary.toLowerCase().includes("connectedaccountid") &&
+          !approvalAction.summary.includes("conn-1") &&
+          !approvalAction.summary.toLowerCase().includes("slack_send_message")
+      )
+    );
+
+    results.push(
+      check(
+        "[Case1] visible textに内部Approval UUID(approvalId自体の生値)が本文として出力されていない(approvalIdはあくまでcallback識別用のfieldとしてのみ保持)",
+        approvalAction?.kind === "request_approval" && !approvalAction.summary.includes("approval-1")
+      )
+    );
   }
 
   // ==========================================================

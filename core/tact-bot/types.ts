@@ -139,9 +139,61 @@ export interface BotSendDmAction extends BotActionBase {
 // ことのみを保証する。
 export interface BotRequestApprovalAction extends BotActionBase {
   kind: "request_approval";
+  // Architecture Migration Phase C2.1c-b: approve/reject decisionを
+  // 受け取る側(BotApprovalDecision)が既存のgetApproval(workId, ...)
+  // をそのまま使えるよう、approvalIdと対で保持する(新しいTask/
+  // Approval lookup APIを追加しないための最小限の追加field)。
+  // provider credential等ではないため、このpayloadに含めても
+  // 絶対条件(Section8)には抵触しない。
+  workId: string;
   approvalId: string;
   summary: string;
   options?: string[];
+}
+
+// =========================
+// Approval Decision (Bot -> Core、Architecture Migration Phase C2.1c-b)
+// =========================
+//
+// 「Bot interactive decisionを受けるための既存canonical inbound
+// action/event abstraction」がrepository内に存在しないため、
+// BotIncomingMessageと対になる、最小限のprovider-neutral abstraction
+// として新設する。Slack Block Kit button click / LINE postback等の
+// platform固有形式はここへ一切持ち込まない(ChannelAdapter相当の
+// 変換層が将来担う、BOT-P3 Native Slackのscope)。
+//
+// 絶対条件(Section8): このpayloadにはaccessToken・service role key・
+// providerConnectionRef・connectedAccountId・Composio credential等を
+// 一切含めない。tactUserIdもここには含めない——actor.externalUserId
+// (platform側のuser識別子)から、BotIncomingMessageと全く同じ
+// identity resolver経由でtrusted tactUserIdへ解決する
+// (core/tact-bot/gateway/receiveApprovalDecision.ts参照)。
+export type BotApprovalDecisionKind = "approve" | "reject";
+
+export interface BotApprovalDecision {
+
+  channel: BotChannel;
+
+  // decisionを行った外部platform user(識別・identity解決にのみ使う)。
+  actor: BotActor;
+
+  // Bot側が応答(ack reply等)を返す先。BotActionTargetは元々
+  // provider非依存の型であり、Slack固有のchannel id等をcanonical
+  // coreへ新規追加するものではない。
+  target: BotActionTarget;
+
+  workId: string;
+
+  approvalId: string;
+
+  decision: BotApprovalDecisionKind;
+
+  // reject理由(任意)。UIが理由入力欄を持たない場合は省略してよい
+  // (絶対条件: 巨大なmodal/comment UIを今回作らない)。
+  reason?: string;
+
+  inReplyToMessageId?: string;
+
 }
 
 // 実行中の進捗を通知する(例: 「Researchを実行中です」)。

@@ -413,6 +413,25 @@ export interface OrchestrationResult {
   // 後方互換性を優先した設計)。
   clarification?: ClarificationRequest;
 
+  // Architecture Migration Phase C2.1c-b: 設定されている場合、この
+  // Turnで新規にApprovalが作成され、Workがwaiting_for_approvalへ
+  // 進んだことを示す(core/tact-work/execution.tsのrunWorkTurn()が、
+  // requestApproval()成功後にこのfieldを設定する)。clarificationと
+  // 同じ設計方針(Phase15参照): Provider非依存の最小限の情報だけを
+  // 持つ——tact-orchestratorはcore/tact-work(Approval Canonical
+  // Entity)を一切importしない一方向依存を維持するため、Approval型
+  // そのものではなく、この最小限の自己完結したshapeだけを持つ
+  // (呼び出し元がapprovalIdから実際のApprovalを再取得して使う)。
+  pendingApproval?: {
+
+    approvalId: string;
+
+    summary: string;
+
+    reason: string;
+
+  };
+
   // Phase 5: Task結果から生成・評価・(採用された場合)実際に書き込んだ
   // Memory Candidateの一覧。書き込みに失敗しても本体のtasks[].status
   // には一切影響しない(絶対条件、commander.tsの呼び出し順序でも
