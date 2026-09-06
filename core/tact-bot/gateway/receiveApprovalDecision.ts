@@ -34,6 +34,7 @@ import {
   handleApprovalDecisionAsTrustedActor,
   type HandleApprovalDecisionAsTrustedActorParams,
   type HandleApprovalDecisionAsTrustedActorResult,
+  type ExecutionOutcomeOrError,
 } from "../execution/trustedApprovalDecision";
 
 export interface BotApprovalDecisionGatewayDeps {
@@ -65,6 +66,13 @@ export interface ReceiveBotApprovalDecisionResult {
   // handled=trueの場合のみ設定される。
   outcomeStatus?: string;
 
+  // Architecture Migration Phase C2.1c-c: executeApprovedIntegrationAction()
+  // (core/tact-integration/execution.ts)へ実際に到達した場合のみ設定
+  // される、canonical execution outcomeのstatus("execution_error"含む)。
+  // reject時、またはapproveでもexecution条件を満たさなかった場合は
+  // 常にundefined。
+  executionStatus?: string;
+
   actions: BotAction[];
 
 }
@@ -77,10 +85,11 @@ function buildNotConfiguredMessage(): string {
   return "現在この操作を処理できません。しばらくお待ちください。";
 }
 
-// ApprovalResolutionOutcome.statusごとのack文言。新しい業務判断は
-// 一切加えない(既存core/tact-work/approval.tsが確定させた結果を
-// そのまま人間可読な文字列へ変換するだけ)。
-function buildAckMessage(decision: "approve" | "reject", outcomeStatus: string): string {
+// ApprovalResolutionOutcome.statusごとのack文言(executionへ到達しな
+// かった場合のみ使う)。新しい業務判断は一切加えない(既存
+// core/tact-work/approval.tsが確定させた結果をそのまま人間可読な
+// 文字列へ変換するだけ)。
+function buildApprovalOnlyAckMessage(decision: "approve" | "reject", outcomeStatus: string): string {
 
   switch (outcomeStatus) {
     case "approved":
@@ -99,6 +108,55 @@ function buildAckMessage(decision: "approve" | "reject", outcomeStatus: string):
       return "対象のApprovalが見つかりませんでした。";
     default:
       return "処理結果を確認できませんでした。";
+  }
+
+}
+
+// Architecture Migration Phase C2.1c-c: executeApprovedIntegrationAction()
+// のcanonical outcome(core/tact-integration/types.tsのstatus)だけを
+// 見て、Bot向けの安全な文言へ変換する。絶対条件: run/providerの生の
+// error・providerExecutionRef・connectionId・approvalId等の内部IDは
+// 一切参照しない(outcome.statusという列挙値だけを見るswitch)。
+// switch exhaustiveness: 新しいstatusが将来追加された場合、この
+// exhaustiveCheckがTS compile errorとして気づかせる。
+function buildExecutionAckMessage(outcome: ExecutionOutcomeOrError): string {
+
+  switch (outcome.status) {
+
+    case "completed":
+      return "承認しました。送信が完了しました。";
+
+    case "failed":
+      return "承認しましたが、送信に失敗しました。";
+
+    case "already_executed":
+      return "この操作はすでに実行されています。";
+
+    case "connection_unavailable":
+      return "承認しましたが、連携先を利用できないため実行できませんでした。";
+
+    case "task_not_executable":
+    case "work_not_runnable":
+    case "invalid_action":
+      return "承認しましたが、現在この操作を実行できませんでした。";
+
+    case "not_found":
+    case "approval_not_approved":
+      return "承認しましたが、対象の操作を確認できませんでした。";
+
+    // Architecture Migration Phase C2.1c-c(ユーザー指示、最重要):
+    // unexpected exception時は「結果不明」であることだけを伝える。
+    // 「もう一度承認してください」「再試行してください」等、同じ
+    // protected external writeの再実行を促す文言は絶対に含めない
+    // (この状態を自動retryのsignalとして扱わないため)。
+    case "execution_error":
+      return "承認は完了しましたが、実行結果を確認できませんでした。";
+
+    default: {
+      const exhaustiveCheck: never = outcome;
+      return exhaustiveCheck;
+    }
+
   }
 
 }
@@ -158,15 +216,22 @@ export async function receiveBotApprovalDecision(
 
   }
 
+  const { approvalOutcome, executionOutcome } = result;
+
+  const text = executionOutcome
+    ? buildExecutionAckMessage(executionOutcome)
+    : buildApprovalOnlyAckMessage(decision.decision, approvalOutcome.status);
+
   return {
     handled: true,
-    outcomeStatus: result.status,
+    outcomeStatus: approvalOutcome.status,
+    executionStatus: executionOutcome?.status,
     actions: [
       {
         kind: "reply",
         target: decision.target,
         inReplyToMessageId: decision.inReplyToMessageId,
-        text: buildAckMessage(decision.decision, result.status),
+        text,
       },
     ],
   };

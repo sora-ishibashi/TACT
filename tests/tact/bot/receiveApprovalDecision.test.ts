@@ -1,6 +1,6 @@
 // =========================
 // TACT Bot — receiveBotApprovalDecision Regression
-// (Architecture Migration Phase C2.1c-b)
+// (Architecture Migration Phase C2.1c-b / C2.1c-c)
 // =========================
 //
 // 対象: core/tact-bot/gateway/receiveApprovalDecision.tsの
@@ -17,6 +17,10 @@
 //     Gatewayが素通しすること(新しいidempotency機構を作らない)
 //   - BotApprovalDecisionのcallback payloadにcredential相当の
 //     fieldが存在しないこと
+//   - Phase C2.1c-c: executionOutcome(canonical Integration
+//     execution outcome)をcanonical statusだけを見て安全な文言へ
+//     変換すること、raw provider detail/内部IDを一切含めないこと、
+//     execution_error時に再試行を促す文言を含めないこと
 
 import {
   receiveBotApprovalDecision,
@@ -29,6 +33,7 @@ import type {
 import type { BotApprovalDecision, BotIdentity } from "../../../core/tact-bot/types";
 import type { BotIdentityResolver } from "../../../core/tact-bot/identity/resolver";
 import type { Approval } from "../../../core/tact-work/types";
+import type { IntegrationActionExecutionOutcome } from "../../../core/tact-integration/execution";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeDecision(overrides: Partial<BotApprovalDecision> = {}): BotApprovalDecision {
@@ -85,7 +90,8 @@ function makeDeps(options: {
   };
 
   const handleDecisionResult: HandleApprovalDecisionAsTrustedActorResult =
-    options.handleDecisionResult ?? { ok: true, status: "approved", approval: makeApproval(), workResumed: true };
+    options.handleDecisionResult ??
+    { ok: true, approvalOutcome: { status: "approved", approval: makeApproval(), workResumed: true } };
 
   const deps: BotApprovalDecisionGatewayDeps = {
     identityResolver,
@@ -97,6 +103,14 @@ function makeDeps(options: {
 
   return { deps, identityResolveCalls, handleDecisionCalls };
 
+}
+
+function executionResult(executionOutcome: IntegrationActionExecutionOutcome | { status: "execution_error" }): HandleApprovalDecisionAsTrustedActorResult {
+  return {
+    ok: true,
+    approvalOutcome: { status: "approved", approval: makeApproval(), workResumed: true },
+    executionOutcome,
+  };
 }
 
 export async function run(): Promise<{ pass: number; fail: number }> {
@@ -134,10 +148,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
-  // ---- Case3: approve ----
+  // ---- Case3: approve(executionへ進まない、approve outcomeのみ) ----
   {
     const { deps, handleDecisionCalls } = makeDeps({
-      handleDecisionResult: { ok: true, status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
+      handleDecisionResult: { ok: true, approvalOutcome: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true } },
     });
 
     const result = await receiveBotApprovalDecision(makeDecision({ decision: "approve" }), deps);
@@ -164,7 +178,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ---- Case4: reject ----
   {
     const { deps, handleDecisionCalls } = makeDeps({
-      handleDecisionResult: { ok: true, status: "rejected", approval: makeApproval({ status: "rejected" }) },
+      handleDecisionResult: { ok: true, approvalOutcome: { status: "rejected", approval: makeApproval({ status: "rejected" }) } },
     });
 
     const result = await receiveBotApprovalDecision(makeDecision({ decision: "reject", reason: "却下します" }), deps);
@@ -175,7 +189,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         handleDecisionCalls[0]?.decision === "reject" &&
           handleDecisionCalls[0]?.reason === "却下します" &&
           result.handled === true &&
-          result.outcomeStatus === "rejected"
+          result.outcomeStatus === "rejected" &&
+          result.executionStatus === undefined
       )
     );
   }
@@ -187,7 +202,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // 素通しするだけであることを確認する。
   {
     const { deps, handleDecisionCalls } = makeDeps({
-      handleDecisionResult: { ok: true, status: "not_found" },
+      handleDecisionResult: { ok: true, approvalOutcome: { status: "not_found" } },
     });
 
     const result = await receiveBotApprovalDecision(makeDecision(), deps);
@@ -200,10 +215,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
-  // ---- Case6: repeated approve(既に承認済み) ----
+  // ---- Case6: repeated approve(既に承認済み、executionはundefined側) ----
   {
     const { deps } = makeDeps({
-      handleDecisionResult: { ok: true, status: "already_resolved", approval: makeApproval({ status: "approved" }) },
+      handleDecisionResult: { ok: true, approvalOutcome: { status: "already_resolved", approval: makeApproval({ status: "approved" }) } },
     });
 
     const result = await receiveBotApprovalDecision(makeDecision({ decision: "approve" }), deps);
@@ -219,7 +234,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ---- Case7: repeated reject(既に却下済み) ----
   {
     const { deps } = makeDeps({
-      handleDecisionResult: { ok: true, status: "already_resolved", approval: makeApproval({ status: "rejected" }) },
+      handleDecisionResult: { ok: true, approvalOutcome: { status: "already_resolved", approval: makeApproval({ status: "rejected" }) } },
     });
 
     const result = await receiveBotApprovalDecision(makeDecision({ decision: "reject" }), deps);
@@ -235,7 +250,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ---- Case8: conflicting decision(approved -> reject 等) ----
   {
     const { deps } = makeDeps({
-      handleDecisionResult: { ok: true, status: "invalid_transition", approval: makeApproval({ status: "approved" }) },
+      handleDecisionResult: { ok: true, approvalOutcome: { status: "invalid_transition", approval: makeApproval({ status: "approved" }) } },
     });
 
     const result = await receiveBotApprovalDecision(makeDecision({ decision: "reject" }), deps);
@@ -270,6 +285,185 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         "[Case10] payloadはworkId/approvalId/decision/reason(任意)/channel/actor/target/inReplyToMessageId(任意)という最小限のfieldだけで構成される",
         Object.keys(decision).sort().join(",") ===
           ["actor", "channel", "decision", "target", "workId", "approvalId"].sort().join(",")
+      )
+    );
+  }
+
+  // ==========================================================
+  // Phase C2.1c-c: execution outcome -> safe Bot reply mapping
+  // ==========================================================
+
+  // ---- completed: safe success reply ----
+  {
+    const { deps } = makeDeps({ handleDecisionResult: executionResult({ status: "completed", run: {} as never }) });
+
+    const result = await receiveBotApprovalDecision(makeDecision(), deps);
+    const text = result.actions[0].kind === "reply" ? result.actions[0].text : "";
+
+    results.push(
+      check(
+        "[Execution:completed] 成功時、安全なsuccess replyが1件返り、executionStatus=completedが観測できる",
+        result.handled === true && result.executionStatus === "completed" && text.length > 0
+      )
+    );
+  }
+
+  // ---- failed: safe failure reply(raw run/provider errorを含まない) ----
+  {
+    const { deps } = makeDeps({
+      handleDecisionResult: executionResult({ status: "failed", run: { error: "raw provider stack trace / secret-looking detail" } as never }),
+    });
+
+    const result = await receiveBotApprovalDecision(makeDecision(), deps);
+    const text = result.actions[0].kind === "reply" ? result.actions[0].text : "";
+
+    results.push(
+      check(
+        "[Execution:failed] 失敗時、安全なfailure replyが返り、run.errorの生文字列がtextに含まれない",
+        result.executionStatus === "failed" &&
+          !text.includes("raw provider stack trace") &&
+          !text.toLowerCase().includes("secret")
+      )
+    );
+  }
+
+  // ---- already_executed: safe already-executed reply ----
+  {
+    const { deps } = makeDeps({ handleDecisionResult: executionResult({ status: "already_executed", run: {} as never }) });
+
+    const result = await receiveBotApprovalDecision(makeDecision(), deps);
+    const text = result.actions[0].kind === "reply" ? result.actions[0].text : "";
+
+    results.push(
+      check(
+        "[Execution:already_executed] 既に実行済みである旨のtextが返り、providerが再度呼ばれたことを示唆する文言を含まない",
+        result.executionStatus === "already_executed" && text.includes("すでに実行")
+      )
+    );
+  }
+
+  // ---- connection_unavailable: safe connection message ----
+  {
+    const { deps } = makeDeps({ handleDecisionResult: executionResult({ status: "connection_unavailable" }) });
+
+    const result = await receiveBotApprovalDecision(makeDecision(), deps);
+    const text = result.actions[0].kind === "reply" ? result.actions[0].text : "";
+
+    results.push(
+      check(
+        "[Execution:connection_unavailable] 連携先を利用できない旨の安全なtextが返り、connectionId/providerConnectionRefを含まない",
+        result.executionStatus === "connection_unavailable" &&
+          !text.toLowerCase().includes("connectionid") &&
+          !text.toLowerCase().includes("providerconnectionref")
+      )
+    );
+  }
+
+  // ---- work_not_runnable / task_not_executable / invalid_action: safe generic message ----
+  {
+    for (const status of ["work_not_runnable", "task_not_executable", "invalid_action"] as const) {
+
+      const outcome =
+        status === "work_not_runnable"
+          ? { status: "work_not_runnable" as const, workStatus: "waiting_for_approval" as const }
+          : status === "task_not_executable"
+          ? { status: "task_not_executable" as const, taskStatus: "running" as const }
+          : { status: "invalid_action" as const, reason: "internal malformed payload detail" };
+
+      const { deps } = makeDeps({ handleDecisionResult: executionResult(outcome) });
+
+      const result = await receiveBotApprovalDecision(makeDecision(), deps);
+      const text = result.actions[0].kind === "reply" ? result.actions[0].text : "";
+
+      results.push(
+        check(
+          `[Execution:${status}] 安全な汎用textが返り、内部reason/status文字列("internal malformed payload detail"等)を含まない`,
+          result.executionStatus === status && !text.includes("internal malformed payload detail")
+        )
+      );
+
+    }
+  }
+
+  // ---- execution_error: result unknown message、retryを促さない ----
+  {
+    const { deps } = makeDeps({ handleDecisionResult: executionResult({ status: "execution_error" }) });
+
+    const result = await receiveBotApprovalDecision(makeDecision(), deps);
+    const text = result.actions[0].kind === "reply" ? result.actions[0].text : "";
+
+    results.push(
+      check(
+        "[Execution:execution_error] 「実行結果を確認できませんでした」相当のtextが返り、「もう一度」「再試行」「再度お試し」等、再実行を促す文言を一切含まない",
+        result.executionStatus === "execution_error" &&
+          text.includes("確認できません") &&
+          !text.includes("もう一度") &&
+          !text.includes("再試行") &&
+          !text.includes("再度お試し")
+      )
+    );
+  }
+
+  // ---- reject: 既存reject ack維持(executionは常にundefined) ----
+  {
+    const { deps } = makeDeps({
+      handleDecisionResult: { ok: true, approvalOutcome: { status: "rejected", approval: makeApproval({ status: "rejected" }) } },
+    });
+
+    const result = await receiveBotApprovalDecision(makeDecision({ decision: "reject" }), deps);
+    const text = result.actions[0].kind === "reply" ? result.actions[0].text : "";
+
+    results.push(
+      check(
+        "[Execution:reject] reject時はexecutionStatusが常にundefinedであり、既存の却下ack文言がそのまま維持される",
+        result.executionStatus === undefined && text.includes("却下")
+      )
+    );
+  }
+
+  // ---- Leakage: 全execution outcomeメッセージにUUID/内部ID/Composio等が含まれない ----
+  {
+    const outcomes: (IntegrationActionExecutionOutcome | { status: "execution_error" })[] = [
+      { status: "completed", run: {} as never },
+      { status: "failed", run: {} as never },
+      { status: "already_executed", run: {} as never },
+      { status: "connection_unavailable" },
+      { status: "task_not_executable", taskStatus: "running" },
+      { status: "work_not_runnable", workStatus: "waiting_for_approval" },
+      { status: "invalid_action", reason: "x" },
+      { status: "not_found" },
+      { status: "approval_not_approved", approvalStatus: "pending" },
+      { status: "execution_error" },
+    ];
+
+    let allSafe = true;
+
+    for (const outcome of outcomes) {
+
+      const { deps } = makeDeps({ handleDecisionResult: executionResult(outcome) });
+      const result = await receiveBotApprovalDecision(makeDecision(), deps);
+      const text = result.actions[0].kind === "reply" ? result.actions[0].text.toLowerCase() : "";
+
+      if (
+        text.includes("approval-1") ||
+        text.includes("work-1") ||
+        text.includes("task-1") ||
+        text.includes("providerconnectionref") ||
+        text.includes("connectedaccountid") ||
+        text.includes("providerexecutionref") ||
+        text.includes("composio") ||
+        text.includes("slack_send_message") ||
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(text)
+      ) {
+        allSafe = false;
+      }
+
+    }
+
+    results.push(
+      check(
+        "[Leakage] 全executionOutcome(completed/failed/already_executed/connection_unavailable/task_not_executable/work_not_runnable/invalid_action/not_found/approval_not_approved/execution_error)のreply textに、内部ID・UUID・provider固有識別子が一切含まれない",
+        allSafe
       )
     );
   }
