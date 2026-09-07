@@ -17,6 +17,9 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 //       20260830010000_create_tact_bot_identity_tables.sql参照)
 //   - core/tact-bot/conversationLink/supabaseConversationLinkStore.ts
 //       (tact_bot_conversation_links: 同上)
+//   - core/tact-bot/eventDedup/supabaseEventDedupStore.ts
+//       (tact_bot_processed_events: 同上。S1a、Slack Events API等の
+//       inbound event重複配信をatomic claimで防ぐためのdedup専用table)
 //   - core/tact-bot/execution/trustedConversationTurn.ts
 //       (Trusted Bot Execution Boundary、BOT-P2.5。既存
 //       core/tact-conversation/store.tsの各関数へ、通常のuser access

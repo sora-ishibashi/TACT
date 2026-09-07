@@ -117,6 +117,11 @@ import { run as runBotTrustedConversationTurn } from "./bot/trustedConversationT
 import { run as runBotApproval } from "./bot/approval.test";
 import { run as runBotTrustedApprovalDecision } from "./bot/trustedApprovalDecision.test";
 import { run as runBotReceiveApprovalDecision } from "./bot/receiveApprovalDecision.test";
+import { run as runBotSlackVerifySignature } from "./bot/slackVerifySignature.test";
+import { run as runBotSlackNormalizeEvent } from "./bot/slackNormalizeEvent.test";
+import { run as runBotEventDedupStore } from "./bot/eventDedupStore.test";
+import { run as runBotSlackWebhookHandler } from "./bot/slackWebhookHandler.test";
+import { run as runBotSlackWebhookRoute } from "./bot/slackWebhookRoute.test";
 import { run as runIntegrationMapping } from "./integration/mapping.test";
 import { run as runIntegrationComposioClient } from "./integration/composioClient.test";
 import { run as runIntegrationGateway } from "./integration/gateway.test";
@@ -218,6 +223,11 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "bot/approval", run: runBotApproval },
   { name: "bot/trustedApprovalDecision", run: runBotTrustedApprovalDecision },
   { name: "bot/receiveApprovalDecision", run: runBotReceiveApprovalDecision },
+  { name: "bot/slackVerifySignature", run: runBotSlackVerifySignature },
+  { name: "bot/slackNormalizeEvent", run: runBotSlackNormalizeEvent },
+  { name: "bot/eventDedupStore", run: runBotEventDedupStore },
+  { name: "bot/slackWebhookHandler", run: runBotSlackWebhookHandler },
+  { name: "bot/slackWebhookRoute", run: runBotSlackWebhookRoute },
   { name: "integration/mapping", run: runIntegrationMapping },
   { name: "integration/composioClient", run: runIntegrationComposioClient },
   { name: "integration/gateway", run: runIntegrationGateway },

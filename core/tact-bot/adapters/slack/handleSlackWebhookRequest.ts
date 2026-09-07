@@ -1,0 +1,217 @@
+import { after } from "next/server";
+import {
+  receiveBotMessage as defaultReceiveBotMessage,
+  type ReceiveBotMessageResult,
+} from "../../gateway/receiveMessage";
+import type { BotIncomingMessage } from "../../types";
+import {
+  claimExternalEvent as defaultClaimExternalEvent,
+  type ClaimExternalEventResult,
+} from "../../eventDedup/supabaseEventDedupStore";
+import { getSlackSigningSecret } from "./config";
+import { verifySlackRequest } from "./verifySlackSignature";
+import {
+  isAppMentionEventCallback,
+  isBotEchoEvent,
+  normalizeSlackAppMentionEvent,
+} from "./normalizeSlackEvent";
+import type { SlackAppMentionEvent, SlackEventCallbackEnvelope } from "./types";
+
+// =========================
+// TACT Bot — Slack Webhook Request Handler (S1a)
+// =========================
+//
+// app/api/tact/bot/slack/route.ts(薄いNext.js Route Handler)が実際に
+// 委譲する処理本体。ここをroute.tsから分離するのは、
+// (a) Route Handlerのexport signature(POST(request): Response)へ
+//     DIを持ち込めないため、
+// (b) 「fake dependencyを使ったroute/adapter testでreceiveBotMessage()
+//     が1回呼ばれることを証明する」(絶対条件Section21)ためには
+//     この処理本体自体がDI可能である必要があるため。
+//
+// 絶対条件(Section2、Architecture invariant): Slack raw payloadを
+// core/tact-conversation・core/tact-work・core/tact-orchestrator・
+// core/tact-research・core/tact-integration(Composio Integration
+// Gateway)のいずれへも渡さない。ここで扱うのはSlack payload →
+// canonical BotIncomingMessage → 既存receiveBotMessage()という
+// 境界だけであり、Integration Gateway/Composio/
+// executeApprovedIntegrationAction()は一切importしない。
+//
+// 処理順序(絶対条件Section17、この通りの順序を維持する):
+//   署名検証 → JSON parse → event_callback/app_mention確認 →
+//   bot echo除外 → event_id確認 → atomic event claim →
+//   canonical normalization → receiveBotMessage()
+//
+// ACK境界(絶対条件Section20): 通常のapp_mentionは、receiveBotMessage()
+// の完了を待たずにACK(200)を返す。本番既定はNext.js
+// after()(local node_modules/next/server.d.ts・
+// dist/server/after/after.d.tsで実際のAPI signatureを確認済み:
+// `after<T>(task: Promise<T> | (() => T | Promise<T>)): void`、
+// レスポンス送出後に実行される)。testは即時実行のfakeスケジューラへ
+// 差し替え、receiveBotMessage()の呼び出し回数を直接観測する。
+
+export interface SlackWebhookHandlerResponse {
+
+  status: number;
+
+  body: Record<string, unknown>;
+
+}
+
+export interface HandleSlackWebhookRequestDeps {
+
+  getSigningSecret: () => string | undefined;
+
+  claimExternalEvent: (params: {
+    channel: "slack";
+    externalEventId: string;
+  }) => Promise<ClaimExternalEventResult>;
+
+  receiveBotMessage: (message: BotIncomingMessage) => Promise<ReceiveBotMessageResult>;
+
+  // 絶対条件(Section20): normal app_mentionはACKを先に返す。
+  scheduleBackgroundWork: (task: () => Promise<void>) => void;
+
+  // テスト用DI(署名検証のreplay protectionへ伝播する)。
+  now?: () => number;
+
+}
+
+const defaultDeps: HandleSlackWebhookRequestDeps = {
+
+  getSigningSecret: getSlackSigningSecret,
+
+  claimExternalEvent: defaultClaimExternalEvent,
+
+  receiveBotMessage: defaultReceiveBotMessage,
+
+  scheduleBackgroundWork: (task) => {
+    after(task);
+  },
+
+};
+
+function ackIgnored(): SlackWebhookHandlerResponse {
+  return { status: 200, body: { ok: true } };
+}
+
+// Fetch API Headersの最小subset(NextRequest.headers/テスト用の
+// new Headers()いずれも満たす)。
+export interface SlackWebhookHeaders {
+  get(name: string): string | null;
+}
+
+export async function handleSlackWebhookRequest(
+  rawBody: string,
+  headers: SlackWebhookHeaders,
+  deps: HandleSlackWebhookRequestDeps = defaultDeps
+): Promise<SlackWebhookHandlerResponse> {
+
+  // 絶対条件(Section5): Signing Secret未設定ではそもそも検証できない
+  // ——「検証をskipして信用する」ことは絶対にしない、401で安全側へ倒す。
+  const signingSecret = deps.getSigningSecret();
+
+  if (!signingSecret) {
+    return { status: 401, body: { error: "not_configured" } };
+  }
+
+  const verification = verifySlackRequest({
+    rawBody,
+    timestamp: headers.get("x-slack-request-timestamp"),
+    signature: headers.get("x-slack-signature"),
+    signingSecret,
+    now: deps.now,
+  });
+
+  if (!verification.ok) {
+    return { status: 401, body: { error: "invalid_signature" } };
+  }
+
+  // 絶対条件(Section5、7): JSON.parse前のraw bodyだけを署名検証に使い、
+  // parseはその後に行う。
+  let envelope: unknown;
+
+  try {
+    envelope = JSON.parse(rawBody);
+  } catch {
+    return { status: 400, body: { error: "invalid_json" } };
+  }
+
+  if (!envelope || typeof envelope !== "object") {
+    return { status: 400, body: { error: "invalid_payload" } };
+  }
+
+  const parsed = envelope as { type?: unknown; challenge?: unknown };
+
+  // 絶対条件(Section7): 署名未検証のchallengeを返さない
+  // (この時点で既に署名検証を通過済み)。
+  if (parsed.type === "url_verification") {
+
+    if (typeof parsed.challenge !== "string" || parsed.challenge.length === 0) {
+      return { status: 400, body: { error: "invalid_challenge" } };
+    }
+
+    return { status: 200, body: { challenge: parsed.challenge } };
+
+  }
+
+  // 絶対条件(Section8): MVP対象外のevent(event_callback以外のtype、
+  // またはapp_mention以外のevent種別)は安全にignore/ACKする。
+  if (!isAppMentionEventCallback(envelope)) {
+    return ackIgnored();
+  }
+
+  const callbackEnvelope = envelope as SlackEventCallbackEnvelope & {
+    event: SlackAppMentionEvent;
+  };
+
+  const event = callbackEnvelope.event;
+
+  // 絶対条件(Section9): Bot自身のechoをTACT入力にしない(bot loop防止)。
+  // dedup claimより前に行う(対象外eventでdedup recordを無駄に作らない、
+  // 絶対条件Section17)。
+  if (isBotEchoEvent(event)) {
+    return ackIgnored();
+  }
+
+  const externalEventId =
+    typeof (callbackEnvelope as { event_id?: unknown }).event_id === "string"
+      ? (callbackEnvelope as { event_id: string }).event_id
+      : undefined;
+
+  if (!externalEventId) {
+    // 署名検証を既に通過しているため改ざんの可能性は無いが、
+    // event_idが無ければdedup自体が成立しない——安全側で処理しない
+    // (Slack公式仕様上event_callbackには常にevent_idが付与される
+    // ため、通常到達しない防御的分岐)。
+    return ackIgnored();
+  }
+
+  const claim = await deps.claimExternalEvent({ channel: "slack", externalEventId });
+
+  if (claim === "duplicate") {
+    return ackIgnored();
+  }
+
+  if (claim === "error") {
+    // 絶対条件(Section18、最重要): dedup storageの障害を「duplicate扱い
+    // で捨てる」ことも「claimed扱いで処理を進める」ことも安全ではない。
+    // fail closedで5xxを返し、Slackの自然な再送(retry)へ委ねる。
+    return { status: 500, body: { error: "dedup_unavailable" } };
+  }
+
+  // claim === "claimed"(このevent_idの初回配信)。
+  const message = normalizeSlackAppMentionEvent(callbackEnvelope);
+
+  if (!message) {
+    return ackIgnored();
+  }
+
+  // 絶対条件(Section20): receiveBotMessage()の完了を待たずにACKを返す。
+  deps.scheduleBackgroundWork(async () => {
+    await deps.receiveBotMessage(message);
+  });
+
+  return { status: 200, body: { ok: true } };
+
+}
