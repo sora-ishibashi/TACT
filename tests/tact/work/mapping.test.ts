@@ -334,6 +334,87 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   }
 
+  // ---- Test10: toApproval() — Approval Integrity列(ARCH-P1a) ----
+  {
+
+    // ARCH-P1a時点の既存Approval相当: 新列を一切含まないrow
+    // (=既存本番rowと同じ形、新列がoptionalであることの直接確認)。
+    const legacyRow: ApprovalRow = {
+      id: "approval-legacy",
+      work_id: "work-1",
+      task_id: "task-1",
+      requested_by_actor_kind: "ai",
+      requested_by_actor_id: "tact-research",
+      requested_from_actor_kind: "user",
+      requested_from_actor_id: "user-1",
+      status: "pending",
+      reason: "テスト",
+      payload: {},
+      requested_at: "2026-09-05T00:00:00.000Z",
+      responded_at: null,
+      response: null,
+      expires_at: null,
+      created_at: "2026-09-05T00:00:00.000Z",
+    };
+
+    const legacyApproval = toApproval(legacyRow);
+
+    results.push(
+      check(
+        "[Test10] Approval Integrity列を含まないrow(既存本番row相当)はsubjectVersion等がすべてundefinedのまま安全にtoApproval()できる",
+        legacyApproval.subjectVersion === undefined &&
+          legacyApproval.subject === undefined &&
+          legacyApproval.subjectHash === undefined &&
+          legacyApproval.subjectCapturedAt === undefined
+      )
+    );
+
+    // ARCH-P1b以降を想定した、新列がNULLで明示されているrow。
+    const nullRow: ApprovalRow = {
+      ...legacyRow,
+      id: "approval-null-subject",
+      subject_version: null,
+      subject_json: null,
+      subject_hash: null,
+      subject_captured_at: null,
+    };
+
+    const nullApproval = toApproval(nullRow);
+
+    results.push(
+      check(
+        "[Test10] Approval Integrity列が明示的にNULLのrowは、そのままnullとして伝播する(余計な正規化をしない)",
+        nullApproval.subjectVersion === null &&
+          nullApproval.subject === null &&
+          nullApproval.subjectHash === null &&
+          nullApproval.subjectCapturedAt === null
+      )
+    );
+
+    // 新列に実際に値が入っているrow(将来ARCH-P1b以降の想定形)。
+    const populatedRow: ApprovalRow = {
+      ...legacyRow,
+      id: "approval-with-subject",
+      subject_version: 1,
+      subject_json: { subjectVersion: 1, workId: "work-1" },
+      subject_hash: "a".repeat(64),
+      subject_captured_at: "2026-09-09T00:00:00.000Z",
+    };
+
+    const populatedApproval = toApproval(populatedRow);
+
+    results.push(
+      check(
+        "[Test10] Approval Integrity列に値がある場合、そのままdomain型へ変換される",
+        populatedApproval.subjectVersion === 1 &&
+          populatedApproval.subjectHash === "a".repeat(64) &&
+          populatedApproval.subjectCapturedAt === "2026-09-09T00:00:00.000Z" &&
+          JSON.stringify(populatedApproval.subject) === JSON.stringify({ subjectVersion: 1, workId: "work-1" })
+      )
+    );
+
+  }
+
   return summarize("work/mapping", results);
 
 }

@@ -142,6 +142,16 @@ export interface ApprovalRow {
   response: string | null;
   expires_at: string | null;
   created_at: string;
+  // Architecture Migration ARCH-P1a。既存rowはすべてNULL(ARCH-P1bの
+  // capture wiringが無いため)。optionalにする理由: 既存の
+  // tests/tact/work/mapping.test.tsのApprovalRowリテラルがこれらの
+  // 列を含まずに構築されているため、requiredにすると無関係な
+  // regressionを起こす(このPhaseの変更範囲外のtestを不必要に書き
+  // 換えない)。
+  subject_version?: number | null;
+  subject_json?: Record<string, unknown> | null;
+  subject_hash?: string | null;
+  subject_captured_at?: string | null;
 }
 
 // =========================
@@ -238,6 +248,14 @@ export function toApproval(row: ApprovalRow): Approval {
     response: row.response,
     expiresAt: row.expires_at,
     createdAt: row.created_at,
+    // Architecture Migration ARCH-P1a。rowに列自体が無い(SELECT対象
+    // 外・古いfake row等)場合はundefinedのまま、列はあるがNULLの場合は
+    // nullをそのまま伝播する(既存フィールドと同じnull/undefinedの
+    // 扱い方を踏襲、余計な正規化をしない)。
+    subjectVersion: row.subject_version,
+    subject: row.subject_json,
+    subjectHash: row.subject_hash,
+    subjectCapturedAt: row.subject_captured_at,
   };
 
 }
@@ -254,7 +272,7 @@ const RUN_COLUMNS =
   "id, work_id, task_id, attempt, capability, provider, model, status, started_at, completed_at, error, cost, external_ref, result, created_at";
 
 const APPROVAL_COLUMNS =
-  "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, requested_from_actor_kind, requested_from_actor_id, status, reason, payload, requested_at, responded_at, response, expires_at, created_at";
+  "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, requested_from_actor_kind, requested_from_actor_id, status, reason, payload, requested_at, responded_at, response, expires_at, created_at, subject_version, subject_json, subject_hash, subject_captured_at";
 
 // =========================
 // 純粋なvalidation guard(DBアクセスなし、Store layerでの

@@ -329,4 +329,30 @@ export interface Approval {
 
   createdAt: string;
 
+  // =========================
+  // Approval Integrity (Architecture Migration ARCH-P1a)
+  // =========================
+  //
+  // supabase/migrations/20260909000000_add_tact_approvals_integrity_fields.sql
+  // で追加したnullable列にそのまま対応する。ARCH-P1a時点では
+  // core/tact-work/approval.tsのrequestApproval()がこれらを一切
+  // 書き込まないため、既存の全Approvalはundefined/nullのまま
+  // (capture wiringはARCH-P1bのscope)。型・行mappingだけを先行して
+  // 用意する目的で追加する——執行時verification(ARCH-P1c)は
+  // まだ存在しない。
+  //
+  // subjectVersion/subject/subjectHashの正式な形は
+  // core/tact-work/approvalIntegrity.tsのApprovalSubject/
+  // APPROVAL_SUBJECT_VERSIONを参照。subjectVersionは検索用に
+  // 非正規化された値であり、真のsource of truthは常にsubject内部の
+  // 同名フィールド(approvalIntegrity.ts参照)。
+
+  subjectVersion?: number | null;
+
+  subject?: Record<string, unknown> | null;
+
+  subjectHash?: string | null;
+
+  subjectCapturedAt?: string | null;
+
 }

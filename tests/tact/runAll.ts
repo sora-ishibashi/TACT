@@ -53,6 +53,7 @@ import { run as runWorkExecution } from "./work/execution.test";
 import { run as runWorkApproval } from "./work/approval.test";
 import { run as runWorkCompletion } from "./work/completion.test";
 import { run as runWorkTaskLifecycleMonotonicity } from "./work/taskLifecycleMonotonicity.test";
+import { run as runWorkApprovalIntegrity } from "./work/approvalIntegrity.test";
 import { run as runGenerateLLMAnswerRetry } from "./research/generateLLMAnswerRetry.test";
 import { run as runEvaluateTaskExecution } from "./evaluation/evaluateTaskExecution.test";
 import { run as runLearningSignalsWiring } from "./evaluation/learningSignalsWiring.test";
@@ -164,6 +165,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/approval", run: runWorkApproval },
   { name: "work/completion", run: runWorkCompletion },
   { name: "work/taskLifecycleMonotonicity", run: runWorkTaskLifecycleMonotonicity },
+  { name: "work/approvalIntegrity", run: runWorkApprovalIntegrity },
   { name: "research/generateLLMAnswerRetry", run: runGenerateLLMAnswerRetry },
   { name: "evaluation/evaluateTaskExecution", run: runEvaluateTaskExecution },
   { name: "evaluation/learningSignalsWiring", run: runLearningSignalsWiring },
