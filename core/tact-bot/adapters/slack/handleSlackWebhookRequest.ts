@@ -1,9 +1,7 @@
 import { after } from "next/server";
-import {
-  receiveBotMessage as defaultReceiveBotMessage,
-  type ReceiveBotMessageResult,
-} from "../../gateway/receiveMessage";
+import type { ReceiveBotMessageResult } from "../../gateway/receiveMessage";
 import type { BotIncomingMessage } from "../../types";
+import { receiveSlackBotMessageAsTrustedActor } from "./productionBotCore";
 import {
   claimExternalEvent as defaultClaimExternalEvent,
   type ClaimExternalEventResult,
@@ -83,7 +81,12 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
 
   claimExternalEvent: defaultClaimExternalEvent,
 
-  receiveBotMessage: defaultReceiveBotMessage,
+  // S1b: receiveBotMessage()自体のdisconnected default(BOT-P1由来)
+  // ではなく、Slack production wiring(./productionBotCore.ts、
+  // Supabase-backed identity resolver/coreConnectorを注入する)を経由
+  // する。receiveBotMessage()自身のglobal defaultは変更していない
+  // (絶対条件Section3)。
+  receiveBotMessage: receiveSlackBotMessageAsTrustedActor,
 
   scheduleBackgroundWork: (task) => {
     after(task);

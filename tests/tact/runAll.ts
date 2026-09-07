@@ -122,6 +122,8 @@ import { run as runBotSlackNormalizeEvent } from "./bot/slackNormalizeEvent.test
 import { run as runBotEventDedupStore } from "./bot/eventDedupStore.test";
 import { run as runBotSlackWebhookHandler } from "./bot/slackWebhookHandler.test";
 import { run as runBotSlackWebhookRoute } from "./bot/slackWebhookRoute.test";
+import { run as runBotSlackProductionBotCore } from "./bot/slackProductionBotCore.test";
+import { run as runBotSlackResearchRouting } from "./bot/slackBotResearchRouting.test";
 import { run as runIntegrationMapping } from "./integration/mapping.test";
 import { run as runIntegrationComposioClient } from "./integration/composioClient.test";
 import { run as runIntegrationGateway } from "./integration/gateway.test";
@@ -228,6 +230,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "bot/eventDedupStore", run: runBotEventDedupStore },
   { name: "bot/slackWebhookHandler", run: runBotSlackWebhookHandler },
   { name: "bot/slackWebhookRoute", run: runBotSlackWebhookRoute },
+  { name: "bot/slackProductionBotCore", run: runBotSlackProductionBotCore },
+  { name: "bot/slackBotResearchRouting", run: runBotSlackResearchRouting },
   { name: "integration/mapping", run: runIntegrationMapping },
   { name: "integration/composioClient", run: runIntegrationComposioClient },
   { name: "integration/gateway", run: runIntegrationGateway },
