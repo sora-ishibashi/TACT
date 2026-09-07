@@ -18,7 +18,13 @@
 //     (Execution deduplication)
 //   - 所有権を偽装したuserId(cross-user)では一切実行に到達しない
 
-import { executeApprovedIntegrationAction, type ExecuteApprovedIntegrationActionDeps } from "../../../core/tact-integration/execution";
+import {
+  executeApprovedIntegrationAction,
+  executeReadIntegrationAction,
+  type ExecuteApprovedIntegrationActionDeps,
+} from "../../../core/tact-integration/execution";
+import { mapSlackActionToComposioTool } from "../../../core/tact-integration/providers/composio/mappings/slack";
+import { buildExecutionResultFromToolResult } from "../../../core/tact-integration/providers/composio/adapter";
 import type { Work, Approval, Run, WorkTask } from "../../../core/tact-work/types";
 import type { Connection, IntegrationExecutionResult } from "../../../core/tact-integration/types";
 import { check, summarize, type CheckResult } from "../lib/check";
@@ -637,6 +643,443 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Cross-user] 所有権が無いuserIdではnot_foundとなり、Composio呼び出しは一切発生しない",
         outcome.status === "not_found" && calls.executeIntegrationActionCalls === 0 && calls.createRunCalls === 0
+      )
+    );
+  }
+
+  // =========================
+  // Architecture Migration Phase C2.2: Policy defense-in-depth
+  // (executeApprovedIntegrationAction()側、Section11)
+  // =========================
+
+  // ---- 未知operationのApprovalは実行させない(policy allowlist再検証) ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) =>
+        makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "test",
+              metadata: {
+                service: "slack",
+                operation: "delete_channel",
+                input: {},
+                connectionId: "conn-1",
+              },
+            },
+          },
+        }),
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Policy defense] policy allowlistに存在しないoperation(slack.delete_channel)はApproval経由でも実行されない(invalid_action、provider call 0)",
+        outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- read policyのactionはApproval経由で実行させない ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) =>
+        makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "test",
+              metadata: {
+                service: "slack",
+                operation: "list_channels",
+                input: {},
+                connectionId: "conn-1",
+              },
+            },
+          },
+        }),
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Policy defense] riskClass='read'のaction(slack.list_channels)はApproval経由の境界へ渡っても実行されない(invalid_action、provider call 0、絶対条件Section11)",
+        outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // =========================
+  // Architecture Migration Phase C2.2: executeReadIntegrationAction()
+  // (Approval不要read用のcanonical public boundary、Section10)
+  // =========================
+
+  // ---- Case1: read action(slack.list_channels) -> 許可、provider 1回 ----
+  {
+    const { deps, calls } = makeDeps();
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Read/Case1] read policyのaction(slack.list_channels)は実行が許可され、provider(executeIntegrationAction)が正確に1回呼ばれ、completedを返す",
+        outcome.status === "completed" && calls.executeIntegrationActionCalls === 1
+      )
+    );
+  }
+
+  // ---- Case2: write action -> 拒否、provider 0・Run 0(defense-in-depth) ----
+  {
+    const { deps, calls } = makeDeps();
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "send_message", input: { channel: "general", text: "hi" } },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Read/Case2] write policyのaction(slack.send_message)はread実行境界からは拒否される(invalid_action、provider call 0・Run作成0、callerの自己申告を信用しない)",
+        outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0 && calls.createRunCalls === 0
+      )
+    );
+  }
+
+  // ---- Case3: 未知action -> 拒否、provider 0・Run 0 ----
+  {
+    const { deps, calls } = makeDeps();
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "unknown_operation", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Read/Case3] policy allowlistに存在しない未知action(slack.unknown_operation)はread実行境界でも拒否される(invalid_action、provider call 0・Run作成0、fail-closed)",
+        outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0 && calls.createRunCalls === 0
+      )
+    );
+  }
+
+  // ---- Case4: Connection unavailable -> provider 0 ----
+  {
+    const { deps, calls } = makeDeps({ getConnection: async () => undefined });
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Read/Case4] Connectionが見つからない場合、connection_unavailableを返しprovider call 0",
+        outcome.status === "connection_unavailable" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case5: Work not runnable -> provider 0 ----
+  {
+    const { deps, calls } = makeDeps({
+      getWork: async (workId, userId) =>
+        userId === OWNER_USER_ID ? makeWork({ id: workId, status: "waiting_for_approval" }) : undefined,
+    });
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Read/Case5] Workがrunning以外の場合、work_not_runnableを返しprovider call 0",
+        outcome.status === "work_not_runnable" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case6: Taskがpending以外 -> task_not_executable、provider 0 ----
+  {
+    const { deps, calls } = makeDeps({
+      listTasksForWork: async () => {
+        calls.listTasksForWorkCalls += 1;
+        return [makeTask({ status: "completed" })];
+      },
+    });
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Read/Case6] Taskがpending以外(既にcompleted等)の場合、task_not_executableを返しprovider call 0(絶対条件: readでも新規実行前提はpendingのみ)",
+        outcome.status === "task_not_executable" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case7: provider失敗 -> failed、Task failed、retry 0 ----
+  {
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async () => {
+        calls.executeIntegrationActionCalls += 1;
+        return { status: "failed", error: { code: "provider_execution_failed", message: "boom", retryable: false } };
+      },
+    });
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Read/Case7] providerが失敗を返した場合、failedを返しTaskもfailedへ更新、executeIntegrationAction()は1回のみ(自動retryしない)",
+        outcome.status === "failed" &&
+          calls.executeIntegrationActionCalls === 1 &&
+          calls.updateTaskStatusCalls[calls.updateTaskStatusCalls.length - 1]?.status === "failed"
+      )
+    );
+  }
+
+  // ---- Case8: read成功後もreconcileWorkCompletionStatus()が呼ばれる ----
+  {
+    const { deps, calls } = makeDeps();
+
+    await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Read/Case8] read成功後もreconcileWorkCompletionStatus()が呼ばれる(Phase C2.1aのWork reconciliationをread側も再利用)",
+        calls.reconcileWorkCompletionStatusCalls === 1
+      )
+    );
+  }
+
+  // ---- Case9: cross-user -> not_found、provider 0 ----
+  {
+    const { deps, calls } = makeDeps();
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: "attacker",
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Read/Case9] 所有権が無いuserIdではnot_foundとなり、Composio呼び出しは一切発生しない",
+        outcome.status === "not_found" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // =========================
+  // Architecture Migration Phase C2.2b: Deep end-to-end read test
+  // (実mapSlackActionToComposioTool() + 実buildExecutionResultFrom
+  // ToolResult()をそのまま通す。fakeにするのは実際のComposio
+  // client.tools.execute()というnetwork呼び出し部分のみ——canonical
+  // action構築からcanonical result抽出までの変換ロジックは一切
+  // fakeにしない、最も忠実な「mocked read success/failure」)
+  // =========================
+
+  // ---- Case10: mocked read success end-to-end ----
+  {
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async (request) => {
+
+        calls.executeIntegrationActionCalls += 1;
+
+        const mapped = mapSlackActionToComposioTool(request.action);
+
+        if (!mapped.ok) {
+          throw new Error(`unexpected mapping failure in test: ${mapped.reason}`);
+        }
+
+        // live network callだけをfakeにする(実際のSlack
+        // conversations.list相当のraw responseを模す、
+        // response_metadata.next_cursorも含めてpagination非対応を
+        // 確認する)。
+        const fakeRawToolResult = {
+          successful: true,
+          logId: "log-e2e-1",
+          data: {
+            ok: true,
+            channels: [
+              { id: "C1", name: "general", is_private: false, created: 1, num_members: 5 },
+              { id: "C2", name: "tact", is_private: true, created: 2 },
+            ],
+            response_metadata: { next_cursor: "SOME_NEXT_CURSOR" },
+          },
+        };
+
+        return buildExecutionResultFromToolResult(request.action, fakeRawToolResult);
+
+      },
+    });
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    const canonicalOutput =
+      outcome.status === "completed" ? JSON.parse(outcome.run.result?.output ?? "null") : null;
+
+    results.push(
+      check(
+        "[Case10/E2E] mocked read success: provider dispatch正確に1回、completedを返し、canonical channels(id/name/isPrivateのみ)がRun.result.outputへ到達する(実mapping/実canonicalizationロジックを通した状態)",
+        calls.executeIntegrationActionCalls === 1 &&
+          outcome.status === "completed" &&
+          JSON.stringify(canonicalOutput) ===
+            JSON.stringify({
+              channels: [
+                { id: "C1", name: "general", isPrivate: false },
+                { id: "C2", name: "tact", isPrivate: true },
+              ],
+            })
+      )
+    );
+
+    results.push(
+      check(
+        "[Case10/E2E] next_cursor/num_members等のraw provider fieldがoutcomeへ一切露出しない",
+        !JSON.stringify(outcome).includes("SOME_NEXT_CURSOR") && !JSON.stringify(outcome).includes("num_members")
+      )
+    );
+
+    results.push(
+      check(
+        "[Case10/E2E] Run.externalRefにapprovalIdが含まれない(read実行はApprovalを一切経由しない構造的証拠)",
+        outcome.status === "completed" && !("approvalId" in (outcome.run.externalRef ?? {}))
+      )
+    );
+  }
+
+  // ---- Case11: mocked read failure end-to-end(Slack側logical error) ----
+  {
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async (request) => {
+
+        calls.executeIntegrationActionCalls += 1;
+
+        const mapped = mapSlackActionToComposioTool(request.action);
+
+        if (!mapped.ok) {
+          throw new Error("unexpected mapping failure in test");
+        }
+
+        // Slack API側のlogical error(data.ok:false)を模す。
+        const fakeRawToolResult = { successful: true, logId: "log-e2e-2", data: { ok: false } };
+
+        return buildExecutionResultFromToolResult(request.action, fakeRawToolResult);
+
+      },
+    });
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case11/E2E] mocked read failure: provider dispatchは1回のみでfailedへ倒れ、Task failedへ更新される(自動retryなし)",
+        calls.executeIntegrationActionCalls === 1 &&
+          outcome.status === "failed" &&
+          calls.updateTaskStatusCalls[calls.updateTaskStatusCalls.length - 1]?.status === "failed"
       )
     );
   }

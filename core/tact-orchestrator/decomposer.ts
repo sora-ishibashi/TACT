@@ -191,12 +191,17 @@ export function decomposeTask(
   // capability名"integration.slack.send_message"へ変換する。この
   // 変換自体はProvider(Composio)を一切知らない——Canonical
   // capability idという交通整理の語彙の変換にとどまる。
+  // Architecture Migration Phase C2.2: 同じ理由で
+  // "integration_slack_list_channels" → "integration.slack.list_channels"
+  // も追加する(read capability第1号)。
   const assignedCapability =
     decision.intent === "research"
       ? "research"
       : decision.intent === "integration_slack_send_message"
         ? "integration.slack.send_message"
-        : undefined;
+        : decision.intent === "integration_slack_list_channels"
+          ? "integration.slack.list_channels"
+          : undefined;
 
   // =========================
   // Phase88: 直前Turnの主題をTask.descriptionへ補完する

@@ -292,6 +292,9 @@ export type CapabilityInvocationResult = Partial<
     // Architecture Migration Phase B3(Approval Execution): Provider
     // 非依存の抽象的なApproval要求signal。task.ts参照。
     | "approvalRequirement"
+    // Architecture Migration Phase C2.2(Read/Write Policy): Integration
+    // Capability専用のcanonical action + policy判定結果signal。task.ts参照。
+    | "integrationRequirement"
   >
 > & {
 
@@ -429,6 +432,27 @@ export interface OrchestrationResult {
     summary: string;
 
     reason: string;
+
+  };
+
+  // Architecture Migration Phase C2.2(Read/Write Policy): 設定されて
+  // いる場合、このTurnでApproval不要のIntegration read actionが実際に
+  // 実行され、成功した(Task completed)ことを示す。pendingApprovalと
+  // 同じ設計方針——tact-orchestratorはcore/tact-integrationの
+  // canonical result型(例: SlackListChannelsResult)を一切importせず、
+  // outputはJSON文字列として不透明に運ぶだけ(絶対条件: Bot向けの
+  // 表示整形はcore/tact-conversation/core/tact-bot境界で行う、
+  // Work/Integration/Orchestrator domainへBot-specific formattingを
+  // 持ち込まない)。
+  integrationReadResult?: {
+
+    service: string;
+
+    operation: string;
+
+    // core/tact-integration側のcanonical result(例: SlackListChannelsResult)
+    // をJSON.stringify()した値。パース・表示整形は呼び出し元の責務。
+    output: string;
 
   };
 

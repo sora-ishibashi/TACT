@@ -5,6 +5,7 @@ import type {
   OrchestrationHooks,
   Task,
   TaskApprovalRequirement,
+  TaskApprovalAction,
 } from "../tact-orchestrator";
 import {
   updateWorkStatus,
@@ -98,6 +99,61 @@ async function defaultResolveIntegrationConnection(): Promise<ResolveIntegration
   return { status: "none" };
 }
 
+// =========================
+// executeReadIntegrationAction seam (Architecture Migration Phase C2.2)
+// =========================
+//
+// resolveIntegrationConnectionと全く同じ設計思想: このfile自身は
+// core/tact-integrationを一切importせず(循環依存回避、上記コメント
+// 参照)、実行の「型」だけを知る。実装はRunWorkTurnDeps経由で呼び出し元
+// (core/tact-conversation/orchestration.ts)が注入する。actionは
+// IntegrationAction(core/tact-integration所有の型)ではなく、既に
+// このfileがimport可能なTaskApprovalAction(core/tact-orchestrator所有、
+// {kind, summary, metadata:{service, operation, input, connectionId}})
+// をそのまま使う——新しい型を追加せず、write pathのapprovalRequirements
+// が既に使っているのと同じcanonical action表現を再利用する(絶対条件
+// Correction2)。
+export interface ExecuteReadIntegrationActionParams {
+
+  workId: string;
+
+  userId: string;
+
+  accessToken: string;
+
+  taskId: string;
+
+  connectionId: string;
+
+  action: TaskApprovalAction;
+
+}
+
+// write側のIntegrationActionExecutionOutcome(core/tact-integration/
+// execution.ts)と意図的に同じstatus語彙を使うが、この型自体は
+// core/tact-integrationをimportせずここで独立して定義する(循環依存
+// 回避のため、値では無くstringのunionとして再宣言するだけ)。
+export type ExecuteReadIntegrationActionOutcome =
+  | { status: "completed"; resultOutput?: string }
+  | { status: "failed" }
+  | { status: "connection_unavailable" }
+  | { status: "invalid_action" }
+  | { status: "task_not_executable" }
+  | { status: "not_found" }
+  | { status: "work_not_runnable" };
+
+export type ExecuteReadIntegrationAction = (
+  params: ExecuteReadIntegrationActionParams
+) => Promise<ExecuteReadIntegrationActionOutcome>;
+
+// 既定はinvalid_actionへ安全にfallbackする(defaultResolveIntegration
+// Connectionが常に"none"を返すのと同じ理由——実Integration実行機能が
+// 必要な呼び出し元だけがこのfieldを上書きする、それ以外は安全に
+// 無効のまま)。
+async function defaultExecuteReadIntegrationAction(): Promise<ExecuteReadIntegrationActionOutcome> {
+  return { status: "invalid_action" };
+}
+
 export interface RunWorkTurnDeps {
 
   updateWorkStatus: typeof updateWorkStatus;
@@ -131,6 +187,11 @@ export interface RunWorkTurnDeps {
   // (core/tact-conversation/orchestration.ts)がこのfieldを上書きする。
   resolveIntegrationConnection: ResolveIntegrationConnection;
 
+  // Architecture Migration Phase C2.2。既定はdefaultExecuteReadIntegration
+  // Action(常にinvalid_action)——実read実行が必要な呼び出し元
+  // (core/tact-conversation/orchestration.ts)がこのfieldを上書きする。
+  executeReadIntegrationAction: ExecuteReadIntegrationAction;
+
 }
 
 // core/tact-conversation/orchestration.ts(runWorkTurn()の唯一の
@@ -149,6 +210,7 @@ export const defaultRunWorkTurnDeps: RunWorkTurnDeps = {
   requestApproval: defaultRequestApproval,
   reconcileWorkCompletionStatus: defaultReconcileWorkCompletionStatus,
   resolveIntegrationConnection: defaultResolveIntegrationConnection,
+  executeReadIntegrationAction: defaultExecuteReadIntegrationAction,
 };
 
 export interface RunWorkTurnParams {
@@ -207,6 +269,19 @@ export async function runWorkTurn(
     service: string;
     status: "none" | "multiple";
     count?: number;
+  }[] = [];
+
+  // Architecture Migration Phase C2.2: Connectionがsingleに解決でき、
+  // かつpolicy上requiresApproval===false(read)だったIntegration Task
+  // を集める。approvalRequirementsと同じく「どのWorkTaskが対象か」
+  // というポインタの集合であり、実際のexecuteReadIntegrationAction()
+  // 呼び出しはrunOrchestration()の戻り値を受け取った後(下記)で行う
+  // (絶対条件: readのためにfake Approvalを作らない、Approval作成
+  // 経路とは完全に別のpathとして扱う)。
+  const integrationReadExecutions: {
+    workTaskId: string;
+    connectionId: string;
+    action: TaskApprovalAction;
   }[] = [];
 
   const hooks: OrchestrationHooks = {
@@ -331,69 +406,113 @@ export async function runWorkTurn(
       // completed/failedへ進む(絶対条件: terminal stateから
       // 非terminalへ戻る、または一度completedにしてから他statusへ
       // 動かすような非単調な遷移をTask status historyへ持ち込まない)。
-      if (summary.approvalRequirement) {
+      // Architecture Migration Phase C2.2(Read/Write Policy): Integration
+      // Capability専用のsignal。write(requiresApproval===true)・read
+      // (requiresApproval===false)いずれの場合もConnection解決
+      // (deps.resolveIntegrationConnection())が最初の前段判定である
+      // 点は変わらない——0件/複数件ならTaskをpendingのまま据え置き、
+      // single解決できて初めて次(Approval作成 or 即時read実行)へ進む
+      // (絶対条件Section15: Connection解決はTask completionより
+      // 必ず前、Approval経由でもread経由でも同じ)。
+      if (summary.integrationRequirement) {
 
-        if (summary.approvalRequirement.action?.kind === "integration_action") {
+        const metadata = summary.integrationRequirement.action.metadata as
+          | { service?: unknown }
+          | undefined;
 
-          // Architecture Migration Phase C2.1b由来: Connection解決は
-          // 「Approvalを実際に作ってよいか」を決めるための前段判定
-          // であり、Task status persistenceには一切関与しない
-          // (Provider resolution自体はここへ持ち込まない、
-          // deps.resolveIntegrationConnection()が返す既に
-          // canonical化された結果だけを見る)。
-          const metadata = summary.approvalRequirement.action.metadata as
-            | { service?: unknown }
-            | undefined;
+        const service = typeof metadata?.service === "string" ? metadata.service : undefined;
 
-          const service = typeof metadata?.service === "string" ? metadata.service : undefined;
+        if (!service) {
 
-          if (service) {
-
-            const connectionResolution = await deps.resolveIntegrationConnection({
-              service,
-              userId,
-              accessToken,
-            });
-
-            if (connectionResolution.status !== "single") {
-
-              // Connection未解決。Approvalを作らない
-              // (approvalRequirementsへpushしない)。Taskは
-              // updateTaskStatus()を一切呼ばずpendingのまま据え置く。
-              integrationConnectionIssues.push(
-                connectionResolution.status === "none"
-                  ? { service, status: "none" }
-                  : { service, status: "multiple", count: connectionResolution.count }
-              );
-
-              return;
-
-            }
-
-            // status === "single": 解決できたconnectionIdをmetadataへ
-            // 追加してからApproval requirementへ積む。Taskは
-            // ここでもcompletedへ進めない(pendingのまま)。
-            approvalRequirements.push({
-              workTaskId,
-              capability: summary.capability,
-              requirement: {
-                ...summary.approvalRequirement,
-                action: {
-                  ...summary.approvalRequirement.action,
-                  metadata: { ...metadata, connectionId: connectionResolution.connectionId },
-                },
-              },
-            });
-
-            return;
-
-          }
+          // service自体を特定できない防御的fallback(通常到達しない
+          // ——Integration Capabilityは必ずmetadata.serviceを設定する)。
+          // Approvalを作らずTaskはpendingのまま据え置く安全側にとどめる。
+          return;
 
         }
 
-        // 汎用のapprovalRequirement(kind!=="integration_action"、
-        // またはservice未解決の防御的fallback)。Taskをcompletedへ
-        // 進めず、そのままApproval requirementへ積む。
+        const connectionResolution = await deps.resolveIntegrationConnection({
+          service,
+          userId,
+          accessToken,
+        });
+
+        if (connectionResolution.status !== "single") {
+
+          // Connection未解決。Approvalも作らず、read実行もキューしない
+          // (integrationConnectionIssuesへpushするだけ)。Taskは
+          // updateTaskStatus()を一切呼ばずpendingのまま据え置く。
+          integrationConnectionIssues.push(
+            connectionResolution.status === "none"
+              ? { service, status: "none" }
+              : { service, status: "multiple", count: connectionResolution.count }
+          );
+
+          return;
+
+        }
+
+        // status === "single": 解決できたconnectionIdをmetadataへ
+        // 追加する(write/read共通)。Taskはここでもcompletedへ
+        // 進めない(pendingのまま、Approval承認後 or read実行完了後に
+        // 初めてrunning→completed/failedへ進む)。
+        const resolvedAction: TaskApprovalAction = {
+          ...summary.integrationRequirement.action,
+          metadata: { ...metadata, connectionId: connectionResolution.connectionId },
+        };
+
+        if (summary.integrationRequirement.requiresApproval) {
+
+          approvalRequirements.push({
+            workTaskId,
+            capability: summary.capability,
+            requirement: {
+              reason: summary.integrationRequirement.reason ?? resolvedAction.summary,
+              action: resolvedAction,
+            },
+          });
+
+        } else {
+
+          // 絶対条件(Correction2、Section9): readのためにfake Approval
+          // を作らない。Approvalとは完全に別のpath(integrationReadExecutions)
+          // へ積み、実行はrunOrchestration()の戻り値を受け取った後
+          // (下記)で行う。
+          integrationReadExecutions.push({
+            workTaskId,
+            connectionId: connectionResolution.connectionId,
+            action: resolvedAction,
+          });
+
+        }
+
+        return;
+
+      }
+
+      // Architecture Migration Phase C2.1c-a(絶対条件、最重要):
+      // Approvalは「Task completionの後に付随するレビュー」ではなく
+      // 「Task completionそのものの前提となるgate」である(既存の
+      // protected external write sequence: prepare/propose → Approval
+      // → execute external side effectがそのまま根拠——Approvalが
+      // 実行を許可するまで、そのTaskが表す仕事はまだ何も完了していない)。
+      // そのため、approvalRequirementを返したTaskは、この時点では
+      // 一切completedとしてpersistしない——createTask()が付与した
+      // 初期status(pending)のまま据え置く。Approvalが承認され、
+      // 実際にexecuteApprovedIntegrationAction()が実行を開始する
+      // 時点で初めてpending→runningへ進み、その結果でrunning→
+      // completed/failedへ進む(絶対条件: terminal stateから
+      // 非terminalへ戻る、または一度completedにしてから他statusへ
+      // 動かすような非単調な遷移をTask status historyへ持ち込まない)。
+      //
+      // Architecture Migration Phase C2.2: Integration Capability自身は
+      // もうこのapprovalRequirementを一切返さない(上のintegrationRequirement
+      // 分岐へ完全に移行した)。この分岐は、将来の非Integration
+      // Capabilityが汎用Approval機構(Phase B3由来)を使う場合のためだけに
+      // 残す(tests/tact/work/execution.test.tsのkind="external_write_test"
+      // 参照、既存の非Integration用途を壊さない)。
+      if (summary.approvalRequirement) {
+
         approvalRequirements.push({
           workTaskId,
           capability: summary.capability,
@@ -404,7 +523,8 @@ export async function runWorkTurn(
 
       }
 
-      // approvalRequirementが無い通常Task: 従来通りTaskExecutionSummary.
+      // approvalRequirement/integrationRequirementが無い通常Task:
+      // 従来通りTaskExecutionSummary.
       // statusをそのままpersistする(pending/running/completed/failed/
       // cancelled、ARCH-R2 Section4、Phase B1で既に揃えてある)。
       await deps.updateTaskStatus(work.id, userId, accessToken, workTaskId, summary.status);
@@ -480,6 +600,53 @@ export async function runWorkTurn(
             approvalId: approval.id,
             summary: requirement.action?.summary ?? requirement.reason,
             reason: requirement.reason,
+          },
+        };
+
+      }
+
+    }
+
+  }
+
+  // Architecture Migration Phase C2.2: Connection解決済み・Approval
+  // 不要(read)と判定されたIntegration Taskを、この時点で同期的に
+  // 実行する(絶対条件Section16: Slack list_channels程度の短いreadは
+  // 同期実行を許容する。Generic Orchestrator executor自身にComposio/
+  // provider実行を持ち込まない——ここはWork Execution Boundary側の
+  // 責務)。1 Task = executeReadIntegrationAction()呼び出し1回のみ
+  // (絶対条件Section30: 自動retryしない)。
+  if (integrationReadExecutions.length > 0) {
+
+    for (const { workTaskId, connectionId, action } of integrationReadExecutions) {
+
+      const executionOutcome = await deps.executeReadIntegrationAction({
+        workId: work.id,
+        userId,
+        accessToken,
+        taskId: workTaskId,
+        connectionId,
+        action,
+      });
+
+      // Architecture Migration Phase C2.2: 呼び出し元(Bot/Web両方が
+      // 経由するConversation層)が、read結果を観測できるようにする
+      // (result.pendingApprovalと同じ既存pattern)。複数件ある場合は
+      // 最初の1件を代表として設定する(絶対条件: 巨大なmulti-result
+      // UIをこのPhaseで作らない、pendingApprovalと同じ単純化)。
+      // Task/Run/Work状態自体はexecuteReadIntegrationAction()内部
+      // (core/tact-integration/execution.tsのgeneric core)が既に
+      // 確定させている——ここではOrchestrationResultへの反映だけを行う。
+      if (executionOutcome.status === "completed" && !result.integrationReadResult) {
+
+        const metadata = action.metadata as { service?: unknown; operation?: unknown } | undefined;
+
+        result = {
+          ...result,
+          integrationReadResult: {
+            service: typeof metadata?.service === "string" ? metadata.service : "unknown",
+            operation: typeof metadata?.operation === "string" ? metadata.operation : "unknown",
+            output: executionOutcome.resultOutput ?? "null",
           },
         };
 

@@ -7,7 +7,7 @@ import {
   ComposioSharedAccessDeniedError,
 } from "@composio/core";
 import { getComposioClient, getSlackToolkitVersion, toComposioUserId } from "./client";
-import { mapSlackActionToComposioTool } from "./mappings/slack";
+import { mapSlackActionToComposioTool, mapComposioListChannelsResultToCanonical } from "./mappings/slack";
 import type {
   IntegrationExecutionRequest,
   IntegrationExecutionResult,
@@ -121,6 +121,85 @@ export function normalizeComposioError(error: unknown): IntegrationExecutionErro
 
 }
 
+// Composio公式SDKのtools.execute()戻り値のうち、このAdapterが実際に
+// 使うfieldだけの最小型(SDK側の完全な型をここへ再エクスポートしない、
+// 既存方針を踏襲)。
+interface ComposioToolExecuteResult {
+
+  successful: boolean;
+
+  data?: unknown;
+
+  error?: string | null;
+
+  logId?: string | null;
+
+}
+
+// Architecture Migration Phase C2.2b: tools.execute()のraw結果から
+// IntegrationExecutionResultを組み立てる部分だけを、実Composioクライアント
+// 構築(client.tools.execute()自体)から独立してテストできるよう切り出す
+// (normalizeComposioError()と同じ「テスト容易性のためexportする」既存
+// 方針)。list_channelsに限り、raw Composio/Slack response(result.data)
+// をmapComposioListChannelsResultToCanonical()でcanonical
+// SlackListChannelsResultへ変換してからoutputへ格納する(絶対条件
+// Section8: raw provider responseをcanonical domainへそのまま漏らさない)。
+// send_message等その他のoperationは既存通りresult.dataをそのまま
+// outputへ渡す(write pathの既存result behaviorを不必要に変更しない、
+// 絶対条件Section9)。
+export function buildExecutionResultFromToolResult(
+  action: IntegrationExecutionRequest["action"],
+  result: ComposioToolExecuteResult
+): IntegrationExecutionResult {
+
+  if (!result.successful) {
+
+    return {
+      status: "failed",
+      error: {
+        code: "provider_execution_failed",
+        message: result.error ?? "Composio tool execution reported successful=false",
+        retryable: false,
+      },
+      providerExecutionRef: result.logId ?? null,
+    };
+
+  }
+
+  if (action.operation === "list_channels") {
+
+    const canonicalized = mapComposioListChannelsResultToCanonical(result.data);
+
+    if (!canonicalized.ok) {
+
+      return {
+        status: "failed",
+        error: {
+          code: "provider_execution_failed",
+          message: canonicalized.reason,
+          retryable: false,
+        },
+        providerExecutionRef: result.logId ?? null,
+      };
+
+    }
+
+    return {
+      status: "completed",
+      providerExecutionRef: result.logId ?? null,
+      output: canonicalized.result,
+    };
+
+  }
+
+  return {
+    status: "completed",
+    providerExecutionRef: result.logId ?? null,
+    output: result.data,
+  };
+
+}
+
 async function executeComposio(
   request: IntegrationExecutionRequest
 ): Promise<IntegrationExecutionResult> {
@@ -185,25 +264,7 @@ async function executeComposio(
       dangerouslySkipVersionCheck: toolkitVersion === "latest",
     });
 
-    if (result.successful) {
-
-      return {
-        status: "completed",
-        providerExecutionRef: result.logId ?? null,
-        output: result.data,
-      };
-
-    }
-
-    return {
-      status: "failed",
-      error: {
-        code: "provider_execution_failed",
-        message: result.error ?? "Composio tool execution reported successful=false",
-        retryable: false,
-      },
-      providerExecutionRef: result.logId ?? null,
-    };
+    return buildExecutionResultFromToolResult(request.action, result);
 
   } catch (error) {
 

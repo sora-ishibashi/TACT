@@ -26,6 +26,11 @@ export * from "./connection";
 export * from "./gateway";
 export * from "./propose";
 export * from "./execution";
+// Architecture Migration Phase C2.2: TACT-owned canonical action policy
+// allowlist(read/write/destructive)。Provider adapter・Orchestrator・
+// Botのいずれもこの結果を独自に再判定せず、ここを唯一のsource of
+// truthとして参照する。
+export * from "./policy";
 // Architecture Migration Phase C2.1b: Capability Registry(core/tact-core/
 // capabilities/registry.ts)へ登録する"integration.slack.send_message"
 // capability本体。core/tact-bootstrap.tsだけがこのexportを使う想定

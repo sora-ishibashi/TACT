@@ -66,6 +66,36 @@ const SLACK_CHANNEL_PATTERN = /#([A-Za-z0-9_-]+)/;
 // 「」『』""のいずれかで囲まれた引用部分をtextとして抽出する。
 const SLACK_QUOTED_TEXT_PATTERN = /[「『"](.+?)["』」]/;
 
+// =========================
+// Slack list_channels検出 (Architecture Migration Phase C2.2)
+// =========================
+//
+// 目的: 「Slackのチャンネル一覧を見せて」のような、Slackチャンネル
+// 一覧を求める入力を検出する。list_channelsはread-only・必須入力が
+// 無いcanonical action({})のため、extractSlackSendIntent()と異なり
+// channel/text抽出やmissing判定は不要——Phase82-C(具体例要求検出)と
+// 同じ「トピック語+アクション語の両方が独立に存在する場合のみ一致」
+// という設計(単純な部分一致による誤検出を避ける、Accuracy > Coverage)
+// を踏襲する。SLACK_SEND_TRIGGER_PATTERNと同じ"slack"トリガーを共有
+// するが、SEND_VERB_PATTERN(送っ/送信し/投稿し)を要求しないため
+// 送信要求とは自然に排他になる。
+const SLACK_CHANNEL_TOPIC_PATTERN = /チャンネル|channel/i;
+const LIST_ACTION_PATTERN = /(一覧|リスト|list)/i;
+
+// Phase C2.2: core/tact-intent/ruleRouter.ts自身のclassifyIntent()だけが
+// 使う想定のため、extractSlackSendIntent()と異なりexportは最小限
+// (現時点でambiguityDetector.ts側の利用は無い——list_channelsは
+// 必須inputを持たないためclarificationへ倒す分岐が存在しない)。
+function looksLikeSlackListChannelsRequest(trimmed: string): boolean {
+
+  return (
+    SLACK_SEND_TRIGGER_PATTERN.test(trimmed) &&
+    SLACK_CHANNEL_TOPIC_PATTERN.test(trimmed) &&
+    LIST_ACTION_PATTERN.test(trimmed)
+  );
+
+}
+
 export type SlackSendExtractionResult =
   | { matched: false }
   | { matched: true; channel: string; text: string }
@@ -419,6 +449,18 @@ export function classifyIntent(input: string, previousInput?: string): IntentDec
     return {
       intent: "integration_slack_send_message",
       reason: "matched slack send_message pattern (Slack + 送信系動詞 + #channel + 引用text)",
+    };
+
+  }
+
+  // Architecture Migration Phase C2.2: list_channelsは必須inputを持たない
+  // ため、send_messageのようなmissing判定を経由せず、一致すれば即座に
+  // 判定する(既存clarification flowへ乗せる必要が無い)。
+  if (looksLikeSlackListChannelsRequest(trimmed)) {
+
+    return {
+      intent: "integration_slack_list_channels",
+      reason: "matched slack list_channels pattern (Slack + チャンネル + 一覧/リスト)",
     };
 
   }

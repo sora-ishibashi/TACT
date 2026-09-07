@@ -1,13 +1,18 @@
 // =========================
-// TACT Integration — "integration.slack.send_message" Capability
-// Regression (Architecture Migration Phase C2.1b)
+// TACT Integration — "integration.slack.send_message" /
+// "integration.slack.list_channels" Capability Regression
+// (Architecture Migration Phase C2.1b / C2.2)
 // =========================
 //
 // 対象: core/tact-integration/capability.tsのrunIntegrationSlackSend
-// MessageCapability()。純粋関数(DBアクセス・Composio呼び出しなし)の
-// ため、Category A(Deterministic Evaluation)。
+// MessageCapability() / runIntegrationSlackListChannelsCapability()。
+// いずれも純粋関数(DBアクセス・Composio呼び出しなし)のため、
+// Category A(Deterministic Evaluation)。
 
-import { runIntegrationSlackSendMessageCapability } from "../../../core/tact-integration/capability";
+import {
+  runIntegrationSlackSendMessageCapability,
+  runIntegrationSlackListChannelsCapability,
+} from "../../../core/tact-integration/capability";
 import type { CapabilityInvocationRequest } from "../../../core/tact-orchestrator/types";
 import { check, summarize, type CheckResult } from "../lib/check";
 
@@ -22,6 +27,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   const results: CheckResult[] = [];
 
+  // =========================
+  // send_message (write)
+  // =========================
+
   // ---- 正常系: channel/textが両方揃っている場合 ----
   {
     const result = await runIntegrationSlackSendMessageCapability(
@@ -30,19 +39,26 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[正常系] success:true、approvalRequirementが設定される",
-        result.success === true && !!result.approvalRequirement
+        "[正常系] success:true、integrationRequirementが設定される(旧approvalRequirementは使わない、Correction2)",
+        result.success === true && !!result.integrationRequirement && result.approvalRequirement === undefined
       )
     );
 
     results.push(
       check(
-        "[正常系] approvalRequirement.action.kindが'integration_action'",
-        result.approvalRequirement?.action?.kind === "integration_action"
+        "[正常系] Phase C2.2: integrationRequirement.requiresApproval===true(policy.ts上writeとして登録済み)",
+        result.integrationRequirement?.requiresApproval === true
       )
     );
 
-    const metadata = result.approvalRequirement?.action?.metadata as
+    results.push(
+      check(
+        "[正常系] integrationRequirement.action.kindが'integration_action'",
+        result.integrationRequirement?.action?.kind === "integration_action"
+      )
+    );
+
+    const metadata = result.integrationRequirement?.action?.metadata as
       | { service?: unknown; operation?: unknown; input?: { channel?: unknown; text?: unknown } }
       | undefined;
 
@@ -88,6 +104,48 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[防御的] channel/textを抽出できない場合、例外を投げずsuccess:falseを返す",
         result.success === false && typeof result.errorMessage === "string"
+      )
+    );
+  }
+
+  // =========================
+  // list_channels (read, Phase C2.2新規)
+  // =========================
+
+  {
+    const result = await runIntegrationSlackListChannelsCapability();
+
+    results.push(
+      check(
+        "[Case P2] success:true、integrationRequirementが設定される",
+        result.success === true && !!result.integrationRequirement
+      )
+    );
+
+    results.push(
+      check(
+        "[Case P2] integrationRequirement.requiresApproval===false(policy.ts上readとして登録済み)",
+        result.integrationRequirement?.requiresApproval === false
+      )
+    );
+
+    const metadata = result.integrationRequirement?.action?.metadata as
+      | { service?: unknown; operation?: unknown; input?: unknown }
+      | undefined;
+
+    results.push(
+      check(
+        "[Case P2] metadataがcanonical shape({service:'slack', operation:'list_channels', input:{}})を持つ",
+        metadata?.service === "slack" &&
+          metadata?.operation === "list_channels" &&
+          JSON.stringify(metadata?.input) === JSON.stringify({})
+      )
+    );
+
+    results.push(
+      check(
+        "[Case P2] 結果にComposio/provider固有の識別子が一切含まれない",
+        !JSON.stringify(result).toLowerCase().includes("composio")
       )
     );
   }

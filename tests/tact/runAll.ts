@@ -69,6 +69,7 @@ import { run as runTactConversationMapping } from "./conversation/tactConversati
 import { run as runTactConversationApi } from "./conversation/tactConversationApi.test";
 import { run as runTactConversationOrchestration } from "./conversation/tactConversationOrchestration.test";
 import { run as runWorkLinkRepair } from "./conversation/workLinkRepair.test";
+import { run as runIntegrationReadResult } from "./conversation/integrationReadResult.test";
 import { run as runTactConversationClarificationAnswer } from "./conversation/tactConversationClarificationAnswer.test";
 import { run as runTactConversationResearchCapability } from "./conversation/tactConversationResearchCapability.test";
 import { run as runTactArtifactMutation } from "./artifact/tactArtifactMutation.test";
@@ -122,7 +123,9 @@ import { run as runIntegrationGateway } from "./integration/gateway.test";
 import { run as runIntegrationPropose } from "./integration/propose.test";
 import { run as runIntegrationExecution } from "./integration/execution.test";
 import { run as runIntegrationCapability } from "./integration/capability.test";
+import { run as runIntegrationPolicy } from "./integration/policy.test";
 import { run as runIntentSlackSendIntent } from "./intent/slackSendIntent.test";
+import { run as runIntentSlackListChannelsIntent } from "./intent/slackListChannelsIntent.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -167,6 +170,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "conversation/tactConversationApi", run: runTactConversationApi },
   { name: "conversation/tactConversationOrchestration", run: runTactConversationOrchestration },
   { name: "conversation/workLinkRepair", run: runWorkLinkRepair },
+  { name: "conversation/integrationReadResult", run: runIntegrationReadResult },
   { name: "conversation/tactConversationClarificationAnswer", run: runTactConversationClarificationAnswer },
   { name: "conversation/tactConversationResearchCapability", run: runTactConversationResearchCapability },
   { name: "artifact/tactArtifactMutation", run: runTactArtifactMutation },
@@ -220,7 +224,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "integration/propose", run: runIntegrationPropose },
   { name: "integration/execution", run: runIntegrationExecution },
   { name: "integration/capability", run: runIntegrationCapability },
+  { name: "integration/policy", run: runIntegrationPolicy },
   { name: "intent/slackSendIntent", run: runIntentSlackSendIntent },
+  { name: "intent/slackListChannelsIntent", run: runIntentSlackListChannelsIntent },
 ];
 
 async function main() {

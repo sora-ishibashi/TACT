@@ -64,6 +64,7 @@ function makeRecordingDeps(
     updateTaskStatusCalls: { taskId: string; status: string }[];
     resolveIntegrationConnectionCalls: { service: string; userId: string }[];
     requestApprovalCalls: { workId: string; taskId?: string | null; reason: string; action?: unknown }[];
+    executeReadIntegrationActionCalls: { taskId: string; connectionId: string; action: unknown }[];
   } = {
     workStatusUpdates: [],
     createTaskDescriptions: [],
@@ -74,6 +75,7 @@ function makeRecordingDeps(
     updateTaskStatusCalls: [],
     resolveIntegrationConnectionCalls: [],
     requestApprovalCalls: [],
+    executeReadIntegrationActionCalls: [],
   };
 
   let nextTaskDbId = 1;
@@ -204,6 +206,18 @@ function makeRecordingDeps(
     resolveIntegrationConnection: async (params) => {
       calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
       return { status: "none" };
+    },
+
+    // Architecture Migration Phase C2.2: 既定はinvalid_action(呼ばれない
+    // ことが期待値の既存テストのため)。read実行testはoverridesで
+    // 差し替える。
+    executeReadIntegrationAction: async (params) => {
+      calls.executeReadIntegrationActionCalls.push({
+        taskId: params.taskId,
+        connectionId: params.connectionId,
+        action: params.action,
+      });
+      return { status: "invalid_action" };
     },
 
     ...overrides,
@@ -739,7 +753,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         result: {
           success: true,
           output: "Slack「tact」チャンネルへメッセージを送信する準備ができました。承認をお願いします。",
-          approvalRequirement: {
+          integrationRequirement: {
+            requiresApproval: true,
             reason: "外部SaaS(Slack)への投稿には承認が必要です",
             action: {
               kind: "integration_action",
@@ -758,7 +773,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         taskId: task.id,
         status: "completed",
         output: "Slack「tact」チャンネルへメッセージを送信する準備ができました。承認をお願いします。",
-        approvalRequirement: {
+        integrationRequirement: {
+          requiresApproval: true,
           reason: "外部SaaS(Slack)への投稿には承認が必要です",
           action: {
             kind: "integration_action",
@@ -1048,6 +1064,293 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         "[Case4] 既存のchannel/text欠落等によるclarification(detectAmbiguity経由)はC2.1b-fix後も無変更でwaiting_for_inputへ進む",
         calls.workStatusUpdates[calls.workStatusUpdates.length - 1] === "waiting_for_input" &&
           result.clarification?.question === "どのチャンネルへ送りますか?"
+      )
+    );
+  }
+
+  // =========================
+  // Architecture Migration Phase C2.2: Read/Write Policy
+  // (integrationRequirement、requiresApproval===falseの場合)
+  // =========================
+
+  function makeReadIntegrationOrchestration(taskId: string) {
+
+    const task = makeTask({
+      id: taskId,
+      description: "Slackのチャンネル一覧を見せて",
+      assignedCapability: "integration.slack.list_channels",
+    });
+
+    return async (
+      _request: OrchestrationRequest,
+      hooks?: OrchestrationHooks
+    ): Promise<OrchestrationResult> => {
+
+      await hooks?.onTasksPlanned?.([task]);
+
+      const summary = makeSummary({
+        taskId: task.id,
+        status: "completed",
+        output: "Slackのチャンネル一覧を取得する準備ができました。",
+        integrationRequirement: {
+          requiresApproval: false,
+          action: {
+            kind: "integration_action",
+            summary: "Slackのチャンネル一覧を取得します",
+            metadata: {
+              service: "slack",
+              operation: "list_channels",
+              input: {},
+            },
+          },
+        },
+      });
+
+      await hooks?.onTaskFinished?.(task, summary);
+
+      return {
+        answer: "Slackのチャンネル一覧を取得する準備ができました。",
+        executionId: "exec-integration-read",
+        tasks: [summary],
+        memoryUsed: [],
+        toolsUsed: [],
+        memoryWrites: [],
+        learningSignals: ["successful_execution"],
+        metadata: { executionMode: "single-execution" },
+      };
+
+    };
+
+  }
+
+  // ---- Case R1: Connection1件 + read policy -> Approval 0、
+  // executeReadIntegrationAction()が正しいparamsで1回呼ばれ、
+  // canonical read resultがOrchestrationResultへ反映される ----
+  {
+    const { deps, calls } = makeRecordingDeps(makeReadIntegrationOrchestration("task-read-1"), {
+      resolveIntegrationConnection: async (params) => {
+        calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
+        return { status: "single", connectionId: "conn-read-1" };
+      },
+      executeReadIntegrationAction: async (params) => {
+        calls.executeReadIntegrationActionCalls.push({
+          taskId: params.taskId,
+          connectionId: params.connectionId,
+          action: params.action,
+        });
+        return {
+          status: "completed",
+          resultOutput: JSON.stringify({ channels: [{ id: "C1", name: "general" }, { id: "C2", name: "tact" }] }),
+        };
+      },
+    });
+
+    const result = await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case R1] Connection1件の場合、Approvalは作られない(Approval 0、read実行はApprovalを一切経由しない)",
+        calls.requestApprovalCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R1] executeReadIntegrationAction()が正確に1回、正しいtaskId/connectionId/action(metadata込み)で呼ばれる",
+        calls.executeReadIntegrationActionCalls.length === 1 &&
+          calls.executeReadIntegrationActionCalls[0].taskId === "task-db-1" &&
+          calls.executeReadIntegrationActionCalls[0].connectionId === "conn-read-1" &&
+          (calls.executeReadIntegrationActionCalls[0].action as { metadata?: { service?: unknown; operation?: unknown; connectionId?: unknown } })
+            .metadata?.service === "slack" &&
+          (calls.executeReadIntegrationActionCalls[0].action as { metadata?: { operation?: unknown } }).metadata?.operation ===
+            "list_channels" &&
+          (calls.executeReadIntegrationActionCalls[0].action as { metadata?: { connectionId?: unknown } }).metadata
+            ?.connectionId === "conn-read-1"
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R1] result.integrationReadResultにcanonical read result(JSON文字列)がそのまま反映される",
+        result.integrationReadResult?.service === "slack" &&
+          result.integrationReadResult?.operation === "list_channels" &&
+          JSON.parse(result.integrationReadResult?.output ?? "null").channels?.length === 2
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R1] waiting_for_approvalへは一切進まない(Work状態更新履歴にwaiting_for_approvalが含まれない、read/write混同していないことの直接証拠)",
+        !calls.workStatusUpdates.includes("waiting_for_approval")
+      )
+    );
+  }
+
+  // ---- Case R2: Connection0件 -> Approval 0、read実行0、
+  // waiting_for_inputへ進む(既存C2.1bのwrite側と同じ挙動をread側でも
+  // 再利用、Connection resolutionロジックの複製をしない直接証拠) ----
+  {
+    const { deps, calls } = makeRecordingDeps(makeReadIntegrationOrchestration("task-read-2"), {
+      resolveIntegrationConnection: async (params) => {
+        calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
+        return { status: "none" };
+      },
+    });
+
+    const result = await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case R2] Connection0件の場合、Approvalもread実行も発生しない(Approval 0・provider実行0)",
+        calls.requestApprovalCalls.length === 0 && calls.executeReadIntegrationActionCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R2] Workはcompletedにならずwaiting_for_inputへ進み、result.answerがslack連携が必要である旨を示す",
+        calls.workStatusUpdates[calls.workStatusUpdates.length - 1] === "waiting_for_input" &&
+          result.answer.includes("連携")
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R2] Taskはcompletedとしてpersistされず、初期status(pending)のまま(updateTaskStatus()自体が一度も呼ばれない)",
+        calls.updateTaskStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- Case R3: Connection複数件 -> 同様にApproval 0、read実行0、
+  // waiting_for_inputへ進む ----
+  {
+    const { deps, calls } = makeRecordingDeps(makeReadIntegrationOrchestration("task-read-3"), {
+      resolveIntegrationConnection: async (params) => {
+        calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
+        return { status: "multiple", count: 2 };
+      },
+    });
+
+    const result = await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case R3] Connection複数件の場合も、勝手に1件を選ばずApproval・read実行のいずれも発生しない",
+        calls.requestApprovalCalls.length === 0 && calls.executeReadIntegrationActionCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R3] Workはcompletedにならずwaiting_for_inputへ進み、result.answerが複数連携から選択できない旨を示す",
+        calls.workStatusUpdates[calls.workStatusUpdates.length - 1] === "waiting_for_input" &&
+          result.answer.includes("複数")
+      )
+    );
+  }
+
+  // ---- Case R4(C2.2c Section8): write action + forged requiresApproval:false
+  // -> Work executionはrequiresApprovalを無条件に信用しread実行境界へ
+  // ルーティングするが(絶対条件: 二重にpolicy判定を持たない、
+  // 単一source of truthはcore/tact-integration/policy.ts)、実際の
+  // protected write side effectを防ぐ責務はexecuteReadIntegrationAction()
+  // 自身のpolicy再検証に委ねられている(tests/tact/integration/
+  // execution.test.tsのRead/Case2で、実executeReadIntegrationAction()が
+  // write action(slack.send_message)をinvalid_action・provider call
+  // 0・Run作成0で拒否することを別途検証済み)。ここではWork execution
+  // 層が「requiresApproval:falseと申告されたIntegration Task」を
+  // Approval作成無しでread実行境界へそのまま渡す、という設計上の
+  // ルーティング挙動自体を確認する(Approvalをbypassして書き込みが
+  // 実行される経路が存在しないことの一部を構成する)。 ----
+  {
+    const task = makeTask({
+      id: "task-forged-1",
+      description: "Slack「general」チャンネルへ送信する(forged read signal)",
+      assignedCapability: "integration.slack.send_message",
+    });
+
+    const forgedOrchestration = async (
+      _request: OrchestrationRequest,
+      hooks?: OrchestrationHooks
+    ): Promise<OrchestrationResult> => {
+
+      await hooks?.onTasksPlanned?.([task]);
+
+      const summary = makeSummary({
+        taskId: task.id,
+        status: "completed",
+        output: "test",
+        integrationRequirement: {
+          // 絶対条件: write action(send_message)なのにrequiresApprovalが
+          // 誤って(または悪意を持って)falseに設定されているケース。
+          requiresApproval: false,
+          action: {
+            kind: "integration_action",
+            summary: "Slack「general」チャンネルへメッセージを送信します",
+            metadata: {
+              service: "slack",
+              operation: "send_message",
+              input: { channel: "general", text: "forged" },
+            },
+          },
+        },
+      });
+
+      await hooks?.onTaskFinished?.(task, summary);
+
+      return {
+        answer: "test",
+        executionId: "exec-forged-1",
+        tasks: [summary],
+        memoryUsed: [],
+        toolsUsed: [],
+        memoryWrites: [],
+        learningSignals: ["successful_execution"],
+        metadata: { executionMode: "single-execution" },
+      };
+
+    };
+
+    const { deps, calls } = makeRecordingDeps(forgedOrchestration, {
+      resolveIntegrationConnection: async (params) => {
+        calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
+        return { status: "single", connectionId: "conn-forged-1" };
+      },
+      // このtest自体はexecuteReadIntegrationAction()の中身(policy
+      // 再検証)を差し替えない(defaultのまま呼び出しを記録するだけ)。
+      // 実際のpolicy再検証によるprovider 0/Run 0の証明は
+      // tests/tact/integration/execution.test.tsのRead/Case2の責務。
+    });
+
+    await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case R4] requiresApproval:falseと申告されたTaskはApprovalを一切経由せずread実行境界(executeReadIntegrationAction)へ渡る(Approval 0、requestApprovalCalls===0)——実際のprovider side effect防御はexecuteReadIntegrationAction()自身のpolicy再検証が担う(tests/tact/integration/execution.test.tsのRead/Case2で別途確認済み)",
+        calls.requestApprovalCalls.length === 0 && calls.executeReadIntegrationActionCalls.length === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R4] executeReadIntegrationActionへ渡るactionはcapabilityが申告したcanonical actionそのもの(service:slack/operation:send_message)であり、Work execution層はrequiresApprovalの真偽をここでは検証しない(単一source of truthはpolicy.tsであり、二重判定を持ち込まない設計)",
+        (calls.executeReadIntegrationActionCalls[0]?.action as { metadata?: { service?: unknown; operation?: unknown } })
+          ?.metadata?.service === "slack" &&
+          (calls.executeReadIntegrationActionCalls[0]?.action as { metadata?: { operation?: unknown } })?.metadata
+            ?.operation === "send_message"
       )
     );
   }

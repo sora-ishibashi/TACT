@@ -11,49 +11,59 @@ import {
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "../tact-work/completion";
 import { executeIntegrationAction as defaultExecuteIntegrationAction } from "./gateway";
 import { getConnection as defaultGetConnection } from "./connection";
+import { resolveIntegrationActionPolicy } from "./policy";
 import type { Approval, ApprovalStatus, Run, TaskStatus, WorkStatus } from "../tact-work/types";
-import type { IntegrationAction, IntegrationService } from "./types";
+import type { Connection, IntegrationAction, IntegrationService } from "./types";
 
 // =========================
-// TACT Integration — Execution Boundary (Architecture Migration Phase C1)
+// TACT Integration — Execution Boundary
+// (Architecture Migration Phase C1 / C2.2)
 // =========================
 //
 // 唯一の正式なProtected Action実行境界。Bot/Webからは直接Composio
 // Adapter/Integration Gatewayを呼ばせず、必ずこの
-// executeApprovedIntegrationAction()を経由させる(絶対条件、
-// Phase C1指示Section17)。
+// executeApprovedIntegrationAction()(write)・executeReadIntegrationAction()
+// (read、Phase C2.2新規)を経由させる(絶対条件、Phase C1指示Section17
+// をread側にも継承)。
 //
-// 責務(Section17の順序通り):
+// write責務(Section17の順序通り、変更なし):
 //   1. Work ownership確認 (getWork)
 //   2. Approval ownership確認 (getApproval、Work経由のownership defense
 //      をそのまま利用)
 //   3. Approval status == approved確認
 //   4. Workの実行可能state確認 (running)
-//   5. Connection ownership確認 (getConnection)
-//   6. action取得 (Approval.payloadから)
+//   5. action取得 (Approval.payloadから)
+//   5.5. policy再検証 (Phase C2.2新規、defense-in-depth——未知/read
+//        actionをApproval経由で実行させない)
+//   6. Connection ownership確認 (getConnection)
 //   6.5. Execution dedup確認 (Section21、既存completed Runの有無)
-//   6.6. Task state precondition確認 (Phase C2.1c-a-fix、新規:
-//        dedupを通過した後、Taskがpendingであることを確認してから
-//        初めて新規Runを作る——completed/failed/cancelled/runningの
-//        いずれからも新規external executionを開始しない)
-//   7. Integration Gatewayへdispatch
-//   8. Run lifecycle記録
+//   6.6. Task state precondition確認 (Phase C2.1c-a-fix)
+//   7. Integration Gatewayへdispatch (generic core、下記)
+//   8. Run lifecycle記録 (generic core、下記)
 //   9. result返却
 //
-// Run semantics(絶対条件、Section18): Approval待機自体はRunでは
-// ない。このboundaryが呼ばれ、実際にComposioへdispatchする直前に
-// なって初めてRunを作る。
+// read責務(Phase C2.2新規): Approvalを一切経由しない。呼び出し元
+// (core/tact-work/execution.ts、resolveIntegrationConnection()で
+// Connectionを解決済み)からcanonical action + connectionIdを直接
+// 受け取り、この境界自身が改めてpolicy(riskClass==="read")・Work
+// ownership・Connection ownershipを再検証してから実行する(絶対条件
+// Section10: callerが「これはreadです」と言ったことを信用しない)。
 //
-// Execution deduplication(絶対条件、Section21): 同じapprovalIdに
-// 対して既に成功済みのRunが存在する場合、Composioを再度呼ばない
-// (double click/network retry/duplicate resume requestへの対策)。
-// 新しいdistributed transaction systemは作らず、既存のRun.externalRef
-// (jsonb、スキーマ変更不要)へapprovalIdを記録して照合するだけに
-// とどめる。
+// Run semantics(絶対条件、Section18、read/write共通): Approval待機
+// 自体はRunではない。この境界が呼ばれ、実際にComposioへdispatchする
+// 直前になって初めてRunを作る。
 //
-// Protected-write retry safety(絶対条件、Section20): このboundary
-// 自身も、Integration Gateway呼び出しの失敗に対して自動retryを一切
-// 行わない(1回だけ呼ぶ)。失敗時は既存のRun.status="failed"へ
+// Execution deduplication(絶対条件、Section21、write専用):
+// 同じapprovalIdに対して既に成功済みのRunが存在する場合、Composioを
+// 再度呼ばない。readはApproval(approvalId)を持たないため、この
+// dedupの対象ではない——read側の安全性はTask precondition
+// (pending以外からの新規実行を拒否する、generic coreが共通で持つ)
+// とWork execution層(呼び出し元)が1 Turn内で同じTaskへ二重に
+// read実行をキューしない設計で担保する。
+//
+// Protected-write retry safety(絶対条件、Section20、read/write共通):
+// この境界自身も、Integration Gateway呼び出しの失敗に対して自動retry
+// を一切行わない(1回だけ呼ぶ)。失敗時は既存のRun.status="failed"へ
 // 落とすだけで、新しい"unknown"相当のstatusは追加しない。
 
 export interface ExecuteApprovedIntegrationActionDeps {
@@ -87,9 +97,8 @@ export interface ExecuteApprovedIntegrationActionDeps {
 
   // Architecture Migration Phase C2.1a(Work Completion Reconciliation、
   // architecture debt A解消)。Task状態確定後にWork全体の集約判定を
-  // 行う共有責務。失敗してもこのboundaryの戻り値(既に確定した
-  // Run/Task状態)には影響させない(下記reconcileAfterTaskUpdate()
-  // 参照)。
+  // 行う共有責務。失敗してもこの境界の戻り値(既に確定したRun/Task
+  // 状態)には影響させない(下記reconcileAfterTaskUpdate()参照)。
   reconcileWorkCompletionStatus: typeof defaultReconcileWorkCompletionStatus;
 
 }
@@ -213,6 +222,171 @@ function findAlreadyExecutedRun(runs: Run[], approvalId: string): Run | undefine
 
 }
 
+// Architecture Migration Phase C2.2: read/write共通のConnection
+// ownership再検証(既存のgetConnection()呼び出しをそのまま使う、
+// 新しいDB queryを追加しない)。connectionIdは呼び出し元
+// (Approval.payload、またはcore/tact-work/execution.tsが解決済みの
+// resolveIntegrationConnection()の結果)から渡されるだけの値であり、
+// この境界自身がownership/activeであることを必ず再確認する
+// (絶対条件: connectionIdという文字列を信用しない)。
+async function validateConnectionForExecution(
+  connectionId: string,
+  userId: string,
+  accessToken: string,
+  deps: Pick<ExecuteApprovedIntegrationActionDeps, "getConnection">
+): Promise<{ ok: true; connection: Connection } | { ok: false; outcome: IntegrationActionExecutionOutcome }> {
+
+  const connection = await deps.getConnection(connectionId, userId, accessToken);
+
+  if (!connection || connection.status !== "active") {
+    return { ok: false, outcome: { status: "connection_unavailable" } };
+  }
+
+  return { ok: true, connection };
+
+}
+
+// =========================
+// Generic execution core (Architecture Migration Phase C2.2)
+// =========================
+//
+// write(executeApprovedIntegrationAction())・read
+// (executeReadIntegrationAction())の両方が、Connection ownership
+// 確認・(write側のみ)dedup確認より後に共通で辿る実行本体。
+// approvalIdはwriteの場合のみ渡され、Run.externalRefへの記録
+// (dedup照合用)にのみ使う——read実行はこのapprovalId概念自体を
+// 持たない(絶対条件: readのためにfake Approvalを作らない)。
+interface ExecuteIntegrationActionCoreParams {
+
+  workId: string;
+
+  userId: string;
+
+  accessToken: string;
+
+  taskId: string;
+
+  connection: Connection;
+
+  action: IntegrationAction;
+
+  approvalId?: string;
+
+  // 呼び出し元(write)が既にdedup確認のためlistRunsForTask()を実行
+  // 済みの場合、そのまま渡すことで同じDB queryを2回呼ばずに済む
+  // (read側は未指定のままでよく、この関数自身が取得する)。
+  existingRunsForTask?: Run[];
+
+}
+
+async function executeIntegrationActionCore(
+  params: ExecuteIntegrationActionCoreParams,
+  deps: ExecuteApprovedIntegrationActionDeps
+): Promise<IntegrationActionExecutionOutcome> {
+
+  const { workId, userId, accessToken, taskId, connection, action, approvalId } = params;
+
+  // Architecture Migration Phase C2.1c-a-fix(絶対条件、read/write共通):
+  // 新規external executionを開始できるTask stateはpendingだけである。
+  // 単一Task取得APIが無いため、既存listTasksForWork()を再利用する
+  // (新しいDB queryを追加しない)。
+  const tasksForWork = await deps.listTasksForWork(workId, userId, accessToken);
+  const task = tasksForWork.find((t) => t.id === taskId);
+
+  if (!task) {
+    return { status: "not_found" };
+  }
+
+  if (task.status !== "pending") {
+    return { status: "task_not_executable", taskStatus: task.status };
+  }
+
+  const existingRuns = params.existingRunsForTask ?? (await deps.listRunsForTask(workId, userId, accessToken, taskId));
+
+  const nextAttempt = existingRuns.reduce((max, run) => Math.max(max, run.attempt), 0) + 1;
+
+  await deps.updateTaskStatus(workId, userId, accessToken, taskId, "running");
+
+  const run = await deps.createRun(
+    workId,
+    userId,
+    accessToken,
+    taskId,
+    {
+      attempt: nextAttempt,
+      capability: `integration.${action.service}.${action.operation}`,
+      provider: connection.provider,
+    }
+  );
+
+  if (!run) {
+    return { status: "not_found" };
+  }
+
+  // Integration Gatewayへdispatch(絶対条件Section20: 1回だけ呼ぶ、
+  // 自動retryしない)。
+  const result = await deps.executeIntegrationAction({
+    userId,
+    workId,
+    taskId,
+    approvalId: approvalId ?? null,
+    connectionId: connection.id,
+    providerConnectionRef: connection.providerConnectionRef,
+    action,
+  });
+
+  const externalRef: Record<string, unknown> = approvalId
+    ? { approvalId, providerExecutionRef: null }
+    : { providerExecutionRef: null };
+
+  if (result.status === "completed") {
+
+    externalRef.providerExecutionRef = result.providerExecutionRef ?? null;
+
+    const completedResult = { success: true, output: JSON.stringify(result.output ?? null) };
+
+    await deps.completeRun(workId, userId, accessToken, run.id, {
+      result: completedResult,
+      externalRef,
+    });
+
+    await deps.updateTaskStatus(workId, userId, accessToken, taskId, "completed");
+
+    await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
+
+    return {
+      status: "completed",
+      // Architecture Migration Phase C2.2: completeRun()へ渡したresult
+      // (JSON.stringify()済みのcanonical output)を、戻り値のRunにも
+      // そのまま反映する(既存のcreateRun()直後のin-memory runには
+      // resultが含まれないため)。read呼び出し元(core/tact-conversation/
+      // orchestration.ts)がrun.result.outputからcanonical read result
+      // を取り出せるようにするための最小限の追加(write path自体の
+      // 既存動作・戻り値shapeは変えない、Run.resultは元々optionalな
+      // 既存field)。
+      run: { ...run, status: "completed", externalRef, result: completedResult },
+    };
+
+  }
+
+  externalRef.providerExecutionRef = result.providerExecutionRef ?? null;
+
+  await deps.failRun(workId, userId, accessToken, run.id, {
+    error: result.error.message,
+    externalRef,
+  });
+
+  await deps.updateTaskStatus(workId, userId, accessToken, taskId, "failed");
+
+  await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
+
+  return {
+    status: "failed",
+    run: { ...run, status: "failed", error: result.error.message, externalRef },
+  };
+
+}
+
 export async function executeApprovedIntegrationAction(
   workId: string,
   userId: string,
@@ -250,18 +424,39 @@ export async function executeApprovedIntegrationAction(
     return { status: "work_not_runnable", workStatus: work.status };
   }
 
-  // 6. action取得(Connection ownership確認より先に、まず形式検証)
+  // 5. action取得(Connection ownership確認より先に、まず形式検証)
   const extracted = extractIntegrationActionFromApproval(approval);
 
   if (!extracted) {
     return { status: "invalid_action", reason: "Approval.payloadからintegration actionを復元できません" };
   }
 
-  // 5. Connection ownership確認
-  const connection = await deps.getConnection(extracted.connectionId, userId, accessToken);
+  // 5.5. Architecture Migration Phase C2.2(絶対条件、Section11、
+  // defense-in-depth): Approvalが承認されたという事実だけでは
+  // providerへ流してよい理由にならない——policy allowlistを
+  // ここでも再検証する。未知action、またはriskClass==="read"の
+  // actionがこのApproval経由の境界へ渡ってきた場合(通常到達しない
+  // ——onTaskFinished()はrequiresApproval===trueのactionしか
+  // Approvalへ積まないため)は、providerへ一切流さず安全に拒否する。
+  const policy = resolveIntegrationActionPolicy(extracted.action.service, extracted.action.operation);
 
-  if (!connection || connection.status !== "active") {
-    return { status: "connection_unavailable" };
+  if (!policy || policy.riskClass === "read") {
+    return {
+      status: "invalid_action",
+      reason: "この操作はApproval経由の実行対象として登録されていません",
+    };
+  }
+
+  // 6. Connection ownership確認
+  const connectionValidation = await validateConnectionForExecution(
+    extracted.connectionId,
+    userId,
+    accessToken,
+    deps
+  );
+
+  if (!connectionValidation.ok) {
+    return connectionValidation.outcome;
   }
 
   const taskId = approval.taskId;
@@ -275,107 +470,103 @@ export async function executeApprovedIntegrationAction(
     return { status: "already_executed", run: alreadyExecuted };
   }
 
-  // Architecture Migration Phase C2.1c-a-fix(絶対条件): dedup確認
-  // (既に成功済みのRunが無い場合)を通過して初めて、Taskの現在stateを
-  // 確認する——「既に正常実行済みのcompleted Taskはalready_executed
-  // として扱う」という既存C1.5 dedup semanticsを壊さないため、この
-  // precondition確認は必ずdedup確認の"後"に置く。ここへ到達した時点で
-  // Taskがpending以外(completed/failed/cancelled/running)であれば、
-  // 新規external executionを開始せず安全に停止する(Run作成・Task
-  // status変更・Work status変更・provider呼び出しのいずれも行わない)。
-  // 単一Task取得APIが無いため、既存listTasksForWork()を再利用する
-  // (新しいDB queryを追加しない)。
-  const tasksForWork = await deps.listTasksForWork(workId, userId, accessToken);
-  const task = tasksForWork.find((t) => t.id === taskId);
-
-  if (!task) {
-    // Approval.taskIdが指す先が存在しない、またはWork/Task/Approvalの
-    // 対応が壊れている(既存Store APIのownership defenseにより、
-    // 他user所有のTaskも同様にここで見つからない扱いになる)。
-    return { status: "not_found" };
-  }
-
-  if (task.status !== "pending") {
-    // completed/failed/cancelledはterminal状態からの再実行を許さない
-    // (絶対条件: terminal→non-terminalという巻き戻しを作らない)。
-    // runningは、既に別のexecution attemptが進行中(または異常終了で
-    // 取り残された)可能性があるため、新しいprovider callを勝手に
-    // 開始しない(既存Run dedupとは別の防御層——dedupは"completed"の
-    // 既存Runだけを見るため、completedに至らないままrunningで
-    // 止まっているケースをここで捕捉する)。
-    return { status: "task_not_executable", taskStatus: task.status };
-  }
-
-  const nextAttempt =
-    existingRuns.reduce((max, run) => Math.max(max, run.attempt), 0) + 1;
-
-  await deps.updateTaskStatus(workId, userId, accessToken, taskId, "running");
-
-  const run = await deps.createRun(
-    workId,
-    userId,
-    accessToken,
-    taskId,
+  return executeIntegrationActionCore(
     {
-      attempt: nextAttempt,
-      capability: `integration.${extracted.action.service}.${extracted.action.operation}`,
-      provider: connection.provider,
-    }
+      workId,
+      userId,
+      accessToken,
+      taskId,
+      connection: connectionValidation.connection,
+      action: extracted.action,
+      approvalId,
+      existingRunsForTask: existingRuns,
+    },
+    deps
   );
 
-  if (!run) {
+}
+
+// =========================
+// executeReadIntegrationAction (Architecture Migration Phase C2.2)
+// =========================
+//
+// Approval不要read用のcanonical public boundary。呼び出し元
+// (core/tact-work/execution.tsのrunWorkTurn())が「これはreadです」
+// と主張しても信用せず、この境界自身がpolicy(riskClass==="read")を
+// 必ず再検証する(絶対条件Section10)。write/destructive/未知action
+// が渡された場合は、provider呼び出し0・Run作成0のまま安全に拒否する
+// (defense-in-depth)。
+export interface ExecuteReadIntegrationActionParams {
+
+  workId: string;
+
+  userId: string;
+
+  accessToken: string;
+
+  taskId: string;
+
+  // core/tact-work/execution.ts側のresolveIntegrationConnection()
+  // (既存C2.1bの仕組み、single解決時のみ)が既に解決済みの値。
+  connectionId: string;
+
+  action: IntegrationAction;
+
+}
+
+export async function executeReadIntegrationAction(
+  params: ExecuteReadIntegrationActionParams,
+  deps: ExecuteApprovedIntegrationActionDeps = defaultDeps
+): Promise<IntegrationActionExecutionOutcome> {
+
+  const { workId, userId, accessToken, taskId, connectionId, action } = params;
+
+  // 絶対条件(Section10、最重要): callerがreadだと言ったから信用する、
+  // は禁止。policy allowlistを必ずここで再検証する。
+  const policy = resolveIntegrationActionPolicy(action.service, action.operation);
+
+  if (!policy || policy.riskClass !== "read") {
+    return {
+      status: "invalid_action",
+      reason: "この操作はread実行境界の対象として登録されていません",
+    };
+  }
+
+  // Work ownership + 実行可能state確認(write pathと同じ既存ガードを
+  // read側にも独立して適用する——呼び出し元が検証済みのWorkを持って
+  // いても、この境界自身が再確認する)。
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
     return { status: "not_found" };
   }
 
-  // 7. Integration Gatewayへdispatch、9. Composio execute
-  // (絶対条件Section20: 1回だけ呼ぶ、自動retryしない)
-  const result = await deps.executeIntegrationAction({
-    userId,
-    workId,
-    taskId,
-    approvalId,
-    connectionId: connection.id,
-    providerConnectionRef: connection.providerConnectionRef,
-    action: extracted.action,
-  });
-
-  // 8. Run lifecycle記録
-  if (result.status === "completed") {
-
-    await deps.completeRun(workId, userId, accessToken, run.id, {
-      result: { success: true, output: JSON.stringify(result.output ?? null) },
-      externalRef: { approvalId, providerExecutionRef: result.providerExecutionRef ?? null },
-    });
-
-    await deps.updateTaskStatus(workId, userId, accessToken, taskId, "completed");
-
-    // Architecture Migration Phase C2.1a: Run/Taskが確定した後に
-    // Work全体の集約判定を行う。この呼び出し自体が失敗しても、既に
-    // 確定した"completed"という結果は変更しない(reconcileAfter
-    // TaskUpdate()参照)。
-    await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
-
-    return {
-      status: "completed",
-      run: { ...run, status: "completed", externalRef: { approvalId, providerExecutionRef: result.providerExecutionRef ?? null } },
-    };
-
+  if (work.status !== "running") {
+    return { status: "work_not_runnable", workStatus: work.status };
   }
 
-  await deps.failRun(workId, userId, accessToken, run.id, {
-    error: result.error.message,
-    externalRef: { approvalId, providerExecutionRef: result.providerExecutionRef ?? null },
-  });
+  const connectionValidation = await validateConnectionForExecution(
+    connectionId,
+    userId,
+    accessToken,
+    deps
+  );
 
-  await deps.updateTaskStatus(workId, userId, accessToken, taskId, "failed");
+  if (!connectionValidation.ok) {
+    return connectionValidation.outcome;
+  }
 
-  // Architecture Migration Phase C2.1a: 失敗時も同様に、Run/Taskが
-  // 確定した後にWork全体の集約判定を行う。
-  await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
-
-  return {
-    status: "failed",
-    run: { ...run, status: "failed", error: result.error.message, externalRef: { approvalId, providerExecutionRef: result.providerExecutionRef ?? null } },
-  };
+  return executeIntegrationActionCore(
+    {
+      workId,
+      userId,
+      accessToken,
+      taskId,
+      connection: connectionValidation.connection,
+      action,
+      // approvalIdなし(read実行はApprovalを一切経由しない、絶対条件)。
+    },
+    deps
+  );
 
 }

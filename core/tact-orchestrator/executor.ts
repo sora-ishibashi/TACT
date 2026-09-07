@@ -473,6 +473,12 @@ export async function executeTask(
           // (executor.ts自身はApproval判断を一切行わない)。
           approvalRequirement: raw.approvalRequirement,
 
+          // Architecture Migration Phase C2.2: Integration Capabilityが
+          // 付与したcanonical action + policy判定signalをそのまま透過
+          // する(executor.ts自身はread/write判断を一切行わない、
+          // 絶対条件Section4)。
+          integrationRequirement: raw.integrationRequirement,
+
         };
 
       }

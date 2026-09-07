@@ -8,8 +8,14 @@ import { getSimpleChatResponse } from "../tact-intent/ruleRouter";
 // core/tact-work → core/tact-orchestratorの一方向、core/tact-work/
 // index.tsのコメント参照)。
 import { resolveWork, runWorkTurn, defaultRunWorkTurnDeps, getApproval } from "../tact-work";
-import type { WorkIntakeSource, ActorReference, ResolveIntegrationConnection, Approval } from "../tact-work";
-import { listConnectionsForUser } from "../tact-integration";
+import type {
+  WorkIntakeSource,
+  ActorReference,
+  ResolveIntegrationConnection,
+  ExecuteReadIntegrationAction,
+  Approval,
+} from "../tact-work";
+import { listConnectionsForUser, executeReadIntegrationAction } from "../tact-integration";
 import type { IntegrationService } from "../tact-integration";
 
 import type {
@@ -1713,6 +1719,174 @@ const resolveIntegrationConnectionViaTactIntegration: ResolveIntegrationConnecti
 
 };
 
+// =========================
+// formatIntegrationReadResultAnswer (Architecture Migration Phase C2.2)
+// =========================
+//
+// 絶対条件(Section18、最重要): Slack channel list等のuser-visible
+// formattingはcore/tact-work・core/tact-integration domainへ持ち込まず、
+// この境界(core/tact-conversation)で行う。result.integrationReadResult.
+// output(core/tact-work/execution.tsがJSON.stringify()した、canonical
+// result——例: core/tact-integration/types.tsのSlackListChannelsResult)
+// をここで初めてparseし、人間可読なtextへ変換する。
+//
+// 絶対条件: raw provider response(Composio生データ)はこの時点で既に
+// core/tact-integration/execution.tsのgeneric coreを経由しており、
+// output自体がcanonical(Provider非依存)なJSONである前提——万一形式が
+// 想定外でも例外を投げず、undefinedを返して既存のplan.answer
+// (Capabilityが設定したplaceholder文言)をそのまま使わせる(防御的)。
+//
+// 絶対条件(Section18): 大量結果に備え、表示件数の安全な上限(先頭20件)
+// をこのtext生成側だけに設ける——result.integrationReadResult自体
+// (canonical data)は一切書き換えない。
+//
+// Architecture Migration Phase C2.2c(Read Result Completeness Semantics
+// Correction): list_channelsは現在1回のprovider callのみ(limit=100・
+// pagination loop無し・types未指定によりprovider既定のpublic_channel
+// のみ・exclude_archived未指定)で完結するため、この結果はworkspace内の
+// Slackチャンネルを網羅した一覧であることを保証しない(private
+// channel・archived channelの扱いもprovider既定に委ねたまま、公開
+// channelが100件を超える場合も次ページを取得しない)。そのため
+// visible文言は「これが全チャンネルである」と読める断定的な表現
+// (「以下のチャンネルがあります」「チャンネル一覧です」等)を避け、
+// 「取得できた分」であることが伝わる非網羅的な表現にとどめる
+// (pagination対応・includePrivate/includeArchived等のcanonical
+// semantics拡張は将来のDebtとして意図的に今回のscope外のまま)。
+export function formatIntegrationReadResultAnswer(result: OrchestrationResult): string | undefined {
+
+  const readResult = result.integrationReadResult;
+
+  if (!readResult) {
+    return undefined;
+  }
+
+  if (readResult.service === "slack" && readResult.operation === "list_channels") {
+
+    try {
+
+      const parsed = JSON.parse(readResult.output) as { channels?: unknown } | null;
+      const rawChannels = Array.isArray(parsed?.channels) ? parsed?.channels : [];
+
+      const names = (rawChannels ?? [])
+        .map((channel) =>
+          channel && typeof channel === "object" && typeof (channel as { name?: unknown }).name === "string"
+            ? (channel as { name: string }).name
+            : undefined
+        )
+        .filter((name): name is string => !!name)
+        .slice(0, 20);
+
+      if (names.length === 0) {
+        // 絶対条件(Section3): 0件をproviderの実行失敗と混同しない
+        // (executeReadIntegrationAction()側のfailed経路とは別の、
+        // 「実行は成功したが表示できるchannelが無かった」ケース)。
+        // 「チャンネルはありません」のような完全性を断定する表現は
+        // 避け、「取得できなかった」という非断定的な表現にとどめる。
+        return "表示できるSlackチャンネルを取得できませんでした。";
+      }
+
+      // 絶対条件(Section4): 「すべてのチャンネル」「チャンネル一覧
+      // です」等、網羅性を示唆する表現を使わない(pagination未対応・
+      // public_channelのみがprovider既定のため、これは網羅的な一覧
+      // ではなく「取得できた分」でしかない)。
+      return `取得できたSlackチャンネルです:\n${names.map((name) => `#${name}`).join("\n")}`;
+
+    } catch {
+      return undefined;
+    }
+
+  }
+
+  return undefined;
+
+}
+
+// =========================
+// executeReadIntegrationActionViaTactIntegration
+// (Architecture Migration Phase C2.2)
+// =========================
+//
+// resolveIntegrationConnectionViaTactIntegrationと全く同じ設計思想:
+// core/tact-work/execution.tsのrunWorkTurn()は、循環参照を避けるため
+// core/tact-integrationを一切importしない(executeReadIntegrationAction
+// という汎用の拡張点の型だけを知る)。core/tact-conversation/がこの
+// 唯一の実配線点であり、TaskApprovalAction.metadata(service/operation/
+// input)からIntegrationAction(core/tact-integration所有の型)を
+// 組み立て直し、core/tact-integration/execution.tsの実
+// executeReadIntegrationAction()を呼ぶ。
+//
+// 絶対条件: このfileはBot-specific formatting(表示整形)を一切行わない
+// ——canonical read result(JSON文字列化されたoutput)をそのまま
+// ExecuteReadIntegrationActionOutcome.resultOutputへ運ぶだけ。
+const executeReadIntegrationActionViaTactIntegration: ExecuteReadIntegrationAction = async (
+  params
+) => {
+
+  const metadata = params.action.metadata as
+    | { service?: unknown; operation?: unknown; input?: unknown }
+    | undefined;
+
+  const service = typeof metadata?.service === "string" ? metadata.service : undefined;
+  const operation = typeof metadata?.operation === "string" ? metadata.operation : undefined;
+  const input =
+    metadata?.input && typeof metadata.input === "object"
+      ? (metadata.input as Record<string, unknown>)
+      : {};
+
+  if (!service || !operation) {
+    return { status: "invalid_action" };
+  }
+
+  const outcome = await executeReadIntegrationAction({
+    workId: params.workId,
+    userId: params.userId,
+    accessToken: params.accessToken,
+    taskId: params.taskId,
+    connectionId: params.connectionId,
+    action: { service: service as IntegrationService, operation, input },
+  });
+
+  switch (outcome.status) {
+
+    case "completed":
+      return { status: "completed", resultOutput: outcome.run.result?.output ?? undefined };
+
+    case "failed":
+      return { status: "failed" };
+
+    case "connection_unavailable":
+      return { status: "connection_unavailable" };
+
+    case "invalid_action":
+      return { status: "invalid_action" };
+
+    case "task_not_executable":
+      return { status: "task_not_executable" };
+
+    case "not_found":
+      return { status: "not_found" };
+
+    case "work_not_runnable":
+      return { status: "work_not_runnable" };
+
+    // read境界はApproval/dedupの対象外のため通常到達しない
+    // (executeReadIntegrationAction()自身がapprovalIdを一切扱わない)
+    // が、IntegrationActionExecutionOutcome型としては存在するため、
+    // 安全側(invalid_action)へfallbackするだけにとどめる(絶対条件:
+    // readのためにApprovalを偽造しない、新しいoutcome分類も増やさない)。
+    case "approval_not_approved":
+    case "already_executed":
+      return { status: "invalid_action" };
+
+    default: {
+      const exhaustiveCheck: never = outcome;
+      return exhaustiveCheck;
+    }
+
+  }
+
+};
+
 export async function resolveAndRunWork(
   conversation: Conversation,
   accessToken: string,
@@ -1763,6 +1937,7 @@ export async function resolveAndRunWork(
     {
       ...defaultRunWorkTurnDeps,
       resolveIntegrationConnection: resolveIntegrationConnectionViaTactIntegration,
+      executeReadIntegrationAction: executeReadIntegrationActionViaTactIntegration,
     }
   );
 
@@ -1826,7 +2001,7 @@ async function runNormalTurn(
   // OrchestrationRequestの中身自体は既存(Phase1〜90)と完全に同じ
   // ——resolveAndRunWork()はWork解決/Task・Run永続化を行うだけで、
   // Orchestratorへ渡すrequestを一切変更しない。
-  const result = await resolveAndRunWork(
+  let result = await resolveAndRunWork(
     conversation,
     accessToken,
     {
@@ -1840,6 +2015,17 @@ async function runNormalTurn(
     orchestrationInput,
     source
   );
+
+  // Architecture Migration Phase C2.2: read integration実行結果
+  // (result.integrationReadResult)があれば、ここ(Conversation境界)で
+  // 初めてBot向けtextへ整形し、result.answerへ反映する
+  // (既存のintegrationConnectionIssues→result.answer上書き、
+  // Phase C2.1bと同じ既存pattern)。
+  const integrationReadAnswer = formatIntegrationReadResultAnswer(result);
+
+  if (integrationReadAnswer) {
+    result = { ...result, answer: integrationReadAnswer };
+  }
 
   const plan = planConversationTurn(result);
 
@@ -1949,7 +2135,7 @@ async function runClarificationAnswerTurn(
   // Clarification再実行は、既存のWork(waiting_for_input状態のはず)を
   // resolveAndRunWork()が再利用し、Task計画が実際に行われた時点で
   // runningへ戻す(core/tact-work/execution.tsのonTasksPlanned)。
-  const result = await resolveAndRunWork(
+  let result = await resolveAndRunWork(
     conversation,
     accessToken,
     {
@@ -1959,6 +2145,14 @@ async function runClarificationAnswerTurn(
     resendInput,
     source
   );
+
+  // Architecture Migration Phase C2.2: runNormalTurn()と同じ理由
+  // (formatIntegrationReadResultAnswer()参照)。
+  const integrationReadAnswer = formatIntegrationReadResultAnswer(result);
+
+  if (integrationReadAnswer) {
+    result = { ...result, answer: integrationReadAnswer };
+  }
 
   const plan = planConversationTurn(result);
 

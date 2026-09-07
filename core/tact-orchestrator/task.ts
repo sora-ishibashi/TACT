@@ -208,6 +208,20 @@ export interface TaskExecutionSummary {
   // core/tact-work/execution.tsの責務)。
   approvalRequirement?: TaskApprovalRequirement;
 
+  // Architecture Migration Phase C2.2(Read/Write Policy): Integration
+  // Capability(core/tact-integration/)専用の、canonical integration
+  // actionを一度だけ表現するsignal。上のapprovalRequirementは
+  // Integration以外の将来Capabilityも使いうる汎用機構のまま維持し
+  // (絶対条件: 既存の非Integration用途を壊さない、
+  // tests/tact/work/execution.test.tsのkind="external_write_test"参照)、
+  // Integration Capabilityはこちらだけを返す——同じcanonical action
+  // payloadをapprovalRequirementとintegrationRequirementの両方へ
+  // 二重に持たせない(ユーザー指示Correction2、source-of-truthの
+  // 二重化を避けるため)。requiresApprovalはCapability自身が
+  // core/tact-integration/policy.tsのriskClassから導出済みの値を
+  // そのまま運ぶ(Orchestrator自身はpolicy判断を一切行わない)。
+  integrationRequirement?: TaskIntegrationRequirement;
+
 }
 
 // Architecture Migration Phase B3: Approval対象となる提案actionの
@@ -229,5 +243,21 @@ export interface TaskApprovalRequirement {
   reason: string;
 
   action?: TaskApprovalAction;
+
+}
+
+// Architecture Migration Phase C2.2: Integration Capabilityが返す、
+// canonical integration actionとpolicy判定結果(requiresApproval)を
+// 一度だけ表現する最小shape。actionはTaskApprovalActionをそのまま
+// 再利用する(新しいaction表現を増やさない、絶対条件Correction2)。
+// requiresApproval===trueの場合のみreasonが意味を持つ(Approval作成
+// 時にそのままreasonとして使われる)。
+export interface TaskIntegrationRequirement {
+
+  requiresApproval: boolean;
+
+  reason?: string;
+
+  action: TaskApprovalAction;
 
 }

@@ -44,6 +44,42 @@ export interface IntegrationAction {
 }
 
 // =========================
+// Canonical Read Result (Architecture Migration Phase C2.2)
+// =========================
+//
+// service="slack", operation="list_channels"のprovider raw response
+// (Composio tool result)から変換される、canonical(Provider非依存)な
+// 最小shape。絶対条件(ユーザー指示Section7): raw metadata・paging
+// internals・team internals・Composio固有field・execution log ID等を
+// 一切含めない。channel idは内部監査用途にのみ保持し、Bot visible
+// resultでは原則nameのみを使う(表示都合の判断はcore/tact-conversation
+// /core/tact-bot境界が行う、このfileはcanonical dataの形だけを持つ)。
+//
+// Architecture Migration Phase C2.2a(schema verification、live Composio
+// metadata APIで一次確認済み)確認済み事実: Composio SLACK_LIST_ALL_
+// CHANNELSのoutput schema上、ChannelItem.required = ["id", "created"]
+// のみ——nameはoptional("Not present for DM channels")。schemaを正と
+// し、nameもrequiredではなくoptionalへ修正する(idのみschema上
+// requiredなのでrequiredのまま維持)。raw→canonical変換の実装は
+// core/tact-integration/providers/composio/mappings/slack.tsの
+// mapComposioListChannelsResultToCanonical()を参照(Phase C2.2bで完成)。
+export interface SlackChannelSummary {
+
+  id: string;
+
+  name?: string;
+
+  isPrivate?: boolean;
+
+}
+
+export interface SlackListChannelsResult {
+
+  channels: SlackChannelSummary[];
+
+}
+
+// =========================
 // Integration Execution Request/Result (Gateway/Provider契約)
 // =========================
 //

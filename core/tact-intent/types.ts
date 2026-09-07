@@ -17,7 +17,15 @@
 // 巨大なCapability一覧を先回りで作らない)。この値自体はProvider
 // (Composio)を一切知らない——「TACTのどのCapabilityへ渡すべきか」
 // という交通整理の語彙にとどまる。
-export type TactIntent = "chat" | "research" | "core_push" | "integration_slack_send_message";
+//
+// Architecture Migration Phase C2.2(Read/Write Policy): 同じ理由で
+// "integration_slack_list_channels"を追加する(read capability第1号)。
+export type TactIntent =
+  | "chat"
+  | "research"
+  | "core_push"
+  | "integration_slack_send_message"
+  | "integration_slack_list_channels";
 
 // STEP212のDirect Push契約(type: "knowledge"|"memory"|"example")と
 // 同じ型をここでも再利用する。Intent Routerがcore_pushと判定した際、

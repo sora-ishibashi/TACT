@@ -1,45 +1,48 @@
 import { extractSlackSendIntent } from "../tact-intent/ruleRouter";
+import { resolveIntegrationActionPolicy } from "./policy";
 import type { CapabilityInvocationRequest, CapabilityInvocationResult } from "../tact-orchestrator/types";
 
 // =========================
-// TACT Integration — "integration.slack.send_message" Capability
-// (Architecture Migration Phase C2.1b)
+// TACT Integration — "integration.slack.send_message" /
+// "integration.slack.list_channels" Capabilities
+// (Architecture Migration Phase C2.1b / C2.2)
 // =========================
 //
-// core/tact-bootstrap.ts(合成ルート)がこの関数を
-// registerCapability("integration.slack.send_message", ...)経由で
-// Capability Registry(core/tact-core/capabilities/registry.ts)へ
-// 登録する。core/tact-orchestrator/executor.tsは"research"以外の
-// Capability名に対しては汎用のinvokeCapability()を直接呼ぶため
-// (絶対条件12: Capability固有分岐を増やさない)、この関数は
-// core/tact-research/capabilityAdapter.tsのrunResearchCapability()の
-// ような変換Adapterを介さず、CapabilityInvocationRequestを直接受け取る。
+// core/tact-bootstrap.ts(合成ルート)がこれらの関数を
+// registerCapability("integration.slack.*", ...)経由でCapability
+// Registry(core/tact-core/capabilities/registry.ts)へ登録する。
+// core/tact-orchestrator/executor.tsは"research"以外のCapability名に
+// 対しては汎用のinvokeCapability()を直接呼ぶため(絶対条件12:
+// Capability固有分岐を増やさない)、この関数はcore/tact-research/
+// capabilityAdapter.tsのrunResearchCapability()のような変換Adapterを
+// 介さず、CapabilityInvocationRequestを直接受け取る。
 //
-// 絶対条件(最重要、Phase C2.1b指示): このfileはDBアクセス・
+// 絶対条件(最重要、Phase C2.1b指示から継続): このfileはDBアクセス・
 // Composio呼び出し・TACT Connection解決のいずれも行わない
 // (accessToken自体がCapabilityInvocationRequest/CoreCapabilityの
 // どちらにも存在しない——Capability層はTACT Coreの汎用Memory/
 // Knowledge抽象しか持たず、Supabase RLS用のper-user access token
 // を持たない設計であることをrepository調査で確認済み)。
 //
-// 実際の外部write実行に必要な手順(TACT Connection解決・
-// proposeIntegrationAction()相当のApproval作成)は、accessTokenを
-// 実際に持つcore/tact-work/execution.ts(runWorkTurn())の
-// approvalRequirement処理へ委譲する——このCapabilityは、既存の
-// Phase B3 approvalRequirement機構(TaskApprovalRequirement、
-// core/tact-orchestrator/task.ts)を使って「このTaskは人間承認が
-// 必要な外部writeを提案している」という信号を返すだけにとどまる。
-// これにより、proposeIntegrationAction()を別途呼ばず、Planner
-// (decomposeTask())が既に作成済みのTaskをそのままApprovalへ紐づける
-// ことができる(絶対条件: 同一intentでTaskを二重作成しない)。
+// 絶対条件(Phase C2.2、Read/Write Policy): このfileはcore/tact-work/
+// approval.tsのrequestApproval()を直接呼ばず、また「承認が必要か」を
+// 自分で判断しない——core/tact-integration/policy.tsのcanonical
+// allowlistを参照し、その結果(requiresApproval)をTaskExecutionSummary.
+// integrationRequirementとしてそのまま運ぶだけにとどめる。実際に
+// Connection解決・Approval作成・(read時の)即時実行を行うのは、
+// accessTokenを実際に持つcore/tact-work/execution.ts(runWorkTurn())
+// の責務(絶対条件: 同一intentでTaskを二重作成しない、Approval作成は
+// core/tact-work側に一元化する)。
 //
-// canonical action(service/operation/input)はcore/tact-work/
-// execution.tsのApproval作成処理がそのままpayload.action.metadataへ
-// 保存し、既存のcore/tact-integration/execution.tsの
-// extractIntegrationActionFromApproval()がPhase C1と全く同じ形式で
-// 解釈できる(service:"slack", operation:"send_message",
-// input:{channel,text})。connectionIdはこの時点では未確定
-// (Connection解決はcore/tact-work/execution.ts側の責務)。
+// 絶対条件(Correction2、canonical actionの単一表現): send_message
+// (write)・list_channels(read)のいずれも、canonical action
+// (service/operation/input)はintegrationRequirement.actionという
+// 1箇所だけに表現する。旧approvalRequirement(Phase B3の汎用Approval
+// 機構、Integration以外の将来Capabilityも使いうる)は、Integration
+// Capability自身はもう使わない——同じaction情報を複数fieldへコピー
+// してsource-of-truthを二重化しないため。
+
+const SLACK_SERVICE = "slack";
 
 export async function runIntegrationSlackSendMessageCapability(
   request: CapabilityInvocationRequest
@@ -66,6 +69,24 @@ export async function runIntegrationSlackSendMessageCapability(
 
   const { channel, text } = extracted;
 
+  const operation = "send_message";
+
+  // Architecture Migration Phase C2.2(絶対条件、Correction1):
+  // policy allowlistに登録されていないactionは、たとえこの関数自体が
+  // 呼ばれても実行可能扱いにしない(fail-closed)。send_messageは
+  // policy.ts上writeとして登録済みのため、通常この分岐には到達しない
+  // ——将来policy.ts側の登録が変更された場合に備えた防御的チェック。
+  const policy = resolveIntegrationActionPolicy(SLACK_SERVICE, operation);
+
+  if (!policy) {
+
+    return {
+      success: false,
+      errorMessage: "この操作は現在サポートされていません。",
+    };
+
+  }
+
   return {
 
     success: true,
@@ -77,9 +98,11 @@ export async function runIntegrationSlackSendMessageCapability(
     // では表現しきれないため)。
     output: `Slack「${channel}」チャンネルへメッセージを送信する準備ができました。承認をお願いします。`,
 
-    // Architecture Migration Phase B3の既存機構をそのまま使う
-    // (絶対条件: 新しいApproval経路を作らない)。
-    approvalRequirement: {
+    // Architecture Migration Phase C2.2: canonical actionをここ1箇所
+    // だけで表現する(Correction2、旧approvalRequirementは使わない)。
+    integrationRequirement: {
+
+      requiresApproval: policy.requiresApproval,
 
       reason: "外部SaaS(Slack)への投稿には承認が必要です",
 
@@ -94,9 +117,72 @@ export async function runIntegrationSlackSendMessageCapability(
         // connectionIdはまだ含めない(core/tact-work/execution.tsが
         // Connection解決後に追加する)。
         metadata: {
-          service: "slack",
-          operation: "send_message",
+          service: SLACK_SERVICE,
+          operation,
           input: { channel, text },
+        },
+
+      },
+
+    },
+
+  };
+
+}
+
+// =========================
+// "integration.slack.list_channels" (Architecture Migration Phase C2.2)
+// =========================
+//
+// read-only capability。入力はSlackワークスペース全体が対象のため
+// 必須fieldを持たない({}、ユーザー指示Section6)。channel名等の
+// provider都合のfieldをcanonical inputへ追加しない。requestからの
+// 抽出が不要なため、引数自体を持たない(呼び出し側はCapabilityHandler/
+// invokeCapability()経由でrequestを渡すが、この関数は使わないだけ
+// ——既存のdefaultResolveIntegrationConnection()と同じ既存パターン)。
+export async function runIntegrationSlackListChannelsCapability(): Promise<CapabilityInvocationResult> {
+
+  const operation = "list_channels";
+
+  const policy = resolveIntegrationActionPolicy(SLACK_SERVICE, operation);
+
+  // Architecture Migration Phase C2.2(絶対条件、Correction1): policyが
+  // 見つからない場合はrequiresApproval=trueへ安全側fallbackしない
+  // ——「実行そのものを拒否する」。通常この分岐には到達しない
+  // (list_channelsはpolicy.ts上readとして登録済み)が、将来policy.ts
+  // 側の登録が変更された場合に備えた防御的チェック。
+  if (!policy) {
+
+    return {
+      success: false,
+      errorMessage: "この操作は現在サポートされていません。",
+    };
+
+  }
+
+  return {
+
+    success: true,
+
+    output: "Slackのチャンネル一覧を取得する準備ができました。",
+
+    integrationRequirement: {
+
+      // policy.riskClass==="read"のため常にfalse
+      // (requiresApprovalForRiskClass()から導出済みの値をそのまま運ぶ、
+      // このfile自身は「readだから承認不要」という判断を独自にしない)。
+      requiresApproval: policy.requiresApproval,
+
+      action: {
+
+        kind: "integration_action",
+
+        summary: "Slackのチャンネル一覧を取得します",
+
+        metadata: {
+          service: SLACK_SERVICE,
+          operation,
+          input: {},
         },
 
       },
