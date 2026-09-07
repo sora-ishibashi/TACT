@@ -106,6 +106,12 @@ export async function runIntegrationSlackSendMessageCapability(
 
       reason: "外部SaaS(Slack)への投稿には承認が必要です",
 
+      // Architecture Migration ARCH-P1b: このrequirementを判定した
+      // 時点のcanonical risk classificationをそのまま運ぶ(Approval
+      // Subject.riskClassSnapshotの唯一のsource、
+      // docs/architecture/approval-integrity.md Step4参照)。
+      riskClass: policy.riskClass,
+
       action: {
 
         kind: "integration_action",
@@ -172,6 +178,11 @@ export async function runIntegrationSlackListChannelsCapability(): Promise<Capab
       // (requiresApprovalForRiskClass()から導出済みの値をそのまま運ぶ、
       // このfile自身は「readだから承認不要」という判断を独自にしない)。
       requiresApproval: policy.requiresApproval,
+
+      // Architecture Migration ARCH-P1b: readはApprovalを一切経由
+      // しない(絶対条件Correction2)ためriskClassSnapshotが実際に
+      // 使われることはないが、writeと同じ形で一貫して運んでおく。
+      riskClass: policy.riskClass,
 
       action: {
 

@@ -8,6 +8,11 @@ import {
   updateTaskStatus,
 } from "./store";
 import type { Approval, ActorReference, WorkStatus } from "./types";
+import {
+  canonicalizeApprovalSubject,
+  hashApprovalSubject,
+  type ApprovalSubject,
+} from "./approvalIntegrity";
 
 // =========================
 // TACT Work — Approval Execution Boundary (Architecture Migration
@@ -69,6 +74,21 @@ export interface ApprovalRequest {
 
   metadata?: Record<string, unknown>;
 
+  // Architecture Migration ARCH-P1b: 呼び出し元(core/tact-work/
+  // execution.ts)が、既にcanonical integration action(service/
+  // operation/input/connectionId)を持っている時点で
+  // core/tact-work/approvalIntegrity.tsのbuildApprovalSubject()を使い
+  // 組み立て済みのApproval Subject v1。このfile自身はSlack/Composio/
+  // Integration固有のaction formatを一切知らない——既に構築済みの
+  // 汎用ApprovalSubject型を受け取り、canonicalize+hashするだけ
+  // (絶対条件、Approval layerがProvider固有formatを知らない設計を
+  // 維持する)。省略時(Integration以外の将来Capability等、または
+  // subject構築自体に失敗したTask)は、この承認にsubject evidenceを
+  // 一切保存しない(fail closedはbuildApprovalSubject()呼び出し元
+  // (execution.ts)の責務——この関数はsubjectが無いことをエラーとは
+  // 扱わない、後方互換のため)。
+  subject?: ApprovalSubject;
+
 }
 
 export interface ApprovalExecutionDeps {
@@ -120,6 +140,41 @@ function toApprovalPayload(request: ApprovalRequest): Record<string, unknown> {
 // createApproval()がundefinedを返した場合(Work所有権が無い= 他user
 // のWork等)は、Approvalを一切作らず、Workのstatusも変更しない
 // (絶対条件: 存在しない/所有権の無いWorkに対して何もしない)。
+// Architecture Migration ARCH-P1b: request.subject(既に検証済みの
+// ApprovalSubject、buildApprovalSubject()がJSON-safety検証済み)を、
+// tact_approvals.subject_*列(core/tact-work/store.tsのCreateApprovalParams)
+// へ渡すための最小限のfield集合へ変換する。canonicalize/hash自体は
+// 決定論的なpure変換であり、ここで新たに失敗しうる検証は無い
+// (subjectが有効なApprovalSubjectであることは呼び出し元の責務、
+// buildApprovalSubject()が既に保証済み)。
+function toSubjectStorageFields(subject: ApprovalSubject | undefined): {
+  subjectVersion?: number | null;
+  subjectJson?: Record<string, unknown> | null;
+  subjectHash?: string | null;
+  subjectCapturedAt?: string | null;
+} {
+
+  if (!subject) {
+    return {};
+  }
+
+  const canonicalJson = canonicalizeApprovalSubject(subject);
+
+  return {
+    subjectVersion: subject.subjectVersion,
+    subjectJson: subject as unknown as Record<string, unknown>,
+    subjectHash: hashApprovalSubject(canonicalJson),
+    // subject_captured_atはDB defaultを持たない(supabase/migrations/
+    // 20260909000000_add_tact_approvals_integrity_fields.sql参照、
+    // 将来の非同期capture等に備えてapp側で明示的に設定する設計)。
+    // P1b時点ではApproval作成と同じタイミングでしか captureしない
+    // ため、この時刻は実質requested_at(DB default now())とほぼ
+    // 一致する。
+    subjectCapturedAt: new Date().toISOString(),
+  };
+
+}
+
 export async function requestApproval(
   request: ApprovalRequest,
   userId: string,
@@ -139,6 +194,7 @@ export async function requestApproval(
       requestedFromActorId: request.requestedFromActor.id,
       reason: request.reason,
       payload: toApprovalPayload(request),
+      ...toSubjectStorageFields(request.subject),
     }
   );
 

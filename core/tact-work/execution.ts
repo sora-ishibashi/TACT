@@ -19,6 +19,7 @@ import {
 import { requestApproval as defaultRequestApproval } from "./approval";
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "./completion";
 import type { Work } from "./types";
+import { buildApprovalSubject, type ApprovalSubject } from "./approvalIntegrity";
 
 // =========================
 // TACT Work — Work Execution Boundary (Architecture Migration Phase B2)
@@ -257,7 +258,31 @@ export async function runWorkTurn(
     workTaskId: string;
     capability?: string;
     requirement: TaskApprovalRequirement;
+    // Architecture Migration ARCH-P1b: この時点で既にbuildApprovalSubject()
+    // を通過済みのApproval Subject v1。承認presentation用のrequirement
+    // (summary等)とは別に、machine-verifiable canonical action
+    // semanticsを保持する(docs/architecture/approval-integrity.md参照)。
+    //
+    // 絶対条件(Step8、Legacy/非Integration Approval): この配列は
+    // Integration write以外の汎用Approval機構(Phase B3由来、下記の
+    // summary.approvalRequirement分岐)にも引き続き使われる。汎用
+    // TaskApprovalRequirement.action(kind/summary/metadataのみの
+    // 開かれた形)にはIntegration canonical action(service/operation/
+    // input/connectionId)が存在しない場合があるため、subjectを
+    // 無理に構築できない——今回はprotected integration actionのみを
+    // capture対象とし、それ以外はsubject: undefinedのまま
+    // (=Approval Subject evidenceを保存しない)とする(将来の
+    // generic Approval Integrity拡張ポイントを壊さない、Step8絶対条件)。
+    subject?: ApprovalSubject;
   }[] = [];
+
+  // Architecture Migration ARCH-P1b: Approval Subject自体の構築
+  // (canonicalize検証)に失敗したWorkTaskのポインタを集める
+  // (絶対条件、Step7: fail closed——subject無しでApprovalを作って
+  // 続行しない)。integrationConnectionIssuesと同じ「実行に必要な
+  // 前提条件が満たせなかった」という扱いにする(新しいWork/Task
+  // statusを追加しない、既存waiting_for_inputパターンを再利用する)。
+  const subjectBuildFailures: { workTaskId: string }[] = [];
 
   // Architecture Migration Phase C2.1b-fix2: Integration Taskで
   // Connection解決がnone/multipleだった場合の記録。onTaskFinished()
@@ -417,15 +442,30 @@ export async function runWorkTurn(
       if (summary.integrationRequirement) {
 
         const metadata = summary.integrationRequirement.action.metadata as
-          | { service?: unknown }
+          | { service?: unknown; operation?: unknown; input?: unknown }
           | undefined;
 
         const service = typeof metadata?.service === "string" ? metadata.service : undefined;
 
-        if (!service) {
+        // Architecture Migration ARCH-P1b: Approval Subject構築
+        // (buildApprovalSubject())にはservice単体だけでなく
+        // operation/inputも必要なため、ここで同時に抽出する
+        // (service単独チェックだった既存の防御的fallbackを拡張する
+        // だけで、requiresApproval===falseのread pathの挙動は
+        // 変えない——operation/input欠落は通常到達しない
+        // ——Integration Capabilityは必ずmetadata.{service,operation,
+        // input}を設定する)。
+        const operation = typeof metadata?.operation === "string" ? metadata.operation : undefined;
+        const input =
+          metadata && typeof metadata.input === "object" && metadata.input !== null
+            ? (metadata.input as Record<string, unknown>)
+            : undefined;
 
-          // service自体を特定できない防御的fallback(通常到達しない
-          // ——Integration Capabilityは必ずmetadata.serviceを設定する)。
+        if (!service || !operation || !input) {
+
+          // service/operation/input自体を特定できない防御的fallback
+          // (通常到達しない——Integration Capabilityは必ず
+          // metadata.{service,operation,input}を設定する)。
           // Approvalを作らずTaskはpendingのまま据え置く安全側にとどめる。
           return;
 
@@ -463,6 +503,45 @@ export async function runWorkTurn(
 
         if (summary.integrationRequirement.requiresApproval) {
 
+          // Architecture Migration ARCH-P1b: Approval作成前に、この
+          // 時点で確定しているcanonical integration action(service/
+          // operation/input/connectionId)から、machine-verifiableな
+          // Approval Subject v1を構築する。human-visible summary
+          // (resolvedAction.summary)と全く同じresolvedActionオブジェクト
+          // (=同じCapability呼び出しが同時に生成した値)からderiveする
+          // ため、別sourceからの再構築は発生しない(絶対条件、
+          // docs/architecture/approval-integrity.md Step5)。
+          const subjectResult = buildApprovalSubject({
+            workId: work.id,
+            taskId: workTaskId,
+            service,
+            operation,
+            input,
+            connectionId: connectionResolution.connectionId,
+            riskClassSnapshot: summary.integrationRequirement.riskClass ?? null,
+          });
+
+          if (!subjectResult.ok) {
+
+            // 絶対条件(Step7、fail closed): Integrity evidenceを
+            // 生成できないprotected actionは、subject無しでApprovalを
+            // 作って続行しない——Approval自体を一切作らず(provider
+            // callはもちろん0)、Taskはpendingのまま据え置く。raw
+            // canonical payload/secretはログへ出さない(reasonという
+            // 短い分類ラベルだけを記録する、既存のconsole.warn
+            // best-effortログパターンを踏襲)。
+            console.warn(
+              "[tact-work/execution] buildApprovalSubject() failed for a protected action; " +
+              "Approvalを作らず安全に停止する(Task/Workは変更しない)。",
+              subjectResult.reason
+            );
+
+            subjectBuildFailures.push({ workTaskId });
+
+            return;
+
+          }
+
           approvalRequirements.push({
             workTaskId,
             capability: summary.capability,
@@ -470,6 +549,7 @@ export async function runWorkTurn(
               reason: summary.integrationRequirement.reason ?? resolvedAction.summary,
               action: resolvedAction,
             },
+            subject: subjectResult.subject,
           });
 
         } else {
@@ -511,6 +591,15 @@ export async function runWorkTurn(
       // Capabilityが汎用Approval機構(Phase B3由来)を使う場合のためだけに
       // 残す(tests/tact/work/execution.test.tsのkind="external_write_test"
       // 参照、既存の非Integration用途を壊さない)。
+      //
+      // Architecture Migration ARCH-P1b(Step8): この汎用pathは
+      // canonical integration action(service/operation/input)を
+      // 持たないため、subjectを構築しない(subject: undefinedのまま
+      // ——このApprovalにはSubject evidenceが保存されない)。P1bは
+      // protected integration actionのみをcapture対象とする、という
+      // 明示的なscope限定(将来generic化する場合は、汎用
+      // TaskApprovalAction自体にcanonical action semanticsを表現できる
+      // 形が必要になる——今回は行わない)。
       if (summary.approvalRequirement) {
 
         approvalRequirements.push({
@@ -564,7 +653,7 @@ export async function runWorkTurn(
     // いずれの判定よりも先にWorkをwaiting_for_approvalへ進める)。
     // requestApproval()自体がWork→waiting_for_approvalへの遷移を
     // 行う(1件ごとに呼んでも冪等——同じstatusへ複数回更新するだけ)。
-    for (const { workTaskId, capability, requirement } of approvalRequirements) {
+    for (const { workTaskId, capability, requirement, subject } of approvalRequirements) {
 
       const approval = await deps.requestApproval(
         {
@@ -581,6 +670,9 @@ export async function runWorkTurn(
           requestedFromActor: { kind: "user", id: userId },
           reason: requirement.reason,
           action: requirement.action,
+          // Architecture Migration ARCH-P1b: onTaskFinished()時点で
+          // 既に構築・検証済みのApproval Subject v1をそのまま渡す。
+          subject,
         },
         userId,
         accessToken
@@ -661,7 +753,7 @@ export async function runWorkTurn(
     // requestApproval()が既にWork→waiting_for_approvalへの遷移を
     // 行っているため、ここでは何もしない。
 
-  } else if (result.clarification || integrationConnectionIssues.length > 0) {
+  } else if (result.clarification || integrationConnectionIssues.length > 0 || subjectBuildFailures.length > 0) {
 
     // Phase B2 Section11/12: Clarificationが必要な場合、Workは
     // "waiting_for_input"のまま(または遷移する)。ユーザーが回答すると
@@ -677,6 +769,12 @@ export async function runWorkTurn(
     // 前提条件(Connection)が満たされていない」という別種のruntime
     // required inputであり、既存Clarification answer resendロジックを
     // 誤って作動させないため。Work statusの値自体だけを共有する。
+    //
+    // Architecture Migration ARCH-P1b: Approval Subject構築失敗
+    // (subjectBuildFailures)も同じ扱いにする——新しいWork/Task status
+    // を追加せず、既存のruntime required inputパターンをそのまま
+    // 再利用する。raw canonical payload/secretはuser向けmessageへ
+    // 一切出さない(固定文言のみ)。
     if (integrationConnectionIssues.length > 0 && !result.clarification) {
 
       const issue = integrationConnectionIssues[0];
@@ -687,6 +785,13 @@ export async function runWorkTurn(
           issue.status === "none"
             ? `${issue.service}連携が見つかりません。先に連携を行ってください。`
             : `${issue.service}連携が複数見つかりました。現在、複数連携からの選択には対応していません。`,
+      };
+
+    } else if (subjectBuildFailures.length > 0 && !result.clarification) {
+
+      result = {
+        ...result,
+        answer: "この操作の実行内容を確認できませんでした。もう一度お試しください。",
       };
 
     }

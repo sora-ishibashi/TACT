@@ -252,6 +252,15 @@ export interface TaskApprovalRequirement {
 // 再利用する(新しいaction表現を増やさない、絶対条件Correction2)。
 // requiresApproval===trueの場合のみreasonが意味を持つ(Approval作成
 // 時にそのままreasonとして使われる)。
+
+// Architecture Migration ARCH-P1b: core/tact-integration/policy.tsの
+// IntegrationRiskClassと同じ3値。core/tact-work/execution.tsが
+// core/tact-integration/を一切importできない(逆方向依存を作らない、
+// 既存絶対条件)ため、値のunionとして独立に再宣言する——
+// core/tact-work/execution.tsのExecuteReadIntegrationActionOutcomeが
+// 既に使っている「値だけを再宣言する」既存パターンと同じ。
+export type TaskIntegrationRiskClassSnapshot = "read" | "write" | "destructive";
+
 export interface TaskIntegrationRequirement {
 
   requiresApproval: boolean;
@@ -259,5 +268,14 @@ export interface TaskIntegrationRequirement {
   reason?: string;
 
   action: TaskApprovalAction;
+
+  // Architecture Migration ARCH-P1b: このrequirementを判定した時点の
+  // canonical risk classification(core/tact-integration/policy.tsの
+  // resolveIntegrationActionPolicy()が返したriskClassをそのまま運ぶ)。
+  // Approval Subject(core/tact-work/approvalIntegrity.ts)の
+  // riskClassSnapshotへ渡すためだけの値であり、Policy全体を
+  // version-bindするものではない(execution時は引き続き既存Policyを
+  // 再評価する、docs/architecture/approval-integrity.md参照)。
+  riskClass?: TaskIntegrationRiskClassSnapshot;
 
 }

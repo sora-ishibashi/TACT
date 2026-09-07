@@ -63,7 +63,7 @@ function makeRecordingDeps(
     failRunCalls: { runId: string; error: string }[];
     updateTaskStatusCalls: { taskId: string; status: string }[];
     resolveIntegrationConnectionCalls: { service: string; userId: string }[];
-    requestApprovalCalls: { workId: string; taskId?: string | null; reason: string; action?: unknown }[];
+    requestApprovalCalls: { workId: string; taskId?: string | null; reason: string; action?: unknown; subject?: unknown }[];
     executeReadIntegrationActionCalls: { taskId: string; connectionId: string; action: unknown }[];
   } = {
     workStatusUpdates: [],
@@ -141,7 +141,7 @@ function makeRecordingDeps(
     runOrchestration,
 
     requestApproval: async (request) => {
-      calls.requestApprovalCalls.push({ workId: request.workId, taskId: request.taskId, reason: request.reason, action: request.action });
+      calls.requestApprovalCalls.push({ workId: request.workId, taskId: request.taskId, reason: request.reason, action: request.action, subject: request.subject });
       calls.workStatusUpdates.push("waiting_for_approval");
       return {
         id: `approval-db-${calls.requestApprovalCalls.length}`,
@@ -756,6 +756,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           integrationRequirement: {
             requiresApproval: true,
             reason: "外部SaaS(Slack)への投稿には承認が必要です",
+            // Architecture Migration ARCH-P1b: policyがrequirement判定
+            // 時点で確定したcanonical risk classificationをそのまま運ぶ
+            // (Approval Subject.riskClassSnapshotの唯一のsource)。
+            riskClass: "write",
             action: {
               kind: "integration_action",
               summary: "Slack「tact」チャンネルへメッセージを送信します",
@@ -776,6 +780,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         integrationRequirement: {
           requiresApproval: true,
           reason: "外部SaaS(Slack)への投稿には承認が必要です",
+          riskClass: "write",
           action: {
             kind: "integration_action",
             summary: "Slack「tact」チャンネルへメッセージを送信します",
@@ -880,6 +885,181 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         result.tasks.length === 1
       )
     );
+
+    // ---- Architecture Migration ARCH-P1b: Approval Subject v1が
+    // 正しく構築され、requestApproval()へ渡っていることを確認する ----
+    const subject = calls.requestApprovalCalls[0]?.subject as
+      | {
+          subjectVersion?: number;
+          workId?: string;
+          taskId?: string | null;
+          service?: string;
+          operation?: string;
+          canonicalInput?: unknown;
+          connectionId?: string | null;
+          riskClassSnapshot?: string | null;
+        }
+      | undefined;
+
+    results.push(
+      check(
+        "[ARCH-P1b] subjectVersion=1が設定される",
+        subject?.subjectVersion === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b] subject.workIdはrunWorkTurn()へ渡されたWork.idそのもの",
+        subject?.workId === "work-1"
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b] subject.taskIdは、このApprovalが紐づくWorkTaskのid(requestApprovalCalls[0].taskIdと一致、Task-bound)",
+        subject?.taskId === calls.requestApprovalCalls[0]?.taskId
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b] subject.service/operationはcanonical integration actionのservice/operationそのもの",
+        subject?.service === "slack" && subject?.operation === "send_message"
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b] subject.canonicalInputはcanonical action.metadata.inputと完全一致する",
+        JSON.stringify(subject?.canonicalInput) === JSON.stringify({ channel: "tact", text: "明日の会議は10時です" })
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b] subject.connectionIdはConnection解決後のconnectionId('conn-1')そのもの",
+        subject?.connectionId === "conn-1"
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b] subject.riskClassSnapshotは、integrationRequirement判定時点のcanonical risk class('write')",
+        subject?.riskClassSnapshot === "write"
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b/Step5] human-visible summary(capturedAction.summary)とmachine-bound subject(canonicalInput)が、同じcanonical action objectから派生している(別sourceからの再構築ではない)——具体的には、subject.serviceとcapturedAction.metadata.serviceが一致し、subject.canonicalInputとcapturedAction.metadata.inputが一致する",
+        subject?.service === capturedAction?.metadata?.service &&
+          subject?.connectionId === capturedAction?.metadata?.connectionId &&
+          JSON.stringify(subject?.canonicalInput) === JSON.stringify(capturedAction?.metadata?.input)
+      )
+    );
+  }
+
+  // ---- Architecture Migration ARCH-P1b: Approval Subject構築自体に
+  // 失敗した場合(canonicalInputにJSON-unsafeな値が混入)、fail
+  // closedで安全に停止する(Approval 0・provider到達0・
+  // waiting_for_input)ことを確認する ----
+  {
+
+    const task = makeTask({ id: "task-subject-fail-1", description: "Slack「tact」チャンネルへ送信する(壊れたinput)", assignedCapability: "integration.slack.send_message" });
+
+    const brokenOrchestration = async (
+      _request: OrchestrationRequest,
+      hooks?: OrchestrationHooks
+    ): Promise<OrchestrationResult> => {
+
+      await hooks?.onTasksPlanned?.([task]);
+
+      const summary = makeSummary({
+        taskId: task.id,
+        status: "completed",
+        output: "準備ができました。承認をお願いします。",
+        integrationRequirement: {
+          requiresApproval: true,
+          reason: "外部SaaS(Slack)への投稿には承認が必要です",
+          riskClass: "write",
+          action: {
+            kind: "integration_action",
+            summary: "Slack「tact」チャンネルへメッセージを送信します",
+            metadata: {
+              service: "slack",
+              operation: "send_message",
+              // 絶対条件(Step7、fail closed)を検証するため、意図的に
+              // JSON-safeでない値(function)を混入させる
+              // (canonicalizeJsonValue()がunsupported_typeとして
+              // 拒否する対象)。
+              input: { channel: "tact", handler: () => {} },
+            },
+          },
+        },
+      });
+
+      await hooks?.onTaskFinished?.(task, summary);
+
+      return {
+        answer: "準備ができました。承認をお願いします。",
+        executionId: "exec-subject-fail",
+        tasks: [summary],
+        memoryUsed: [],
+        toolsUsed: [],
+        memoryWrites: [],
+        learningSignals: [],
+        metadata: { executionMode: "single-execution" },
+      };
+
+    };
+
+    const { deps, calls } = makeRecordingDeps(brokenOrchestration, {
+      resolveIntegrationConnection: async () => ({ status: "single", connectionId: "conn-broken" }),
+    });
+
+    const result = await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b/fail closed] Approval Subject構築に失敗した場合、Approvalは一切作られない(requestApprovalCalls===0)",
+        calls.requestApprovalCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b/fail closed] provider実行境界(executeApprovedIntegrationAction)へは構造的に到達しない——Approvalが無いため実行のトリガー自体が存在しない(Run作成0はcalls.createRunCallsが空であることで確認できる)",
+        calls.createRunCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b/fail closed] Taskはpendingのまま据え置かれる(updateTaskStatus()が一切呼ばれない)",
+        calls.updateTaskStatusCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b/fail closed] Workはwaiting_for_inputへ進む(waiting_for_approvalへは進まない、completedにもならない)",
+        calls.workStatusUpdates[calls.workStatusUpdates.length - 1] === "waiting_for_input" &&
+          !calls.workStatusUpdates.includes("waiting_for_approval") &&
+          !calls.workStatusUpdates.includes("completed")
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b/fail closed] user向けmessageは固定文言のみで、raw canonical payload/functionの中身等を一切含まない",
+        result.answer === "この操作の実行内容を確認できませんでした。もう一度お試しください。"
+      )
+    );
+
   }
 
   // ---- Case1(C2.1b-fix): Connection 0件 -> Approvalを作らず、

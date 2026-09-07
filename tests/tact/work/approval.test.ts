@@ -24,6 +24,13 @@ import {
   type ApprovalRequest,
 } from "../../../core/tact-work/approval";
 import type { Approval, ApprovalStatus, Work, WorkStatus } from "../../../core/tact-work/types";
+import type { CreateApprovalParams } from "../../../core/tact-work/store";
+import {
+  buildApprovalSubject,
+  verifyApprovalIntegrity,
+  APPROVAL_SUBJECT_VERSION,
+  type ApprovalSubject,
+} from "../../../core/tact-work/approvalIntegrity";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeWork(overrides: Partial<Work> = {}): Work {
@@ -604,6 +611,188 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[9] rejected済みの再rejectはalready_resolvedを返す(terminal stateからの不正遷移を拒否しつつ、正常なdouble-click再送は安全)",
         secondReject.status === "already_resolved"
+      )
+    );
+  }
+
+  // =========================
+  // Architecture Migration ARCH-P1b: Approval Subject capture
+  // =========================
+  //
+  // requestApproval()にrequest.subjectを渡した場合、
+  // core/tact-work/store.tsのcreateApproval()へ渡るparamsに
+  // subject_version/subject_json/subject_hash/subject_captured_at
+  // 相当の値(CreateApprovalParams.subjectVersion等)が正しく設定
+  // されることを、実createApproval()を呼ばず、paramsをcaptureする
+  // 薄いwrapper depsで確認する(makeFakeBackend()の既存deps自体は
+  // 変更せず、createApprovalだけを透過的にwrapする)。
+
+  function makeSubjectFixture(overrides: Partial<ApprovalSubject> = {}): ApprovalSubject {
+    const result = buildApprovalSubject({
+      workId: "work-1",
+      taskId: "task-1",
+      service: "slack",
+      operation: "send_message",
+      input: { channel: "tact", text: "明日の会議は10時です" },
+      connectionId: "conn-1",
+      riskClassSnapshot: "write",
+    });
+    if (!result.ok) {
+      throw new Error("test fixture itself must be buildable");
+    }
+    return { ...result.subject, ...overrides };
+  }
+
+  // ---- ARCH-P1b-1: subjectを渡すとcreateApproval()へsubject_*が正しく渡る ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const capturedParams: CreateApprovalParams[] = [];
+    const originalCreateApproval = backend.deps.createApproval;
+
+    const deps: ApprovalExecutionDeps = {
+      ...backend.deps,
+      createApproval: async (workId, userId, accessToken, params) => {
+        capturedParams.push(params);
+        return originalCreateApproval(workId, userId, accessToken, params);
+      },
+    };
+
+    const subject = makeSubjectFixture();
+
+    await requestApproval(makeRequest({ subject }), "user-1", "fake-token", deps);
+
+    const params = capturedParams[0];
+
+    results.push(
+      check(
+        "[ARCH-P1b-1] subjectVersion(DB列)がAPPROVAL_SUBJECT_VERSIONと一致する",
+        params?.subjectVersion === APPROVAL_SUBJECT_VERSION
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b-1] subjectJsonがsubject本体をそのまま保持する(canonical serialization文字列そのものではなくstructured JSON)",
+        typeof params?.subjectJson === "object" &&
+          params?.subjectJson !== null &&
+          !Array.isArray(params.subjectJson) &&
+          (params.subjectJson as Record<string, unknown>).service === "slack"
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b-1] subjectHashは64文字の小文字16進文字列(SHA-256 hex digest)",
+        typeof params?.subjectHash === "string" && /^[0-9a-f]{64}$/.test(params.subjectHash)
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b-1] subjectCapturedAtはISO 8601形式のtimestampとして設定される(capture時点のserver timestamp)",
+        typeof params?.subjectCapturedAt === "string" && !Number.isNaN(Date.parse(params.subjectCapturedAt))
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b-1] DBのsubject_version列は、subject_json内部のsubjectVersionと一致する(single source of truthの一致確認)",
+        params?.subjectVersion === (params?.subjectJson as { subjectVersion?: number } | undefined)?.subjectVersion
+      )
+    );
+  }
+
+  // ---- ARCH-P1b-2: hash決定論性(同じsubjectを2回渡すと同じhashになる) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const capturedParams: CreateApprovalParams[] = [];
+    const originalCreateApproval = backend.deps.createApproval;
+
+    const deps: ApprovalExecutionDeps = {
+      ...backend.deps,
+      createApproval: async (workId, userId, accessToken, params) => {
+        capturedParams.push(params);
+        return originalCreateApproval(workId, userId, accessToken, params);
+      },
+    };
+
+    await requestApproval(makeRequest({ subject: makeSubjectFixture() }), "user-1", "fake-token", deps);
+    await requestApproval(makeRequest({ subject: makeSubjectFixture() }), "user-1", "fake-token", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1b-2] 同一内容のsubjectを2回渡しても、同じsubjectHashが生成される(deterministic)",
+        capturedParams.length === 2 && capturedParams[0].subjectHash === capturedParams[1].subjectHash
+      )
+    );
+  }
+
+  // ---- ARCH-P1b-3: 往復確認 — capture済みのsubject_json/hash/versionを
+  // 「stored」として渡すと、元のsubjectに対してverifyApprovalIntegrity()
+  // がmatchを返す(capture pipeline全体の正しさをend-to-endで確認) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const capturedParams: CreateApprovalParams[] = [];
+    const originalCreateApproval = backend.deps.createApproval;
+
+    const deps: ApprovalExecutionDeps = {
+      ...backend.deps,
+      createApproval: async (workId, userId, accessToken, params) => {
+        capturedParams.push(params);
+        return originalCreateApproval(workId, userId, accessToken, params);
+      },
+    };
+
+    const originalSubject = makeSubjectFixture();
+
+    await requestApproval(makeRequest({ subject: originalSubject }), "user-1", "fake-token", deps);
+
+    const params = capturedParams[0];
+
+    const verifyResult = verifyApprovalIntegrity(
+      {
+        version: params.subjectVersion ?? null,
+        json: params.subjectJson ?? null,
+        hash: params.subjectHash ?? null,
+      },
+      originalSubject
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1b-3] capture済みのsubject_version/subject_json/subject_hashを再度渡すと、元のsubjectとmatchする(capture pipeline全体のround-trip正しさ)",
+        verifyResult.result === "match"
+      )
+    );
+  }
+
+  // ---- ARCH-P1b-4: subjectを渡さない場合、既存の後方互換動作を維持する ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const capturedParams: CreateApprovalParams[] = [];
+    const originalCreateApproval = backend.deps.createApproval;
+
+    const deps: ApprovalExecutionDeps = {
+      ...backend.deps,
+      createApproval: async (workId, userId, accessToken, params) => {
+        capturedParams.push(params);
+        return originalCreateApproval(workId, userId, accessToken, params);
+      },
+    };
+
+    // 既存の呼び出し方(subjectフィールドを一切指定しない、既存の
+    // 全requestApproval()呼び出し元と同じ形)。
+    await requestApproval(makeRequest(), "user-1", "fake-token", deps);
+
+    const params = capturedParams[0];
+
+    results.push(
+      check(
+        "[ARCH-P1b-4] subjectを渡さない場合、subject_version/subject_json/subject_hash/subject_captured_atはいずれも設定されない(undefinedのまま、既存呼び出し元の動作を一切変えない)",
+        params?.subjectVersion === undefined &&
+          params?.subjectJson === undefined &&
+          params?.subjectHash === undefined &&
+          params?.subjectCapturedAt === undefined
       )
     );
   }

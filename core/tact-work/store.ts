@@ -856,6 +856,13 @@ export interface CreateApprovalParams {
   reason: string;
   payload: Record<string, unknown>;
   expiresAt?: string | null;
+  // Architecture Migration ARCH-P1b。省略時(Integration以外の将来
+  // Capability、またはsubject capture自体が未対応の呼び出し元)は
+  // 4列ともNULLのまま挿入される(ARCH-P1a時点の既存rowと同じ形)。
+  subjectVersion?: number | null;
+  subjectJson?: Record<string, unknown> | null;
+  subjectHash?: string | null;
+  subjectCapturedAt?: string | null;
 }
 
 export async function createApproval(
@@ -886,6 +893,13 @@ export async function createApproval(
       reason: params.reason,
       payload: params.payload,
       expires_at: params.expiresAt ?? null,
+      // Architecture Migration ARCH-P1b。paramsに含まれない場合は
+      // undefined ?? nullでNULLのまま挿入される(ARCH-P1a時点の既存
+      // rowと同じ形、backward compatible)。
+      subject_version: params.subjectVersion ?? null,
+      subject_json: params.subjectJson ?? null,
+      subject_hash: params.subjectHash ?? null,
+      subject_captured_at: params.subjectCapturedAt ?? null,
     })
     .select(APPROVAL_COLUMNS)
     .single();
