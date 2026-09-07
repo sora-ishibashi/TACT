@@ -13,6 +13,7 @@
     "@anthropic-ai/sdk": "^0.120.0",
     "@composio/core": "^0.18.1",
     "@octokit/rest": "^22.0.1",
+    "@slack/web-api": "^8.1.1",
     "@supabase/supabase-js": "^2.110.7",
     "@tavily/core": "^0.7.6",
     "dotenv": "^17.4.2",

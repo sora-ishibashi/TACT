@@ -124,6 +124,9 @@ import { run as runBotSlackWebhookHandler } from "./bot/slackWebhookHandler.test
 import { run as runBotSlackWebhookRoute } from "./bot/slackWebhookRoute.test";
 import { run as runBotSlackProductionBotCore } from "./bot/slackProductionBotCore.test";
 import { run as runBotSlackResearchRouting } from "./bot/slackBotResearchRouting.test";
+import { run as runBotSlackSplitMessageText } from "./bot/slackSplitMessageText.test";
+import { run as runBotSlackChannelAdapter } from "./bot/slackChannelAdapter.test";
+import { run as runBotSlackOutboundEndToEnd } from "./bot/slackOutboundEndToEnd.test";
 import { run as runIntegrationMapping } from "./integration/mapping.test";
 import { run as runIntegrationComposioClient } from "./integration/composioClient.test";
 import { run as runIntegrationGateway } from "./integration/gateway.test";
@@ -232,6 +235,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "bot/slackWebhookRoute", run: runBotSlackWebhookRoute },
   { name: "bot/slackProductionBotCore", run: runBotSlackProductionBotCore },
   { name: "bot/slackBotResearchRouting", run: runBotSlackResearchRouting },
+  { name: "bot/slackSplitMessageText", run: runBotSlackSplitMessageText },
+  { name: "bot/slackChannelAdapter", run: runBotSlackChannelAdapter },
+  { name: "bot/slackOutboundEndToEnd", run: runBotSlackOutboundEndToEnd },
   { name: "integration/mapping", run: runIntegrationMapping },
   { name: "integration/composioClient", run: runIntegrationComposioClient },
   { name: "integration/gateway", run: runIntegrationGateway },

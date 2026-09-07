@@ -138,6 +138,10 @@ async function driveHandler(
     getSigningSecret: () => SIGNING_SECRET,
     claimExternalEvent: async () => claimResult,
     receiveBotMessage: receiveBotMessageDep,
+    // このtest fileはSlack outbound配送自体を対象としない
+    // (tests/tact/bot/slackOutbound*.test.tsが担う)ため、
+    // BotAction[]を受け取って空の配送結果を返すだけの最小fake。
+    executeBotActions: async () => [],
     scheduleBackgroundWork: (task) => {
       scheduledPromise = task();
     },

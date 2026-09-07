@@ -3,11 +3,14 @@ import {
   type BotGatewayDependencies,
   type ReceiveBotMessageResult,
 } from "../../gateway/receiveMessage";
+import { executeBotActions } from "../../gateway/executeBotActions";
 import { supabaseBotIdentityResolver } from "../../identity/supabaseIdentityResolver";
 import { createSupabaseConversationBotCoreConnector } from "../../connector/conversationConnector";
 import type { BotCoreConnector } from "../../connector/types";
 import type { BotIdentityResolver } from "../../identity/resolver";
-import type { BotIncomingMessage } from "../../types";
+import type { BotAction, BotActionDeliveryResult, BotIncomingMessage } from "../../types";
+import type { ChannelAdapterRegistry } from "../types";
+import { createSlackChannelAdapter } from "./slackChannelAdapter";
 
 // =========================
 // TACT Bot — Slack Production Bot Core Wiring (S1b)
@@ -73,5 +76,35 @@ export async function receiveSlackBotMessageAsTrustedActor(
     identityResolver: deps.identityResolver ?? defaultSlackTrustedBotCoreDeps.identityResolver,
     coreConnector: deps.coreConnector ?? defaultSlackTrustedBotCoreDeps.coreConnector,
   });
+
+}
+
+// =========================
+// Slack Outbound Wiring (S1c)
+// =========================
+//
+// 絶対条件(Section8): BotAction[]をSlackへ配送する経路は、既存
+// core/tact-bot/gateway/executeBotActions.ts(BotAction execution
+// gateway、BOT-P1確立済み)を必ず経由する——Slack webhook handlerから
+// 直接chat.postMessageを呼ばない。
+//
+// createSlackChannelAdapter()はstateを持たない(内部でSlack Web API
+// clientを遅延解決するだけの)factoryのため、slackTrustedBotCoreConnector
+// と同じ理由で1回だけ生成してキャッシュする。
+export const slackTrustedChannelAdapter = createSlackChannelAdapter();
+
+const defaultSlackChannelAdapterRegistry: ChannelAdapterRegistry = {
+  slack: slackTrustedChannelAdapter,
+};
+
+// core/tact-bot/gateway/executeBotActions.tsをSlack production wiringで
+// 呼ぶための薄いwrapper(receiveSlackBotMessageAsTrustedActor()と対に
+// なる、outbound側の入口)。
+export async function executeSlackBotActions(
+  actions: BotAction[],
+  adapters: ChannelAdapterRegistry = defaultSlackChannelAdapterRegistry
+): Promise<BotActionDeliveryResult[]> {
+
+  return executeBotActions(actions, adapters);
 
 }

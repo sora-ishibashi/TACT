@@ -113,6 +113,12 @@ function makeFakeDeps(options: {
       return { handled: true, actions: [] };
     },
 
+    // S1c: このtest fileはreceiveBotMessage/dedup/署名検証の分岐のみを
+    // 対象とするため、executeBotActionsは呼び出しを記録するだけの
+    // 最小fakeにとどめる(常にactions:[]のため実際には呼ばれない想定、
+    // outbound配送の詳細はtests/tact/bot/slackOutbound*.test.tsが担う)。
+    executeBotActions: async () => [],
+
     // 絶対条件(Section20)を検証しやすくするため、production既定の
     // after()とは異なり、taskをcaptureするだけで自動実行はしない
     // (呼び出し元testが明示的にtask()を呼んで初めてreceiveBotMessage

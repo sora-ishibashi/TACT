@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import type { ReceiveBotMessageResult } from "../../gateway/receiveMessage";
-import type { BotIncomingMessage } from "../../types";
-import { receiveSlackBotMessageAsTrustedActor } from "./productionBotCore";
+import type { BotAction, BotActionDeliveryResult, BotIncomingMessage } from "../../types";
+import { receiveSlackBotMessageAsTrustedActor, executeSlackBotActions } from "./productionBotCore";
 import {
   claimExternalEvent as defaultClaimExternalEvent,
   type ClaimExternalEventResult,
@@ -67,6 +67,10 @@ export interface HandleSlackWebhookRequestDeps {
 
   receiveBotMessage: (message: BotIncomingMessage) => Promise<ReceiveBotMessageResult>;
 
+  // S1c: BotAction[]をSlackへ配送する(既存BotAction execution gateway
+  // 経由、絶対条件Section8)。
+  executeBotActions: (actions: BotAction[]) => Promise<BotActionDeliveryResult[]>;
+
   // 絶対条件(Section20): normal app_mentionはACKを先に返す。
   scheduleBackgroundWork: (task: () => Promise<void>) => void;
 
@@ -87,6 +91,10 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
   // する。receiveBotMessage()自身のglobal defaultは変更していない
   // (絶対条件Section3)。
   receiveBotMessage: receiveSlackBotMessageAsTrustedActor,
+
+  // S1c: ./productionBotCore.tsのexecuteSlackBotActions()(実
+  // core/tact-bot/gateway/executeBotActions.ts + SlackChannelAdapter)。
+  executeBotActions: executeSlackBotActions,
 
   scheduleBackgroundWork: (task) => {
     after(task);
@@ -210,9 +218,32 @@ export async function handleSlackWebhookRequest(
     return ackIgnored();
   }
 
-  // 絶対条件(Section20): receiveBotMessage()の完了を待たずにACKを返す。
+  // 絶対条件(Section19/20): Research/Conversation/Slack outbound完了を
+  // 待たずにACKを返す。background pipelineはTrusted Bot Message受信
+  // →BotAction[]取得→Slack outbound配送(executeBotActions()、既存
+  // BotAction execution gateway経由)まで一気通貫で行う。
+  //
+  // 絶対条件(Section20/21、known debt解消): background callback自体を
+  // try/catchで包み、Research/Conversation/Work/Slack outboundの
+  // いずれで例外が発生してもunhandled rejectionとして外部へ漏らさない
+  // (Next.js after()自体のtask rejection semanticsがdocument/型定義
+  // からは確認できなかったため、こちら側のcallbackで確実に捕捉する)。
+  // secret/raw Slack payload/provider error detail/user message全文は
+  // ログに出さない、固定文言だけを記録する(過剰なerror infrastructure
+  // は作らない、絶対条件Section21)。
   deps.scheduleBackgroundWork(async () => {
-    await deps.receiveBotMessage(message);
+
+    try {
+
+      const result = await deps.receiveBotMessage(message);
+      await deps.executeBotActions(result.actions);
+
+    } catch {
+
+      console.error("[tact-bot] Slack bot background execution failed");
+
+    }
+
   });
 
   return { status: 200, body: { ok: true } };
