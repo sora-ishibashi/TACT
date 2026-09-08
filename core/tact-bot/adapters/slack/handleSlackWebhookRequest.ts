@@ -1,7 +1,12 @@
 import { after } from "next/server";
 import type { ReceiveBotMessageResult } from "../../gateway/receiveMessage";
-import type { BotAction, BotActionDeliveryResult, BotIncomingMessage } from "../../types";
-import { receiveSlackBotMessageAsTrustedActor, executeSlackBotActions } from "./productionBotCore";
+import type { BotAction, BotActionDeliveryResult, BotApprovalDecisionKind, BotIncomingMessage } from "../../types";
+import {
+  receiveSlackBotMessageAsTrustedActor,
+  receiveSlackBotApprovalDecisionAsTrustedActor,
+  executeSlackBotActions,
+  type ReceiveSlackBotApprovalDecisionResult,
+} from "./productionBotCore";
 import {
   claimExternalEvent as defaultClaimExternalEvent,
   type ClaimExternalEventResult,
@@ -13,6 +18,7 @@ import {
   isBotEchoEvent,
   normalizeSlackAppMentionEvent,
 } from "./normalizeSlackEvent";
+import { detectApprovalDecisionText as defaultDetectApprovalDecisionText } from "./detectApprovalDecisionText";
 import type { SlackAppMentionEvent, SlackEventCallbackEnvelope } from "./types";
 
 // =========================
@@ -67,6 +73,20 @@ export interface HandleSlackWebhookRequestDeps {
 
   receiveBotMessage: (message: BotIncomingMessage) => Promise<ReceiveBotMessageResult>;
 
+  // S1e: 決定論的なpure text判定(LLM不使用、絶対条件2/11)。
+  // normalizeSlackAppMentionEvent()が既にmention除去・trim済みの
+  // BotIncomingMessage.textを渡す。
+  detectApprovalDecisionText: typeof defaultDetectApprovalDecisionText;
+
+  // S1e: detectApprovalDecisionText()がmatchした場合にのみ呼ばれる、
+  // canonical receiveBotApprovalDecision()への専用入口(絶対条件7:
+  // approveApproval()/rejectApproval()/executeApprovedIntegrationAction()
+  // をこのfileから直接呼ばない)。
+  receiveApprovalDecision: (
+    message: BotIncomingMessage,
+    decisionKind: BotApprovalDecisionKind
+  ) => Promise<ReceiveSlackBotApprovalDecisionResult>;
+
   // S1c: BotAction[]をSlackへ配送する(既存BotAction execution gateway
   // 経由、絶対条件Section8)。
   executeBotActions: (actions: BotAction[]) => Promise<BotActionDeliveryResult[]>;
@@ -91,6 +111,12 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
   // する。receiveBotMessage()自身のglobal defaultは変更していない
   // (絶対条件Section3)。
   receiveBotMessage: receiveSlackBotMessageAsTrustedActor,
+
+  // S1e: ./detectApprovalDecisionText.tsのpure判定関数そのまま。
+  detectApprovalDecisionText: defaultDetectApprovalDecisionText,
+
+  // S1e: ./productionBotCore.tsのreceiveSlackBotApprovalDecisionAsTrustedActor()。
+  receiveApprovalDecision: receiveSlackBotApprovalDecisionAsTrustedActor,
 
   // S1c: ./productionBotCore.tsのexecuteSlackBotActions()(実
   // core/tact-bot/gateway/executeBotActions.ts + SlackChannelAdapter)。
@@ -235,7 +261,19 @@ export async function handleSlackWebhookRequest(
 
     try {
 
-      const result = await deps.receiveBotMessage(message);
+      // S1e(絶対条件Section2/3、最重要): normalized textが
+      // Approval decision(承認/却下)と決定論的に判定された場合、
+      // 通常のConversation/LLM経路(receiveBotMessage())へは絶対に
+      // 流さない——detectApprovalDecisionText()は純粋なtext判定
+      // だけを行い、識別・相関解決・実行判断のいずれも行わない
+      // (それらはreceiveApprovalDecision()側、さらにその内部の
+      // canonical receiveBotApprovalDecision()の責務)。
+      const decisionMatch = deps.detectApprovalDecisionText(message.text);
+
+      const result = decisionMatch.matched
+        ? await deps.receiveApprovalDecision(message, decisionMatch.decision)
+        : await deps.receiveBotMessage(message);
+
       await deps.executeBotActions(result.actions);
 
     } catch {

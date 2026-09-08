@@ -37,6 +37,16 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 //       そのものを一切扱わない——「Botがservice role JWTを使って
 //       ユーザー本人として認証されたように見せる」構造を避けるため、
 //       key読み出しをこの1関数だけに閉じ込める)。
+//   - core/tact-bot/execution/trustedApprovalDecision.ts
+//       (Architecture Migration Phase C2.1c-b/c、Approval decision
+//       (approve/reject)専用のTrusted Bot Execution Boundary。
+//       trustedConversationTurn.tsと同じ理由・同じ設計)。
+//   - core/tact-bot/execution/resolvePendingApprovalForThread.ts
+//       (Architecture Migration S1e、Slack thread → Conversation →
+//       Work → pending Approvalの相関解決専用のTrusted Bot Execution
+//       Boundary。tactUserIdはserver側で検証済みの値のみを受け取り、
+//       外部Channel user idは一切使わない、trustedConversationTurn.ts
+//       と同じ設計)。
 //
 // それ以外のCore module(core/tact-research・core/tact-orchestrator・
 // core/tact-core等)からは一切importしないこと。

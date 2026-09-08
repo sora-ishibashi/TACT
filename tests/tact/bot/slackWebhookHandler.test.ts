@@ -113,6 +113,13 @@ function makeFakeDeps(options: {
       return { handled: true, actions: [] };
     },
 
+    // S1e: このtest fileはApproval decision routing自体を対象としない
+    // ため、常にmatched:falseを返す最小fake(=既存receiveBotMessage
+    // pathがそのまま使われる、既存挙動を変えない)。
+    detectApprovalDecisionText: () => ({ matched: false }),
+
+    receiveApprovalDecision: async () => ({ handled: false, actions: [] }),
+
     // S1c: このtest fileはreceiveBotMessage/dedup/署名検証の分岐のみを
     // 対象とするため、executeBotActionsは呼び出しを記録するだけの
     // 最小fakeにとどめる(常にactions:[]のため実際には呼ばれない想定、

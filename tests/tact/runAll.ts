@@ -128,6 +128,9 @@ import { run as runBotSlackResearchRouting } from "./bot/slackBotResearchRouting
 import { run as runBotSlackSplitMessageText } from "./bot/slackSplitMessageText.test";
 import { run as runBotSlackChannelAdapter } from "./bot/slackChannelAdapter.test";
 import { run as runBotSlackOutboundEndToEnd } from "./bot/slackOutboundEndToEnd.test";
+import { run as runBotDetectApprovalDecisionText } from "./bot/detectApprovalDecisionText.test";
+import { run as runBotResolvePendingApprovalForThread } from "./bot/resolvePendingApprovalForThread.test";
+import { run as runBotSlackApprovalDecisionRouting } from "./bot/slackApprovalDecisionRouting.test";
 import { run as runIntegrationMapping } from "./integration/mapping.test";
 import { run as runIntegrationComposioClient } from "./integration/composioClient.test";
 import { run as runIntegrationGateway } from "./integration/gateway.test";
@@ -240,6 +243,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "bot/slackSplitMessageText", run: runBotSlackSplitMessageText },
   { name: "bot/slackChannelAdapter", run: runBotSlackChannelAdapter },
   { name: "bot/slackOutboundEndToEnd", run: runBotSlackOutboundEndToEnd },
+  { name: "bot/detectApprovalDecisionText", run: runBotDetectApprovalDecisionText },
+  { name: "bot/resolvePendingApprovalForThread", run: runBotResolvePendingApprovalForThread },
+  { name: "bot/slackApprovalDecisionRouting", run: runBotSlackApprovalDecisionRouting },
   { name: "integration/mapping", run: runIntegrationMapping },
   { name: "integration/composioClient", run: runIntegrationComposioClient },
   { name: "integration/gateway", run: runIntegrationGateway },

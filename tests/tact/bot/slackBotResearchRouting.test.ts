@@ -138,6 +138,12 @@ async function driveHandler(
     getSigningSecret: () => SIGNING_SECRET,
     claimExternalEvent: async () => claimResult,
     receiveBotMessage: receiveBotMessageDep,
+    // S1e: このtest fileはApproval decision routing自体を対象としない
+    // ため、常にmatched:falseを返す最小fake(既存receiveBotMessage
+    // pathがそのまま使われる、既存Research routing regressionを
+    // 変えない)。
+    detectApprovalDecisionText: () => ({ matched: false }),
+    receiveApprovalDecision: async () => ({ handled: false, actions: [] }),
     // このtest fileはSlack outbound配送自体を対象としない
     // (tests/tact/bot/slackOutbound*.test.tsが担う)ため、
     // BotAction[]を受け取って空の配送結果を返すだけの最小fake。

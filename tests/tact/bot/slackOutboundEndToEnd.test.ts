@@ -181,7 +181,10 @@ function makeRunTrustedTurnViaRealOrchestration(): (
 
 async function driveHandler(
   envelope: unknown,
-  deps: Omit<HandleSlackWebhookRequestDeps, "getSigningSecret" | "scheduleBackgroundWork" | "claimExternalEvent">,
+  deps: Omit<
+    HandleSlackWebhookRequestDeps,
+    "getSigningSecret" | "scheduleBackgroundWork" | "claimExternalEvent" | "detectApprovalDecisionText" | "receiveApprovalDecision"
+  >,
   claimResult: "claimed" | "duplicate" | "error" = "claimed"
 ): Promise<{ status: number; unhandledRejections: unknown[] }> {
 
@@ -202,6 +205,12 @@ async function driveHandler(
     const response = await handleSlackWebhookRequest(rawBody, headers, {
       getSigningSecret: () => SIGNING_SECRET,
       claimExternalEvent: async () => claimResult,
+      // S1e: このtest fileはSlack outbound配送のend-to-end検証が
+      // 目的であり、Approval decision routing自体は対象としない
+      // ため、常にmatched:falseを返す最小fake(既存receiveBotMessage
+      // pathがそのまま使われる、既存挙動を変えない)。
+      detectApprovalDecisionText: () => ({ matched: false }),
+      receiveApprovalDecision: async () => ({ handled: false, actions: [] }),
       ...deps,
       scheduleBackgroundWork: (task) => {
         scheduledPromise = task();
