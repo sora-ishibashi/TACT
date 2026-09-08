@@ -26,6 +26,14 @@
 
 import type { LLMCost } from "../llm/types";
 import type { CapabilityInvocationResult } from "../tact-orchestrator/types";
+// Fast Port P4a: AuditEvent.detailsのために、既存のJsonValue定義
+// (core/tact-work/approvalIntegrity.ts、ARCH-P1aで確立済み)を
+// そのまま再利用する(同一module内なので新しい定義を複製しない
+// ——cross-module境界(core/tact-work ↔ core/tact-integration)を
+// 越える再宣言パターンとは異なる、同一module内の通常のimport)。
+// approvalIntegrity.ts自身はこのfileを一切importしていないため、
+// 循環依存にはならない。
+import type { JsonValue } from "./approvalIntegrity";
 
 // =========================
 // Actor Reference (ARCH-R2 Section9)
@@ -470,6 +478,150 @@ export interface Clarification {
   respondedAt?: string | null;
 
   expiresAt?: string | null;
+
+  createdAt: string;
+
+}
+
+// =========================
+// AuditEvent (Fast Port P4a: Append-Only Audit Event Foundation)
+// =========================
+//
+// docs/architecture/p2-p5-final-architecture.md Section15-20で確定した
+// 設計をそのまま実装する。TACTには既にWork/Task/Run/Approval/
+// Clarificationという「現在状態を持つ」canonical entityがある——
+// このfileはそれとは独立した「何が・いつ・誰によって起きたか」を残す
+// append-only canonical evidenceを追加する(絶対条件3、Step5):
+//
+//   tact_runs.status = 'failed'        … current canonical state
+//   AuditEvent{eventType:'run.failed'} … 「failed eventが発生した」
+//                                          というfactの記録
+//
+// このtableからcurrent stateを再構築するEvent Sourcingは行わない
+// (TACTはEvent Sourced systemではない)。Auditは補助的canonical
+// evidenceであり、Authorization Layerでもない(絶対条件1)。
+//
+// Prior Art(ADAPT_AND_BORROW、source codeはコピーしない):
+//   - BoundFlow: audit_events table(tenant/workflow/request/
+//     event_type/actor/occurred_at/details jsonb)、current-state
+//     tableとは別のevent stream
+//   - AXME: monotonic sequence(seq)によるdeterministic ordering、
+//     lifecycle event representation
+//
+// P4a時点でこのtableへ実際にemitするproduction pathは存在しない
+// (event emission wiringはP4bのscope、絶対条件14)。
+
+// Fast Port P4a Step3: P2-P5 Final Architecture Synthesisで確定した
+// 「1 table + category(discriminating field)」方針(BoundFlow/Glean
+// の admin-config vs execution-activity という二軸を、物理テーブル
+// 分割ではなくこの1列で表現する)。P4a時点でproducerが無いカテゴリ
+// (例: runtime、P5 Runtime Adapterが実在するまで)を先回りして
+// 登録しない。
+export type AuditEventCategory =
+  | "work"
+  | "task"
+  | "policy"
+  | "human_interaction"
+  | "approval"
+  | "clarification"
+  | "execution"
+  | "provider";
+
+export const AUDIT_EVENT_CATEGORIES: readonly AuditEventCategory[] = [
+  "work",
+  "task",
+  "policy",
+  "human_interaction",
+  "approval",
+  "clarification",
+  "execution",
+  "provider",
+];
+
+// Fast Port P4a Step4: stable machine-readable値。P4a時点では誰も
+// このtableへemitしないため型としてのfoundationにとどめる
+// (過剰taxonomy回避——例えばruntime.dispatched/runtime.resumed等、
+// P5 Runtime Adapterが実在して初めて意味を持つ値は今回登録しない)。
+export type AuditEventType =
+  | "work.created"
+  | "task.created"
+  | "policy.evaluated"
+  | "approval.requested"
+  | "approval.approved"
+  | "approval.rejected"
+  | "clarification.requested"
+  | "clarification.answered"
+  | "run.created"
+  | "run.completed"
+  | "run.failed"
+  | "provider.called"
+  | "provider.completed"
+  | "provider.failed";
+
+export const AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
+  "work.created",
+  "task.created",
+  "policy.evaluated",
+  "approval.requested",
+  "approval.approved",
+  "approval.rejected",
+  "clarification.requested",
+  "clarification.answered",
+  "run.created",
+  "run.completed",
+  "run.failed",
+  "provider.called",
+  "provider.completed",
+  "provider.failed",
+];
+
+export interface AuditEvent {
+
+  id: string;
+
+  workId: string;
+
+  taskId?: string | null;
+
+  runId?: string | null;
+
+  approvalId?: string | null;
+
+  clarificationId?: string | null;
+
+  category: AuditEventCategory;
+
+  eventType: AuditEventType;
+
+  // Fast Port P4a Step7: ActorReferenceをflat columnsとして保存する
+  // (TACT queryabilityを優先、Approval.requestedByActorKind/Idや
+  // Clarification.requestedByActorKind/Idと同じ設計判断)。system
+  // event等、人間actorが存在しない場合はいずれもnull。
+  actorKind?: ActorKind | null;
+
+  actorId?: string | null;
+
+  reasonCode?: string | null;
+
+  // Fast Port P4a Step9/10: policyDecision/riskClass/providerRef/
+  // runtimeRef等は、P4a時点で実際にこれらを書き込むproducerが存在
+  // しないため専用fieldを設けず、この汎用JsonValueへ収める
+  // (過剰schema設計回避——P4bの実配線で判明した時点で専用fieldへ
+  // 昇格するかを判断する)。絶対条件7/8: raw secret/token/provider
+  // credential/Authorization headerを一切含めない
+  // (core/tact-work/audit.tsのcontainsSuspiciousKey()が最小限の
+  // key名guardを行う、generic redaction engineは作らない)。
+  details?: JsonValue | null;
+
+  // Fast Port P4a Step6(Option A採用): DB側のgenerated always as
+  // identity列(supabase/migrations/20260912000000_create_tact_audit_events.sql
+  // 参照)によるglobal monotonic sequence。Work単位でのdeterministic
+  // orderingは、work_idで絞り込んだ上でこの値でソートするだけで
+  // 安定して得られる(AXMEのseqと同じ「単調増加する順序保証」という
+  // 目的を、per-Work sequence生成のconcurrency hazard無しで満たす)。
+  sequence: number;
+
+  occurredAt: string;
 
   createdAt: string;
 

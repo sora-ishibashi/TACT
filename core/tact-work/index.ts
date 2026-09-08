@@ -27,3 +27,6 @@ export * from "./approval";
 // core/tact-work/approval.tsと同じ二層構造(store.tsの生CRUD +
 // このExecution Boundary)を持つため、同じbarrelから公開する。
 export * from "./clarification";
+// Fast Port P4a: Append-Only Audit Event Foundation。同じbarrel
+// export pattern。
+export * from "./audit";

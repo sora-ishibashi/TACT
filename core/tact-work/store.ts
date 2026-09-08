@@ -14,7 +14,11 @@ import type {
   Clarification,
   ClarificationStatus,
   ClarificationReasonCode,
+  AuditEvent,
+  AuditEventCategory,
+  AuditEventType,
 } from "./types";
+import type { JsonValue } from "./approvalIntegrity";
 
 // =========================
 // TACT Work Store (Architecture Migration Phase B1)
@@ -182,6 +186,26 @@ export interface ClarificationRow {
   created_at: string;
 }
 
+// Fast Port P4a: Append-Only Audit Event Foundation。current-state
+// tableとは独立したevent log(絶対条件3)。
+export interface AuditEventRow {
+  id: string;
+  work_id: string;
+  task_id: string | null;
+  run_id: string | null;
+  approval_id: string | null;
+  clarification_id: string | null;
+  category: AuditEventCategory;
+  event_type: AuditEventType;
+  actor_kind: ActorKind | null;
+  actor_id: string | null;
+  reason_code: string | null;
+  details: JsonValue | null;
+  sequence: number;
+  occurred_at: string;
+  created_at: string;
+}
+
 // =========================
 // DB row → domain 変換 (snake_case → camelCase、pure関数)
 // =========================
@@ -312,6 +336,28 @@ export function toClarification(row: ClarificationRow): Clarification {
 
 }
 
+export function toAuditEvent(row: AuditEventRow): AuditEvent {
+
+  return {
+    id: row.id,
+    workId: row.work_id,
+    taskId: row.task_id,
+    runId: row.run_id,
+    approvalId: row.approval_id,
+    clarificationId: row.clarification_id,
+    category: row.category,
+    eventType: row.event_type,
+    actorKind: row.actor_kind,
+    actorId: row.actor_id,
+    reasonCode: row.reason_code,
+    details: row.details,
+    sequence: row.sequence,
+    occurredAt: row.occurred_at,
+    createdAt: row.created_at,
+  };
+
+}
+
 const WORK_COLUMNS =
   "id, user_id, organization_id, created_by_actor_kind, created_by_actor_id, title, objective, status, primary_conversation_id, started_at, completed_at, failed_at, cancelled_at, cost_summary, metadata, created_at, updated_at";
 
@@ -328,6 +374,9 @@ const APPROVAL_COLUMNS =
 
 const CLARIFICATION_COLUMNS =
   "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, allowed_responder_ids, status, reason_code, question, response, responded_by_actor_kind, responded_by_actor_id, requested_at, responded_at, expires_at, created_at";
+
+const AUDIT_EVENT_COLUMNS =
+  "id, work_id, task_id, run_id, approval_id, clarification_id, category, event_type, actor_kind, actor_id, reason_code, details, sequence, occurred_at, created_at";
 
 // =========================
 // 純粋なvalidation guard(DBアクセスなし、Store layerでの
@@ -1260,5 +1309,115 @@ export async function listClarificationsForWork(
   }
 
   return (data ?? []).map((row) => toClarification(row as ClarificationRow));
+
+}
+
+// =========================
+// AuditEvent (Fast Port P4a: Append-Only Audit Event Foundation)
+// =========================
+//
+// tact_approvals/tact_clarificationsのCRUD群と同じWorkOwnershipDeps
+// DI seam・同じRLS前提を踏襲する。絶対条件(Step16): このfileには
+// updateAuditEvent()/deleteAuditEvent()を実装しない——production
+// APIはcreate/list(get)のみ(append-only)。
+
+export interface CreateAuditEventParams {
+  taskId?: string | null;
+  runId?: string | null;
+  approvalId?: string | null;
+  clarificationId?: string | null;
+  category: AuditEventCategory;
+  eventType: AuditEventType;
+  actorKind?: ActorKind | null;
+  actorId?: string | null;
+  reasonCode?: string | null;
+  details?: JsonValue | null;
+  // 省略時はDB defaultのnow()が使われる(実際に事実が発生した時刻を
+  // callerが把握している場合のみ明示的に指定する、Approval.
+  // subjectCapturedAtと同じ設計思想)。
+  occurredAt?: string | null;
+}
+
+export async function createAuditEvent(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  params: CreateAuditEventParams,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<AuditEvent | undefined> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return undefined;
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const insertPayload: Record<string, unknown> = {
+    work_id: workId,
+    task_id: params.taskId ?? null,
+    run_id: params.runId ?? null,
+    approval_id: params.approvalId ?? null,
+    clarification_id: params.clarificationId ?? null,
+    category: params.category,
+    event_type: params.eventType,
+    actor_kind: params.actorKind ?? null,
+    actor_id: params.actorId ?? null,
+    reason_code: params.reasonCode ?? null,
+    details: params.details ?? null,
+  };
+
+  // occurredAtを明示的に渡された場合のみ含める(省略時はDB
+  // defaultのnow()をそのまま使う——undefinedのoccurred_atキー自体を
+  // insertへ含めるとPostgRESTがNULLとして送ってしまい、
+  // defaultが働かなくなるため、キー自体を条件付きで追加する)。
+  if (params.occurredAt) {
+    insertPayload.occurred_at = params.occurredAt;
+  }
+
+  const { data, error } = await client
+    .from("tact_audit_events")
+    .insert(insertPayload)
+    .select(AUDIT_EVENT_COLUMNS)
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return toAuditEvent(data as AuditEventRow);
+
+}
+
+// Fast Port P4a Step15: sequence昇順(=発生順)でdeterministicに返す。
+// limitは今回追加しない(過剰API回避、Step15絶対条件)——将来event数
+// 増加時に必要になった時点で追加する。
+export async function listAuditEventsForWork(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<AuditEvent[]> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return [];
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_audit_events")
+    .select(AUDIT_EVENT_COLUMNS)
+    .eq("work_id", workId)
+    .order("sequence", { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((row) => toAuditEvent(row as AuditEventRow));
 
 }
