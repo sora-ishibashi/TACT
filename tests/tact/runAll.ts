@@ -142,6 +142,7 @@ import { run as runIntegrationCapability } from "./integration/capability.test";
 import { run as runIntegrationPolicy } from "./integration/policy.test";
 import { run as runIntentSlackSendIntent } from "./intent/slackSendIntent.test";
 import { run as runIntentSlackListChannelsIntent } from "./intent/slackListChannelsIntent.test";
+import { run as runRuntimeAdapter } from "./runtime/adapter.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -259,6 +260,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "integration/policy", run: runIntegrationPolicy },
   { name: "intent/slackSendIntent", run: runIntentSlackSendIntent },
   { name: "intent/slackListChannelsIntent", run: runIntentSlackListChannelsIntent },
+  { name: "runtime/adapter", run: runRuntimeAdapter },
 ];
 
 async function main() {
