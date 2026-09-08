@@ -1874,8 +1874,13 @@ const executeReadIntegrationActionViaTactIntegration: ExecuteReadIntegrationActi
     // が、IntegrationActionExecutionOutcome型としては存在するため、
     // 安全側(invalid_action)へfallbackするだけにとどめる(絶対条件:
     // readのためにApprovalを偽造しない、新しいoutcome分類も増やさない)。
+    // Architecture Migration ARCH-P1c: approval_integrity_failedも
+    // 同じ理由で通常到達しない(read境界はApproval Integrity検証
+    // 自体を一切行わない、core/tact-integration/execution.tsの
+    // executeApprovedIntegrationAction()専用の分岐)。
     case "approval_not_approved":
     case "already_executed":
+    case "approval_integrity_failed":
       return { status: "invalid_action" };
 
     default: {

@@ -12,6 +12,11 @@ import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus }
 import { executeIntegrationAction as defaultExecuteIntegrationAction } from "./gateway";
 import { getConnection as defaultGetConnection } from "./connection";
 import { resolveIntegrationActionPolicy } from "./policy";
+import {
+  buildApprovalSubject,
+  verifyApprovalIntegrity,
+  type ApprovalIntegrityCheck,
+} from "../tact-work/approvalIntegrity";
 import type { Approval, ApprovalStatus, Run, TaskStatus, WorkStatus } from "../tact-work/types";
 import type { Connection, IntegrationAction, IntegrationService } from "./types";
 
@@ -148,6 +153,23 @@ async function reconcileAfterTaskUpdate(
 
 }
 
+// Architecture Migration ARCH-P1c: verifyApprovalIntegrity()の5値
+// (docs/architecture/approval-integrity.mdのStep8で明示された
+// missing_subject/unsupported_version/stored_subject_invalid/
+// hash_mismatch/subject_mismatchという語彙に対応)から"match"を除いた
+// ものを、そのままこの境界のinternal reasonとして再利用する
+// (絶対条件、Step5: canonicalization/hash判定logicをここで再実装
+// しない)。current_subject_invalidは、execution時点でcurrent
+// ApprovalSubject自体の構築(buildApprovalSubject())が失敗した場合
+// 専用の、この境界だけが持つ追加reason(stored側の異常と区別する)。
+// いずれもcanonical statusとしては単一のapproval_integrity_failedへ
+// 折り畳む(絶対条件Step8: statusを増やしすぎない)——Bot向けmapper
+// (core/tact-bot/gateway/receiveApprovalDecision.ts)はreasonの詳細を
+// 一切参照しない。
+export type ApprovalIntegrityFailureReason =
+  | Exclude<ApprovalIntegrityCheck["result"], "match">
+  | "current_subject_invalid";
+
 export type IntegrationActionExecutionOutcome =
   | { status: "not_found" }
   | { status: "approval_not_approved"; approvalStatus: ApprovalStatus }
@@ -155,6 +177,16 @@ export type IntegrationActionExecutionOutcome =
   | { status: "connection_unavailable" }
   | { status: "invalid_action"; reason: string }
   | { status: "already_executed"; run: Run }
+  // Architecture Migration ARCH-P1c(docs/architecture/approval-integrity.md):
+  // Approval取得時点で承認された内容(stored subject)と、execution
+  // 直前に再構築したcurrent subjectが一致しない場合の安全な停止。
+  // provider call 0・Run作成0(絶対条件、Run="1回のexecution attempt"
+  // という定義上、Integrity Gateで止まった時点ではattempt自体が
+  // 開始されていない)。Approval.statusは変更しない
+  // ("承認された事実"と"現在executionに使えるか"は別概念、
+  // 同docs Step9)。reasonは内部診断専用——Bot向けmessageへは
+  // 一切出さない(絶対条件Step8)。
+  | { status: "approval_integrity_failed"; reason: ApprovalIntegrityFailureReason }
   // Architecture Migration Phase C2.1c-a-fix: 新規external execution
   // を開始できるTask stateはpendingだけである、というcanonical
   // precondition invariantを、この境界自身に持たせる(既存の
@@ -467,7 +499,78 @@ export async function executeApprovedIntegrationAction(
   const alreadyExecuted = findAlreadyExecutedRun(existingRuns, approvalId);
 
   if (alreadyExecuted) {
+
+    // Architecture Migration ARCH-P1c(絶対条件、Step2/11): dedup
+    // 判定はApproval Integrity検証より必ず先に行う。既にexternal side
+    // effectが成功済みのApprovalについては、以後どれだけsubjectが
+    // (将来のバグ等で)ずれて見えても、それは「既に起きた事実の報告」
+    // でしかなく、Integrity検証の対象ではない——ここでmismatch
+    // 判定へ進めてしまうと、成功済みのalready_executed応答を誤って
+    // 上書きしてしまう(docs/architecture/approval-integrity.md
+    // Step11 Case4の結論をそのまま実装する)。
     return { status: "already_executed", run: alreadyExecuted };
+
+  }
+
+  // 6.6. Architecture Migration ARCH-P1c: Approval Integrity検証
+  // (docs/architecture/approval-integrity.md)。Provider dispatch・Run
+  // 作成のいずれよりも前に、承認された時点のcanonical subject
+  // (Approval.subject*列)と、execution直前に再構築したcurrent
+  // subjectが一致することを確認する。
+  //
+  // 絶対条件(Step5): canonicalization/hash判定logic自体はcore/tact-work/
+  // approvalIntegrity.tsのbuildApprovalSubject()/verifyApprovalIntegrity()
+  // をそのまま再利用する——この境界・Provider Adapterのいずれにも
+  // 判定logicを複製しない。
+  //
+  // riskClassSnapshot(絶対条件Step6): 「stored」側はApproval作成時点の
+  // snapshot、「current」側は直前(5.5)で再評価済みのpolicy.riskClass
+  // そのもの(再度policyを呼び直さない、同じ結果を再利用するだけ)。
+  // Canonical action自体は同一でもriskClassが変化していれば
+  // (例: write→destructive)、古いApprovalをそのまま使わせず
+  // mismatchとして拒否する——現在のPolicyがDENY相当(このリスク
+  // クラスの操作を許可しない)であれば、この5.5の時点で既に
+  // invalid_actionへ倒れているため、Approvalが現在のPolicy DENYを
+  // 上書きすることは無い。
+  const currentSubjectResult = buildApprovalSubject({
+    workId: work.id,
+    taskId: approval.taskId,
+    service: extracted.action.service,
+    operation: extracted.action.operation,
+    input: extracted.action.input,
+    connectionId: extracted.connectionId,
+    riskClassSnapshot: policy.riskClass,
+  });
+
+  if (!currentSubjectResult.ok) {
+
+    // execution時点でcurrent subject自体を構築できない(通常到達
+    // しない——Approval.payloadは作成時点で既に一度buildApprovalSubject()
+    // を通過済みのはずだが、raw JSONBからの再抽出は型検証のみで
+    // schema検証までは行わないため、防御的にfail closedする)。
+    return { status: "approval_integrity_failed", reason: "current_subject_invalid" };
+
+  }
+
+  const integrityCheck = verifyApprovalIntegrity(
+    {
+      version: approval.subjectVersion ?? null,
+      json: approval.subject ?? null,
+      hash: approval.subjectHash ?? null,
+    },
+    currentSubjectResult.subject
+  );
+
+  if (integrityCheck.result !== "match") {
+
+    // 絶対条件(Step4、Step10): subject evidence無し(ARCH-P1b以前の
+    // legacy protected Approval含む)・改ざん・不一致のいずれでも
+    // fail closedする。Run作成0・provider call 0
+    // (executeIntegrationActionCore()より前でreturnするため構造的に
+    // 保証される)。Approval.statusは一切変更しない(承認された事実と
+    // 現在executionに使えるかは別概念、同docs Step9)。
+    return { status: "approval_integrity_failed", reason: integrityCheck.result };
+
   }
 
   return executeIntegrationActionCore(

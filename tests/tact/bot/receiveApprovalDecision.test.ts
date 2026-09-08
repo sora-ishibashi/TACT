@@ -404,6 +404,64 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- Architecture Migration ARCH-P1c: approval_integrity_failed ----
+  {
+    const reasons = [
+      "subject_mismatch",
+      "hash_mismatch",
+      "version_unsupported",
+      "stored_subject_invalid",
+      "current_subject_invalid",
+    ] as const;
+
+    let allSafe = true;
+    let allExpectedText = true;
+
+    for (const reason of reasons) {
+
+      const { deps } = makeDeps({
+        handleDecisionResult: executionResult({ status: "approval_integrity_failed", reason }),
+      });
+
+      const result = await receiveBotApprovalDecision(makeDecision(), deps);
+      const text = result.actions[0].kind === "reply" ? result.actions[0].text : "";
+
+      if (text !== "承認後に実行内容を確認できなかったため、実行を停止しました。再承認が必要です。") {
+        allExpectedText = false;
+      }
+
+      // 絶対条件(Step8): reasonの詳細("subject_mismatch"等)・raw
+      // hash・canonical payload・connectionId・provider metadata・
+      // secretのいずれも一切出さない。
+      if (
+        text.includes(reason) ||
+        text.toLowerCase().includes("conn-") ||
+        text.toLowerCase().includes("connectionid") ||
+        /[0-9a-f]{64}/.test(text.toLowerCase()) ||
+        text.includes("channel") ||
+        text.includes("input")
+      ) {
+        allSafe = false;
+      }
+
+    }
+
+    results.push(
+      check(
+        "[ARCH-P1c/Execution:approval_integrity_failed] 全reason variant(subject_mismatch/hash_mismatch/version_unsupported/stored_subject_invalid/current_subject_invalid)で、同一の固定・安全なtextが返る(reasonの詳細をBotへ出さない)",
+        allExpectedText
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1c/Execution:approval_integrity_failed] reply textにreason文字列・connectionId・64桁hex(hash)・canonical payloadのfield名が一切含まれない",
+        allSafe
+      )
+    );
+
+  }
+
   // ---- reject: 既存reject ack維持(executionは常にundefined) ----
   {
     const { deps } = makeDeps({
@@ -434,6 +492,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       { status: "not_found" },
       { status: "approval_not_approved", approvalStatus: "pending" },
       { status: "execution_error" },
+      // Architecture Migration ARCH-P1c。
+      { status: "approval_integrity_failed", reason: "subject_mismatch" },
     ];
 
     let allSafe = true;

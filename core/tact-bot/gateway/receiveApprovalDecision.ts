@@ -144,6 +144,15 @@ function buildExecutionAckMessage(outcome: ExecutionOutcomeOrError): string {
     case "approval_not_approved":
       return "承認しましたが、対象の操作を確認できませんでした。";
 
+    // Architecture Migration ARCH-P1c(docs/architecture/approval-integrity.md):
+    // 承認された時点の内容と、実行直前の内容が一致しなかった場合の
+    // 安全なmessage。絶対条件(Step8): reasonの詳細(missing_subject/
+    // hash_mismatch/subject_mismatch等)・raw hash・canonical
+    // payload・connectionId・provider metadata・secretのいずれも
+    // 一切出さない——固定文言のみ。
+    case "approval_integrity_failed":
+      return "承認後に実行内容を確認できなかったため、実行を停止しました。再承認が必要です。";
+
     // Architecture Migration Phase C2.1c-c(ユーザー指示、最重要):
     // unexpected exception時は「結果不明」であることだけを伝える。
     // 「もう一度承認してください」「再試行してください」等、同じ

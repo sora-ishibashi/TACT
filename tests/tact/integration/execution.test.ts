@@ -27,6 +27,12 @@ import { mapSlackActionToComposioTool } from "../../../core/tact-integration/pro
 import { buildExecutionResultFromToolResult } from "../../../core/tact-integration/providers/composio/adapter";
 import type { Work, Approval, Run, WorkTask } from "../../../core/tact-work/types";
 import type { Connection, IntegrationExecutionResult } from "../../../core/tact-integration/types";
+import {
+  buildApprovalSubject,
+  canonicalizeApprovalSubject,
+  hashApprovalSubject,
+  type ApprovalSubject,
+} from "../../../core/tact-work/approvalIntegrity";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 const OWNER_USER_ID = "user-1";
@@ -42,6 +48,45 @@ function makeWork(overrides: Partial<Work> = {}): Work {
     updatedAt: "2026-09-07T00:00:00.000Z",
     ...overrides,
   };
+}
+
+// Architecture Migration ARCH-P1c: makeApproval()の既定payload
+// (service/operation/input/connectionId)とcanonicalに一致する
+// Approval Subject。既定のmakeApproval()呼び出し(payloadを上書き
+// しない大半のtest)が、新しく追加されたApproval Integrity検証
+// (core/tact-integration/execution.ts)をそのまま通過できるように
+// する——これらのtestは元々Task/Run/Connection/Work state分岐を
+// 検証するためのものであり、Integrity検証自体を検証する意図では
+// ないため、既定では常にmatchする状態を用意する(既存assertionを
+// 弱めずに、無関係なintegrity gateで足止めしない)。
+function makeMatchingSubject(overrides: Partial<ApprovalSubject> = {}): ApprovalSubject {
+
+  const result = buildApprovalSubject({
+    workId: "work-1",
+    taskId: "task-1",
+    service: "slack",
+    operation: "send_message",
+    input: { channel: "#general", text: "hi" },
+    connectionId: "conn-1",
+    riskClassSnapshot: "write",
+  });
+
+  if (!result.ok) {
+    throw new Error("test fixture itself must be buildable (canonical input is JSON-safe by construction)");
+  }
+
+  return { ...result.subject, ...overrides };
+
+}
+
+function subjectStorageFields(subject: ApprovalSubject): Pick<Approval, "subjectVersion" | "subject" | "subjectHash"> {
+
+  return {
+    subjectVersion: subject.subjectVersion,
+    subject: subject as unknown as Record<string, unknown>,
+    subjectHash: hashApprovalSubject(canonicalizeApprovalSubject(subject)),
+  };
+
 }
 
 function makeApproval(overrides: Partial<Approval> = {}): Approval {
@@ -69,6 +114,7 @@ function makeApproval(overrides: Partial<Approval> = {}): Approval {
     },
     requestedAt: "2026-09-07T00:00:00.000Z",
     createdAt: "2026-09-07T00:00:00.000Z",
+    ...subjectStorageFields(makeMatchingSubject()),
     ...overrides,
   };
 }
@@ -712,6 +758,784 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Policy defense] riskClass='read'のaction(slack.list_channels)はApproval経由の境界へ渡っても実行されない(invalid_action、provider call 0、絶対条件Section11)",
         outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // =========================
+  // Architecture Migration ARCH-P1c: Approval Integrity Verification
+  // (docs/architecture/approval-integrity.md)
+  // =========================
+  //
+  // 対象: executeApprovedIntegrationAction()の、dedup直後・Run作成前に
+  // 挿入されたIntegrity検証ステップ。makeApproval()の既定subjectは
+  // 既定payload(service=slack/operation=send_message/
+  // input={channel:"#general",text:"hi"}/connectionId="conn-1")と
+  // 常にmatchするよう構築済みのため(このfile冒頭のmakeMatchingSubject()
+  // 参照)、ここまでの全既存test(Task/Run/Connection/Work state分岐)は
+  // 無関係にIntegrity検証を通過している——このsectionはIntegrity
+  // 検証自体を専用に検証する。
+
+  // ---- Case1: exact same subject -> 通常通りprovider実行(1回) ----
+  {
+    const { deps, calls } = makeDeps();
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case1] stored subjectとcurrent subjectが完全一致する場合、通常通りproviderが1回呼ばれ、completedを返す",
+        outcome.status === "completed" && calls.executeIntegrationActionCalls === 1 && calls.createRunCalls === 1
+      )
+    );
+  }
+
+  // ---- Case2〜9: 各fieldの変化がintegrity failureを引き起こす ----
+  {
+
+    // canonicalInput変化(channelが変わる) -> payload自体(=extractされる
+    // current action)を変えることで、stored subjectとの不一致を作る。
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "Slackへ投稿します",
+              metadata: {
+                service: "slack",
+                operation: "send_message",
+                input: { channel: "#general-CHANGED", text: "hi" },
+                connectionId: "conn-1",
+              },
+            },
+          },
+          // subject/subjectHashは意図的に既定(古いchannelのまま)を
+          // 維持する(=approved時点で承認された内容)。
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case2] canonicalInput(channel)が承認後に変化した場合、approval_integrity_failedを返し、provider call 0・Run作成0",
+        outcome.status === "approval_integrity_failed" &&
+          calls.executeIntegrationActionCalls === 0 &&
+          calls.createRunCalls === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case2] mismatch reasonはsubject_mismatch(内部診断用、Bot向けには出さない)",
+        outcome.status === "approval_integrity_failed" && outcome.reason === "subject_mismatch"
+      )
+    );
+
+  }
+
+  // ---- Case3: target(text)変化 -> integrity failure ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "Slackへ投稿します",
+              metadata: {
+                service: "slack",
+                operation: "send_message",
+                input: { channel: "#general", text: "hi (CHANGED CONTENT)" },
+                connectionId: "conn-1",
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case3] canonicalInput(text)が承認後に変化した場合、approval_integrity_failedを返しprovider call 0",
+        outcome.status === "approval_integrity_failed" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case4: service変化 -> policy再検証(5.5)の時点で既にinvalid_actionへ
+  // 倒れるため、そもそもIntegrity検証へ到達しない(絶対条件Step6C:
+  // Policy DENYがApprovalより優先される)ことを確認する ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "test",
+              metadata: {
+                service: "gmail",
+                operation: "send_message",
+                input: { channel: "#general", text: "hi" },
+                connectionId: "conn-1",
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case4] serviceが承認後に変化した場合、policy allowlistに存在しないためinvalid_action(Policy側の既存defense-in-depthが先に働く、Integrity検証より手前)、provider call 0",
+        outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case5: operation変化(同一service内) -> policy allowlist未登録の
+  // operationならinvalid_action、登録済みのoperationならIntegrity
+  // mismatchとして拒否される。ここではpolicy未登録のoperationへ
+  // 変化させ、Policy defenseが先に働くことを確認する ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "test",
+              metadata: {
+                service: "slack",
+                operation: "delete_channel",
+                input: { channel: "#general", text: "hi" },
+                connectionId: "conn-1",
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case5] operationが承認後に変化した場合(未登録operationへ)、invalid_action(Policy defenseが先に働く)、provider call 0",
+        outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // Architecture Migration ARCH-P1c: Case6〜9は「stored subjectの1
+  // fieldだけが承認時から実際にずれていた」状況(将来のバグ等を想定した
+  // 防御的シナリオ)を模す。stored subject自身は自己矛盾しない
+  // (=そのsubject_jsonに対して正しいhashを持つ)ようにした上で、
+  // current subject(=Work/Approval/Connection/Policyという別々の
+  // sourceから毎回再構築される値)とだけ食い違わせる——そうしないと
+  // 単なるhash_mismatchになってしまい、「fieldの内容自体が違う」という
+  // subject_mismatchの検証にならない。
+  function makeTamperedApprovalOverrides(
+    subjectOverrides: Partial<ApprovalSubject>
+  ): Pick<Approval, "subjectVersion" | "subject" | "subjectHash"> {
+    const tamperedSubject = makeMatchingSubject(subjectOverrides);
+    return subjectStorageFields(tamperedSubject);
+  }
+
+  // ---- Case6: workId mismatch ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          ...makeTamperedApprovalOverrides({ workId: "work-DIFFERENT" }),
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case6] stored subject.workIdがcurrent Work.idと一致しない場合、approval_integrity_failed(subject_mismatch)、provider call 0",
+        outcome.status === "approval_integrity_failed" &&
+          (outcome as { reason?: string }).reason === "subject_mismatch" &&
+          calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case7: taskId mismatch ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          ...makeTamperedApprovalOverrides({ taskId: "task-DIFFERENT" }),
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case7] stored subject.taskIdがApproval.taskId(current)と一致しない場合、approval_integrity_failed(subject_mismatch)、provider call 0",
+        outcome.status === "approval_integrity_failed" &&
+          (outcome as { reason?: string }).reason === "subject_mismatch" &&
+          calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case8: connectionId mismatch ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          ...makeTamperedApprovalOverrides({ connectionId: "conn-DIFFERENT" }),
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case8] stored subject.connectionIdがcurrent connectionIdと一致しない場合、approval_integrity_failed(subject_mismatch)、provider call 0",
+        outcome.status === "approval_integrity_failed" &&
+          (outcome as { reason?: string }).reason === "subject_mismatch" &&
+          calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case9: riskClass変化(escalation) -> stored側のriskClassSnapshot
+  // だけを実際のpolicy結果("write")と異なる値にずらすことで、
+  // 「承認時点と現在でrisk classificationが変わった」状況を模す ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          ...makeTamperedApprovalOverrides({ riskClassSnapshot: "destructive" }),
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case9] stored riskClassSnapshotがcurrent policy評価結果と一致しない場合(riskClass escalation/変化)、approval_integrity_failed(subject_mismatch)、provider call 0——古いApprovalをそのまま使わせない",
+        outcome.status === "approval_integrity_failed" &&
+          (outcome as { reason?: string }).reason === "subject_mismatch" &&
+          calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case10〜16: stored evidence自体が欠落/壊れている場合、fail closed ----
+  {
+
+    // Case10: subject_version欠落(undefined)
+    {
+      const { deps, calls } = makeDeps({
+        getApproval: async (workId, userId, _accessToken, approvalId) => {
+          if (userId !== OWNER_USER_ID) return undefined;
+          const approval = makeApproval({ id: approvalId, workId });
+          return { ...approval, subjectVersion: undefined };
+        },
+      });
+
+      const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+      results.push(
+        check(
+          "[ARCH-P1c/Case10] subjectVersion欠落(ARCH-P1b以前のlegacy Approval相当)はfail closedされる(approval_integrity_failed、version_unsupported)、provider call 0",
+          outcome.status === "approval_integrity_failed" &&
+            (outcome as { reason?: string }).reason === "version_unsupported" &&
+            calls.executeIntegrationActionCalls === 0
+        )
+      );
+    }
+
+    // Case11: subject_json欠落(undefined、subjectVersionだけ残る想定外の形)
+    {
+      const { deps, calls } = makeDeps({
+        getApproval: async (workId, userId, _accessToken, approvalId) => {
+          if (userId !== OWNER_USER_ID) return undefined;
+          const approval = makeApproval({ id: approvalId, workId });
+          return { ...approval, subject: undefined };
+        },
+      });
+
+      const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+      results.push(
+        check(
+          "[ARCH-P1c/Case11] subject_json欠落はfail closedされる(approval_integrity_failed、stored_subject_invalid)、provider call 0",
+          outcome.status === "approval_integrity_failed" &&
+            (outcome as { reason?: string }).reason === "stored_subject_invalid" &&
+            calls.executeIntegrationActionCalls === 0
+        )
+      );
+    }
+
+    // Case12: subject_hash欠落
+    {
+      const { deps, calls } = makeDeps({
+        getApproval: async (workId, userId, _accessToken, approvalId) => {
+          if (userId !== OWNER_USER_ID) return undefined;
+          const approval = makeApproval({ id: approvalId, workId });
+          return { ...approval, subjectHash: undefined };
+        },
+      });
+
+      const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+      results.push(
+        check(
+          "[ARCH-P1c/Case12] subject_hash欠落はfail closedされる(approval_integrity_failed、hash_mismatch)、provider call 0",
+          outcome.status === "approval_integrity_failed" &&
+            (outcome as { reason?: string }).reason === "hash_mismatch" &&
+            calls.executeIntegrationActionCalls === 0
+        )
+      );
+    }
+
+    // Case13: malformed subject(必須fieldが欠けたobject)
+    {
+      const { deps, calls } = makeDeps({
+        getApproval: async (workId, userId, _accessToken, approvalId) => {
+          if (userId !== OWNER_USER_ID) return undefined;
+          const approval = makeApproval({ id: approvalId, workId });
+          return { ...approval, subject: { garbage: true } };
+        },
+      });
+
+      const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+      results.push(
+        check(
+          "[ARCH-P1c/Case13] malformedなsubject_json(必須field欠落)はfail closedされる(approval_integrity_failed、stored_subject_invalid)",
+          outcome.status === "approval_integrity_failed" &&
+            (outcome as { reason?: string }).reason === "stored_subject_invalid" &&
+            calls.executeIntegrationActionCalls === 0
+        )
+      );
+    }
+
+    // Case14: unsupported version(未知のversion番号)
+    {
+      const { deps, calls } = makeDeps({
+        getApproval: async (workId, userId, _accessToken, approvalId) => {
+          if (userId !== OWNER_USER_ID) return undefined;
+          const subject = { ...makeMatchingSubject(), subjectVersion: 999 };
+          return makeApproval({
+            id: approvalId,
+            workId,
+            subjectVersion: 999,
+            subject: subject as unknown as Record<string, unknown>,
+            subjectHash: hashApprovalSubject(canonicalizeApprovalSubject(subject)),
+          });
+        },
+      });
+
+      const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+      results.push(
+        check(
+          "[ARCH-P1c/Case14] サポート外のsubject_version(未知の数値)はfail closedされる(approval_integrity_failed、version_unsupported)",
+          outcome.status === "approval_integrity_failed" &&
+            (outcome as { reason?: string }).reason === "version_unsupported" &&
+            calls.executeIntegrationActionCalls === 0
+        )
+      );
+    }
+
+    // Case15: stored hash mismatch(subject_jsonは正しいが、hashだけ壊れている)
+    {
+      const { deps, calls } = makeDeps({
+        getApproval: async (workId, userId, _accessToken, approvalId) => {
+          if (userId !== OWNER_USER_ID) return undefined;
+          return makeApproval({
+            id: approvalId,
+            workId,
+            subjectHash: "0".repeat(64),
+          });
+        },
+      });
+
+      const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+      results.push(
+        check(
+          "[ARCH-P1c/Case15] subject_hashがsubject_jsonの実際の内容と一致しない場合、fail closedされる(approval_integrity_failed、hash_mismatch)",
+          outcome.status === "approval_integrity_failed" &&
+            (outcome as { reason?: string }).reason === "hash_mismatch" &&
+            calls.executeIntegrationActionCalls === 0
+        )
+      );
+    }
+
+    // Case16: DB subject_version列とsubject_json内部のsubjectVersionが
+    // 食い違う(single source of truthの不整合)。DB列側は
+    // APPROVAL_SUBJECT_VERSION(サポート対象)のままにする必要がある
+    // ——そうしないと、verifyApprovalIntegrity()の1段目のcheck
+    // (stored.version !== APPROVAL_SUBJECT_VERSION)がversion_unsupported
+    // として先に短絡してしまい、「DBとJSON内部の食い違い」自体を
+    // 検証できない。
+    {
+      const { deps, calls } = makeDeps({
+        getApproval: async (workId, userId, _accessToken, approvalId) => {
+          if (userId !== OWNER_USER_ID) return undefined;
+          // subject_json内部のsubjectVersionだけを2に改ざんする
+          // (DB列subjectVersionはAPPROVAL_SUBJECT_VERSION=1のまま)。
+          const subject = { ...makeMatchingSubject(), subjectVersion: 2 };
+          return makeApproval({
+            id: approvalId,
+            workId,
+            subjectVersion: 1,
+            subject: subject as unknown as Record<string, unknown>,
+            subjectHash: hashApprovalSubject(canonicalizeApprovalSubject(subject)),
+          });
+        },
+      });
+
+      const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+      results.push(
+        check(
+          "[ARCH-P1c/Case16] DB列subject_versionとsubject_json内部のsubjectVersionが食い違う場合、fail closedされる(approval_integrity_failed、stored_subject_invalid、single source of truth不整合検知)",
+          outcome.status === "approval_integrity_failed" &&
+            (outcome as { reason?: string }).reason === "stored_subject_invalid" &&
+            calls.executeIntegrationActionCalls === 0
+        )
+      );
+    }
+
+  }
+
+  // ---- Case17: key順序だけが異なるcanonicalInput -> matchする ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "Slackへ投稿します",
+              // 既定payloadと同じ内容だが、object literalのkey順序を
+              // 入れ替えるだけ({text, channel}の順)。
+              metadata: {
+                operation: "send_message",
+                service: "slack",
+                connectionId: "conn-1",
+                input: { text: "hi", channel: "#general" },
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case17] canonicalInput/metadataのkey順序だけが異なる場合はmatchする(deterministic canonicalization)、providerが正常に呼ばれる",
+        outcome.status === "completed" && calls.executeIntegrationActionCalls === 1
+      )
+    );
+  }
+
+  // ---- Case18: exact approved re-entry(既にapproved状態のApprovalへ
+  // 同じ内容で再度到達)は安全にexecuteされる(dedup前ならexecute、
+  // dedup後ならalready_executed) ----
+  {
+    const { deps } = makeDeps();
+
+    const first = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+    // 2回目の呼び出し(例: Bot decision callbackの再送)は、1回目の
+    // 成功が既にcreateRunCalls経由でRunとして記録されているという
+    // 前提が無いこの単純fakeでは、listRunsForTaskが常に[]を返すため
+    // dedup条件そのものは別test(Case32)で確認する。ここではre-entryの
+    // たびにIntegrity検証が再実行されること自体を、mismatch側の
+    // Case19と対比して確認する。
+    void first;
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case18] 同一subject(変化なし)でのre-entryは安全に成功する(Integrity検証を再実行しても一致するため)",
+        (await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps)).status === "completed"
+      )
+    );
+  }
+
+  // ---- Case19: changed subject re-entry -> 毎回検証するため、2回目以降も
+  // 一貫してfail closedされる(1回目の検証結果をcacheしない) ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "test",
+              metadata: {
+                service: "slack",
+                operation: "send_message",
+                input: { channel: "#general-CHANGED", text: "hi" },
+                connectionId: "conn-1",
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const first = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+    const second = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case19] 内容が変化したApprovalへのre-entryは、1回目・2回目いずれもfail closedされる(絶対条件Step12: execution boundaryへ入るたび毎回検証する、decision時だけの検証で終わらない)",
+        first.status === "approval_integrity_failed" &&
+          second.status === "approval_integrity_failed" &&
+          calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case26/27/28: Integrity failure時のprovider call/Run/Approval.status ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "test",
+              metadata: {
+                service: "slack",
+                operation: "send_message",
+                input: { channel: "#general-CHANGED", text: "hi" },
+                connectionId: "conn-1",
+              },
+            },
+          },
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case26] Integrity failure時、provider call countは0",
+        outcome.status === "approval_integrity_failed" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case27] Integrity failure時、Run作成countは0(createRunCalls===0、Run='1回のexecution attempt'という定義上、Integrity Gateで拒否された時点でattemptは開始されていない)",
+        calls.createRunCalls === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case28] Integrity failure時、updateTaskStatus()も一切呼ばれない(Taskはpendingのまま、Approval.status自体もこの境界からは一切変更されない——deps自体にupdateApprovalStatus的なものが無い設計を維持)",
+        calls.updateTaskStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- Case29: 現在のPolicyがDENY相当(未登録/read)なら、Integrityが
+  // matchしていてもApprovalはそれをoverrideしない ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        // stored subjectはread操作(list_channels)に対して"完全に一致"
+        // するよう構築するが、list_channelsはpolicy上read(Approval
+        // 経由の実行対象外)であるため、Integrityがmatchしても
+        // invalid_actionで拒否されるべき。
+        const subjectResult = buildApprovalSubject({
+          workId: "work-1",
+          taskId: "task-1",
+          service: "slack",
+          operation: "list_channels",
+          input: {},
+          connectionId: "conn-1",
+          riskClassSnapshot: "read",
+        });
+        if (!subjectResult.ok) throw new Error("unreachable");
+        const subject = subjectResult.subject;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "test",
+              metadata: { service: "slack", operation: "list_channels", input: {}, connectionId: "conn-1" },
+            },
+          },
+          subjectVersion: subject.subjectVersion,
+          subject: subject as unknown as Record<string, unknown>,
+          subjectHash: hashApprovalSubject(canonicalizeApprovalSubject(subject)),
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case29] Integrityが完全match(stored=currentで一致)していても、現在のPolicyがreadを示す操作はinvalid_actionで拒否される(絶対条件Step6C: ApprovalはPolicy DENYをoverrideしない、Policy再検証がIntegrity検証より先に働く)",
+        outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- Case31: 同一TACT connectionIdのまま、Connection内部の
+  // providerConnectionRef(内部credential参照)だけが変化した場合は
+  // integrity matchを維持する(credential rotationはAction semantic
+  // changeではない、絶対条件Step7) ----
+  {
+    const { deps, calls } = makeDeps({
+      getConnection: async (connectionId, userId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        // providerConnectionRef(内部credential参照)だけを変更する。
+        // connectionId自体(TACT-owned)は不変。
+        return makeConnection({ id: connectionId, providerConnectionRef: "ca_slack_ROTATED" });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case31] 同一TACT connectionIdのまま、Connection内部のproviderConnectionRef(credential参照)だけが変化してもintegrity matchは維持される(provider mechanicsであり、人間が再承認すべきAction semantic changeではない)",
+        outcome.status === "completed" && calls.executeIntegrationActionCalls === 1
+      )
+    );
+  }
+
+  // ---- Case32: 既にcompleted Run(同一subject) -> already_executed(dedup優先) ----
+  {
+    const existingRun = makeRun({
+      id: "run-existing",
+      taskId: "task-1",
+      attempt: 1,
+      status: "completed",
+      externalRef: { approvalId: "approval-1", providerExecutionRef: "log-0" },
+    });
+
+    const { deps, calls } = makeDeps({
+      listRunsForTask: async () => {
+        calls.listRunsForTaskCalls += 1;
+        return [existingRun];
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case32] 既に同一approvalIdで成功済みのRunがある場合(subject一致)、already_executedを返し、providerは再実行されない",
+        outcome.status === "already_executed" && calls.executeIntegrationActionCalls === 0 && calls.createRunCalls === 0
+      )
+    );
+  }
+
+  // ---- Case33: 既にcompleted Run + stored subjectが(将来の想定外の
+  // 事情で)現在の内容と一致しない場合でも、dedupが先に働き
+  // already_executedが返る(絶対条件Step2/11 Case4の結論、成功済みの
+  // side effectの報告を、後から発覚した不一致で上書きしない) ----
+  {
+    const existingRun = makeRun({
+      id: "run-existing",
+      taskId: "task-1",
+      attempt: 1,
+      status: "completed",
+      externalRef: { approvalId: "approval-1", providerExecutionRef: "log-0" },
+    });
+
+    const { deps, calls } = makeDeps({
+      listRunsForTask: async () => {
+        calls.listRunsForTaskCalls += 1;
+        return [existingRun];
+      },
+      getApproval: async (workId, userId, _accessToken, approvalId) => {
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({
+          id: approvalId,
+          workId,
+          payload: {
+            action: {
+              kind: "integration_action",
+              summary: "test",
+              metadata: {
+                service: "slack",
+                operation: "send_message",
+                input: { channel: "#general-CHANGED", text: "hi" },
+                connectionId: "conn-1",
+              },
+            },
+          },
+          // subject/subjectHashは古い(元の)内容のまま——payloadだけが
+          // 変化した状態を模す。
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[ARCH-P1c/Case33] 既にcompleted Runがある場合、subjectが(想定外に)一致しなくてもalready_executedが優先される(dedupがIntegrity検証より先、成功済みside effectの報告を上書きしない)、provider call 0",
+        outcome.status === "already_executed" && calls.executeIntegrationActionCalls === 0
       )
     );
   }
