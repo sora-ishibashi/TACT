@@ -20,6 +20,7 @@ import {
   requestApproval,
   approveApproval,
   rejectApproval,
+  checkApproverAllowed,
   type ApprovalExecutionDeps,
   type ApprovalRequest,
 } from "../../../core/tact-work/approval";
@@ -97,6 +98,8 @@ function makeFakeBackend(works: Record<string, string>): FakeBackend {
         requestedByActorId: params.requestedByActorId,
         requestedFromActorKind: params.requestedFromActorKind,
         requestedFromActorId: params.requestedFromActorId,
+        // Fast Port P3b。
+        allowedApproverIds: params.allowedApproverIds ?? null,
         status: "pending",
         reason: params.reason,
         payload: params.payload,
@@ -793,6 +796,344 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           params?.subjectJson === undefined &&
           params?.subjectHash === undefined &&
           params?.subjectCapturedAt === undefined
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P3b — AllowedResponder / Anti-Self-Approval Enforcement
+  // =========================
+  //
+  // 対象: core/tact-work/approval.tsのcheckApproverAllowed()と、
+  // approveApproval()/rejectApproval()への配線。既存のmakeRequest()の
+  // 既定値(requestedByActor: {kind:"ai", id:"phase-b3-mock-write"})は
+  // 現在の唯一のlive producer(core/tact-work/execution.ts)と同じ
+  // kind="ai"であるため、既存テストは全てself-approval判定の対象外
+  // のまま(regressionなし)——新しいtestでは明示的にkind="user"の
+  // requestedByActorを渡し、self-approval判定を意図的に発火させる。
+
+  // ---- [P3b-1] 既存Capability producer(kind="ai")のrequestは、承認者
+  // (人間)と絶対に一致しないため、self-approval判定に一切影響されない
+  // (Production Compatibility Reviewの直接証拠) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[P3b-1] requestedByActorKind='ai'(現在の唯一のlive producer)は、承認者が誰であってもself_approval_forbiddenにならない(既存本番Slack E2Eへの無影響の直接証拠)",
+        outcome.status === "approved"
+      )
+    );
+  }
+
+  // ---- [P3b-2] requester metadata captured(既存field、Phase B1から変更なし。P3bで壊れていないことの確認) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "user", id: "user-a" } }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    results.push(
+      check(
+        "[P3b-2] requestedByActorKind/Idがそのまま保存される(既存field)",
+        approval?.requestedByActorKind === "user" && approval?.requestedByActorId === "user-a"
+      )
+    );
+  }
+
+  // ---- [P3b-3] allowed approver stored ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ allowedApproverIds: ["user-1", "user-2"] }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    results.push(
+      check(
+        "[P3b-3] allowedApproverIdsが保存される",
+        Array.isArray(approval?.allowedApproverIds) &&
+          approval?.allowedApproverIds?.length === 2 &&
+          approval?.allowedApproverIds?.includes("user-2")
+      )
+    );
+  }
+
+  // ---- [P3b-4] human A request -> human A approve denied(self-approval) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "user", id: "user-1" } }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    const stored = await backend.deps.getApproval("work-1", "user-1", "fake-token", approval!.id);
+
+    results.push(
+      check(
+        "[P3b-4] requester(kind='user')===approverの場合、self_approval_forbiddenで拒否され、Approvalはpendingのまま(絶対条件10/11、Lindyの反面教師patternへの直接対策)",
+        outcome.status === "self_approval_forbidden" && stored?.status === "pending"
+      )
+    );
+  }
+
+  // ---- [P3b-5] human A request -> human B approve allowed(allowlistで明示許可) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "user", id: "user-a" }, allowedApproverIds: ["user-1"] }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[P3b-5] requester(user-a) !== approver(user-1、allowlistに含まれる) -> approved",
+        outcome.status === "approved"
+      )
+    );
+  }
+
+  // ---- [P3b-6] human A request -> human C approve denied(allowlistに含まれない) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "user", id: "user-a" }, allowedApproverIds: ["user-only-allowed"] }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    const stored = await backend.deps.getApproval("work-1", "user-1", "fake-token", approval!.id);
+
+    results.push(
+      check(
+        "[P3b-6] allowedApproverIdsに含まれないapprover(user-1)はapprover_not_allowedで拒否され、Approvalはpendingのまま",
+        outcome.status === "approver_not_allowed" && stored?.status === "pending"
+      )
+    );
+  }
+
+  // ---- [P3b-7] system request -> human owner approve allowed ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "system", id: "work-router" } }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[P3b-7] requestedByActorKind='system' -> 人間owner(user-1)のapproveは常に許可される(kindが異なれば同一actorたり得ない、Step4)",
+        outcome.status === "approved"
+      )
+    );
+  }
+
+  // ---- [P3b-8] agent(ai) request -> allowed human approve ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "ai", id: "integration.slack.send_message" } }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[P3b-8] requestedByActorKind='ai'(既存の唯一のlive producerと同じ形) -> 人間owner(user-1)のapproveは許可される",
+        outcome.status === "approved"
+      )
+    );
+  }
+
+  // ---- [P3b-9] requester self reject denied ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "user", id: "user-1" }, taskId: "task-1" }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    const outcome = await rejectApproval("work-1", "user-1", "fake-token", approval!.id, "自分の依頼を却下", backend.deps);
+
+    const stored = await backend.deps.getApproval("work-1", "user-1", "fake-token", approval!.id);
+
+    results.push(
+      check(
+        "[P3b-9] requester(kind='user')===approverのreject試行もself_approval_forbiddenで拒否され、Task/Workは変更されない(Step7: self-rejectもwithdrawalとして扱わず拒否する)",
+        outcome.status === "self_approval_forbidden" &&
+          stored?.status === "pending" &&
+          backend.taskStatusUpdates.length === 0
+      )
+    );
+  }
+
+  // ---- [P3b-10] explicit approver reject allowed ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "user", id: "user-a" }, allowedApproverIds: ["user-1"], taskId: "task-1" }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    const outcome = await rejectApproval("work-1", "user-1", "fake-token", approval!.id, "却下", backend.deps);
+
+    results.push(
+      check(
+        "[P3b-10] allowlistで明示許可されたapprover(user-1、requester(user-a)とは別人)のrejectは正常に成立する",
+        outcome.status === "rejected" &&
+          backend.taskStatusUpdates.some((u) => u.taskId === "task-1" && u.status === "failed")
+      )
+    );
+  }
+
+  // ---- [P3b-11] already answered(approved)状態からのself-approval相当の再approveも、既存のalready_resolvedが優先される(fail closedの多重確認) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "user", id: "user-1" }, allowedApproverIds: ["user-1"] }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    // allowlistでself-approvalが許可されていても、self_approval_forbidden
+    // (requester===approver)が優先して働くことを確認する
+    // (allowedApproverIdsはself-approval ruleを上書きしない、絶対条件10)。
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[P3b-11] allowedApproverIdsに自分自身が含まれていても、requester===approverであればself_approval_forbiddenが優先される(allowlistでself-approval ruleを上書きできない)",
+        outcome.status === "self_approval_forbidden"
+      )
+    );
+  }
+
+  // ---- [P3b-12] 空配列のallowedApproverIds -> canonical owner-onlyと同じ既定挙動(空配列は「誰も許可しない」ではない) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "ai", id: "cap" }, allowedApproverIds: [] }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[Step9] 空配列のallowedApproverIds -> 空配列はallowlist制限として扱わない(canonical owner-onlyの既定挙動と同じ、Work所有者のapproveは成功する)",
+        outcome.status === "approved"
+      )
+    );
+  }
+
+  // ---- [P3b-13] nullのallowedApproverIds(既存の全呼び出し元と同じ形) -> 既定owner-only挙動、regressionなし ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    // makeRequest()はallowedApproverIdsを指定しない(既存の全呼び出し元と同じ形)。
+    const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
+
+    results.push(
+      check(
+        "[Step9] allowedApproverIds未指定 -> undefined/nullのまま保存される(既存呼び出し元の動作を一切変えない)",
+        approval?.allowedApproverIds === null || approval?.allowedApproverIds === undefined
+      )
+    );
+  }
+
+  // ---- [P3b-14] 他Work所有者はself-approval判定に到達する前にnot_foundで拒否される(既存ownership defenseが先に働く、優先順位確認) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "user", id: "attacker" } }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    // "attacker"はWork所有者でもrequesterでもある特殊ケース: Work所有権
+    // チェックがself-approval判定より先に働くため、not_foundで止まる
+    // (Work自体にownershipが無いため、そもそもgetApproval()が
+    // undefinedを返す)。
+    const outcome = await approveApproval("work-1", "attacker", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[P3b-14] Work非所有者のapprove試行は、self-approval判定に到達する前にnot_foundで拒否される(既存ownership defenseが最優先、絶対条件11: identity/ownership checksはtrusted canonical boundary)",
+        outcome.status === "not_found"
+      )
+    );
+  }
+
+  // ---- [P3b-15] 外部Provider ID(例: Slack user id)をcanonical actorとして直接信用しない(型レベルの確認、Clarificationのtest[16]と対称) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(
+      makeRequest({ requestedByActor: { kind: "user", id: "user-1" }, allowedApproverIds: ["user-1"] }),
+      "user-1", "fake-token", backend.deps
+    );
+
+    // 生のSlack ID形式("U012ABCDEF")をuserIdとしてそのまま渡しても、
+    // 通常のuserIdと全く同じ扱い(Work所有権が無ければnot_found)になる
+    // ——外部Provider ID形式を特別に信用する分岐が無いことの直接証拠。
+    // (本番では、core/tact-bot/identity/がSlack IDをtactUserIdへ
+    // 解決してからこの関数を呼ぶため、生のSlack IDがuserIdとして直接
+    // 渡ることは無い——ここではcore層自体にそのような特別扱いの分岐が
+    // 存在しないことを確認する。)
+    const outcome = await approveApproval("work-1", "U012ABCDEF", "fake-token", approval!.id, undefined, backend.deps);
+
+    results.push(
+      check(
+        "[P3b-15] 外部Provider形式のraw actor id('U012ABCDEF')はcanonical userIdとして特別扱いされず、Work所有権が無いため通常通りnot_foundになる",
+        outcome.status === "not_found"
+      )
+    );
+  }
+
+  // =========================
+  // checkApproverAllowed() — pure function unit tests
+  // =========================
+
+  {
+    const requesterUser: Pick<Approval, "requestedByActorKind" | "requestedByActorId" | "allowedApproverIds"> = {
+      requestedByActorKind: "user",
+      requestedByActorId: "user-1",
+      allowedApproverIds: null,
+    };
+
+    results.push(
+      check(
+        "[checkApproverAllowed] requester(user-1)===decidingUserId(user-1) -> self_approval_forbidden",
+        checkApproverAllowed(requesterUser, "user-1").ok === false &&
+          (checkApproverAllowed(requesterUser, "user-1") as { ok: false; reason: string }).reason === "self_approval_forbidden"
+      )
+    );
+
+    results.push(
+      check(
+        "[checkApproverAllowed] requester(user-1)!==decidingUserId(user-2)、allowlist無し -> ok",
+        checkApproverAllowed(requesterUser, "user-2").ok === true
+      )
+    );
+
+    const requesterAi: Pick<Approval, "requestedByActorKind" | "requestedByActorId" | "allowedApproverIds"> = {
+      requestedByActorKind: "ai",
+      requestedByActorId: "user-1",
+      allowedApproverIds: null,
+    };
+
+    results.push(
+      check(
+        "[checkApproverAllowed] requestedByActorId(文字列として同じ)でも、kind='ai'であればself-approval判定は発火しない(kind差による分離、Step4)",
+        checkApproverAllowed(requesterAi, "user-1").ok === true
       )
     );
   }

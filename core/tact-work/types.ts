@@ -313,6 +313,18 @@ export interface Approval {
 
   requestedFromActorId: string;
 
+  // Fast Port P3b(Human Interaction Foundation拡張、HumanLayer ACP
+  // AllowedResponderIDs pattern)。core/tact-work/types.tsの
+  // Clarification.allowedResponderIdsと同じ設計・同じ既定値意味論を
+  // 持つ: undefined/null/空配列 = canonical owner-only(既定、Work
+  // ownership経由のgetApproval()が既に構造的に強制する)。non-empty
+  // 配列 = 明示allowlist(tactUserIdのみを格納する想定、外部Provider
+  // idを直接書き込まない)。P3b時点でこれを実際に設定するproducerは
+  // 存在しないため、Clarificationの同fieldと同じくfoundationのみ
+  // (型・checkApproverAllowed()のロジックは実装するが、未populateの
+  // 間は常にno-op)。
+  allowedApproverIds?: string[] | null;
+
   status: ApprovalStatus;
 
   reason: string;

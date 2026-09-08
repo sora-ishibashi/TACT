@@ -72,6 +72,11 @@ export interface ApprovalRequest {
 
   action?: ApprovalActionDescriptor;
 
+  // Fast Port P3b(HumanLayer ACP AllowedResponderIDs pattern)。省略時
+  // (既存の全呼び出し元)はcanonical owner-only(既定)のまま——
+  // checkApproverAllowed()参照。
+  allowedApproverIds?: string[] | null;
+
   metadata?: Record<string, unknown>;
 
   // Architecture Migration ARCH-P1b: 呼び出し元(core/tact-work/
@@ -192,6 +197,7 @@ export async function requestApproval(
       requestedByActorId: request.requestedByActor.id,
       requestedFromActorKind: request.requestedFromActor.kind,
       requestedFromActorId: request.requestedFromActor.id,
+      allowedApproverIds: request.allowedApproverIds ?? null,
       reason: request.reason,
       payload: toApprovalPayload(request),
       ...toSubjectStorageFields(request.subject),
@@ -246,8 +252,78 @@ export type ApprovalResolutionOutcome =
   | { status: "already_resolved"; approval: Approval }
   | { status: "invalid_transition"; approval: Approval }
   | { status: "work_not_resumable"; approval: Approval; workStatus: WorkStatus }
+  // Fast Port P3b(Human Interaction Foundation拡張、絶対条件10/11)。
+  | { status: "self_approval_forbidden"; approval: Approval }
+  | { status: "approver_not_allowed"; approval: Approval }
   | { status: "approved"; approval: Approval; workResumed: boolean }
   | { status: "rejected"; approval: Approval };
+
+// =========================
+// Actor Restriction (Fast Port P3b: Anti-Self-Approval Enforcement)
+// =========================
+//
+// Prior Art(ADAPT_AND_BORROW、source codeはコピーしない): HumanLayer
+// ACPのAllowedResponderIDs pattern・PreloopのAI/self-like decision
+// boundary defense。Commercial Reviewで確認済みのLindyの"the person
+// who asked can approve their own request"というshipping
+// counter-exampleを反面教師とする——TACTではこれを構造的に禁止する
+// (絶対条件10/11、docs/prior-art/commercial-reference-review.md
+// Section4)。
+//
+// 設計判断(Fast Port P3b指示のCritical design question、Option B採用、
+// 実repo調査で確定): 現在の唯一のlive Approval producer
+// (core/tact-work/execution.tsのapprovalRequirements drain loop、
+// core/tact-integration/propose.tsのproposeIntegrationAction()は
+// 現時点で呼び出し元が存在しない未配線のfoundationコードであることを
+// grep調査で確認済み)は、requestedByActorKindを常に"ai"
+// (Capability自身)として設定する——人間がrequesterになる経路は
+// 現時点で存在しない。したがって:
+//   - requestedByActorKind !== "user"(ai/bot/system)の場合、
+//     self-checkは常にスキップされる(異なるactor kind同士は
+//     「同一actor」たり得ない——Step4「system/agent requests, human
+//     approves → allowed」)。これにより、現在の本番Slack E2E
+//     (Capability → Approval → 人間owner承認)は一切影響を受けない
+//     (Step17/18参照、Production Compatibility Review)。
+//   - requestedByActorKind === "user"の場合のみ、requestedByActorIdと
+//     決定を下すuserId(approveApproval()/rejectApproval()の既存の
+//     呼び出し規約上、常にWeb JWT/Bot resolved tactUserIdという
+//     人間アカウントのid)が一致するかどうかで判定する——一致すれば
+//     self_approval_forbiddenとしてfail closedする。将来、人間が
+//     requesterとなる経路(例: proposeIntegrationAction()の将来の
+//     呼び出し元)が実装された場合に、初めて意味を持つ防御となる。
+//
+// allowedApproverIds(HumanLayer ACP AllowedResponderIDs pattern、
+// core/tact-work/clarification.tsのallowedResponderIdsと同じ設計)。
+// undefined/null/空配列 = canonical owner-only(既定、Work ownership
+// 経由のgetApproval()が既に構造的に強制する)。non-empty配列 =
+// 明示allowlist。P3b時点でこれを実際に設定するproducerは存在しない
+// ため、Clarificationの同fieldと同じくfoundationのみ(型・チェック
+// ロジックは実装するが、未populateの間は常にno-op)。
+//
+// LLM判定禁止(絶対条件9): このcheckは純粋な文字列比較のみで構成され、
+// LLM・Provider・Search呼び出しのいずれも一切行わない。
+export type ApprovalActorRestrictionFailure = "self_approval_forbidden" | "approver_not_allowed";
+
+export function checkApproverAllowed(
+  approval: Pick<Approval, "requestedByActorKind" | "requestedByActorId" | "allowedApproverIds">,
+  decidingUserId: string
+): { ok: true } | { ok: false; reason: ApprovalActorRestrictionFailure } {
+
+  if (approval.requestedByActorKind === "user" && approval.requestedByActorId === decidingUserId) {
+    return { ok: false, reason: "self_approval_forbidden" };
+  }
+
+  if (
+    approval.allowedApproverIds &&
+    approval.allowedApproverIds.length > 0 &&
+    !approval.allowedApproverIds.includes(decidingUserId)
+  ) {
+    return { ok: false, reason: "approver_not_allowed" };
+  }
+
+  return { ok: true };
+
+}
 
 // Work所有者(Approval経由でWork.userIdへ辿る、既存のgetApproval()の
 // ownership defenseをそのまま使う)以外はこの関数へ到達できない
@@ -291,6 +367,17 @@ export async function approveApproval(
 
   if (work.status !== "waiting_for_approval") {
     return { status: "work_not_resumable", approval, workStatus: work.status };
+  }
+
+  // Fast Port P3b(絶対条件10/11、最重要): ApprovalをapprovedへUPDATE
+  // する前に、決定を下すactor(userId)がこのApprovalを承認可能かを
+  // 確認する。checkApproverAllowed()参照——現在の唯一のlive producer
+  // (requestedByActorKind="ai")には影響しない設計(Production
+  // Compatibility Review、Fast Port P3b報告参照)。
+  const actorCheck = checkApproverAllowed(approval, userId);
+
+  if (!actorCheck.ok) {
+    return { status: actorCheck.reason, approval };
   }
 
   await deps.updateApprovalStatus(workId, userId, accessToken, approvalId, "approved", response);
@@ -377,6 +464,15 @@ export async function rejectApproval(
 
   if (work.status !== "waiting_for_approval") {
     return { status: "work_not_resumable", approval, workStatus: work.status };
+  }
+
+  // Fast Port P3b(絶対条件10/11、Step7: reject decisionもallowed
+  // approverのみ——self-rejectはApproval rejectionとして扱わない。
+  // requesterによるwithdrawalは別concept、今回は未実装)。
+  const actorCheck = checkApproverAllowed(approval, userId);
+
+  if (!actorCheck.ok) {
+    return { status: actorCheck.reason, approval };
   }
 
   await deps.updateApprovalStatus(workId, userId, accessToken, approvalId, "rejected", response);

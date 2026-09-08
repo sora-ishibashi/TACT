@@ -137,6 +137,8 @@ export interface ApprovalRow {
   requested_by_actor_id: string;
   requested_from_actor_kind: ActorKind;
   requested_from_actor_id: string;
+  // Fast Port P3b。既存rowはすべてNULL(20260911000000migration)。
+  allowed_approver_ids?: string[] | null;
   status: ApprovalStatus;
   reason: string;
   payload: Record<string, unknown>;
@@ -266,6 +268,7 @@ export function toApproval(row: ApprovalRow): Approval {
     requestedByActorId: row.requested_by_actor_id,
     requestedFromActorKind: row.requested_from_actor_kind,
     requestedFromActorId: row.requested_from_actor_id,
+    allowedApproverIds: row.allowed_approver_ids,
     status: row.status,
     reason: row.reason,
     payload: row.payload,
@@ -321,7 +324,7 @@ const RUN_COLUMNS =
   "id, work_id, task_id, attempt, capability, provider, model, status, started_at, completed_at, error, cost, external_ref, result, created_at";
 
 const APPROVAL_COLUMNS =
-  "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, requested_from_actor_kind, requested_from_actor_id, status, reason, payload, requested_at, responded_at, response, expires_at, created_at, subject_version, subject_json, subject_hash, subject_captured_at";
+  "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, requested_from_actor_kind, requested_from_actor_id, allowed_approver_ids, status, reason, payload, requested_at, responded_at, response, expires_at, created_at, subject_version, subject_json, subject_hash, subject_captured_at";
 
 const CLARIFICATION_COLUMNS =
   "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, allowed_responder_ids, status, reason_code, question, response, responded_by_actor_kind, responded_by_actor_id, requested_at, responded_at, expires_at, created_at";
@@ -905,6 +908,9 @@ export interface CreateApprovalParams {
   requestedByActorId: string;
   requestedFromActorKind: ActorKind;
   requestedFromActorId: string;
+  // Fast Port P3b。省略時(既存の全呼び出し元)はNULLのまま挿入される
+  // (=canonical owner-only、既定挙動、後方互換)。
+  allowedApproverIds?: string[] | null;
   reason: string;
   payload: Record<string, unknown>;
   expiresAt?: string | null;
@@ -942,6 +948,7 @@ export async function createApproval(
       requested_by_actor_id: params.requestedByActorId,
       requested_from_actor_kind: params.requestedFromActorKind,
       requested_from_actor_id: params.requestedFromActorId,
+      allowed_approver_ids: params.allowedApproverIds ?? null,
       reason: params.reason,
       payload: params.payload,
       expires_at: params.expiresAt ?? null,

@@ -1,0 +1,42 @@
+-- =====================================================================
+-- Migration: Approval Allowed Approver IDs (Fast Port P3b)
+-- =====================================================================
+--
+-- 背景 (Fast Port P3b指示、docs/architecture/p2-p5-final-architecture.md
+-- Section9-14の延長):
+--   HumanLayer ACPのAllowedResponderIDs pattern(ADAPT_AND_BORROW)を
+--   core/tact-work/types.tsのClarification.allowedResponderIds
+--   (Fast Port P3a、20260910000000migration)と同じ設計でtact_approvals
+--   へも追加する——「誰がRequestしたか」(既存のrequested_by_actor_kind/
+--   idカラム、Phase B1から変更なし)とは独立した、「誰がApprove可能か」
+--   というcanonical layerでの制約。
+--
+--   このmigrationはSchemaの追加のみを行う(絶対条件、Fast Port P3b
+--   Step19): 既存列の変更・削除・rename、ApprovalStatus値の変更、
+--   subject_*列の変更のいずれも一切行わない。既存Approval行はすべて
+--   NULLのまま有効に読み込める(既定 = canonical owner-only、Work
+--   ownership経由のRLSが既に構造的に強制する)。
+--
+-- 追加する列(nullable、additive ALTERのみ):
+--   allowed_approver_ids text[] null
+--     NULL/空配列 = canonical owner-only(既定)。non-empty配列 =
+--     明示allowlist(tactUserIdのみを格納する想定)。
+--
+-- 自己承認拒否(self-approval)のロジック自体はこのmigrationでは
+-- 実装しない——core/tact-work/approval.tsのapproveApproval()/
+-- rejectApproval()が、既存のrequested_by_actor_kind/idカラム
+-- (Phase B1から存在、今回変更なし)を使って判定する。新しい列は
+-- 一切追加しない(既存の唯一のsource of truthをそのまま使う)。
+--
+-- 後方互換性: 既存のtact_approvals行はすべて、追加する列がNULLのまま
+-- 有効に読み込める。破壊的ALTER(型変更・NOT NULL化・既存列の削除)は
+-- 一切行わない。
+--
+-- RLS: 行単位ポリシー(Phase B1、Workを経由するEXISTS句)がそのまま
+-- 新しい列にも適用されるため、ポリシー自体の変更は不要。
+--
+-- =====================================================================
+
+
+alter table public.tact_approvals
+  add column if not exists allowed_approver_ids text[] null;

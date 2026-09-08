@@ -104,6 +104,12 @@ function buildApprovalOnlyAckMessage(decision: "approve" | "reject", outcomeStat
       return "このApprovalは現在の状態では処理できません。";
     case "work_not_resumable":
       return "このApprovalに対応するWorkは既に終了しているため処理できません。";
+    // Fast Port P3b(絶対条件: raw internal reasonを漏らさない、固定
+    // 文言のみ)。
+    case "self_approval_forbidden":
+      return "自分が依頼した操作は、自分自身では承認できません。";
+    case "approver_not_allowed":
+      return "この操作を承認する権限がありません。";
     case "not_found":
       return "対象のApprovalが見つかりませんでした。";
     default:
