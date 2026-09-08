@@ -286,6 +286,14 @@ export interface TaskIntegrationRequirement {
   // 必ずこちらを見る(上記requiresApprovalは表示・ログ等の付随情報)。
   policyDecision: TaskIntegrationPolicyDecision;
 
+  // Fast Port P4b(docs/architecture/p2-p5-final-architecture.md
+  // Section15-20): core/tact-integration/policy.tsのPolicyReasonCode
+  // と同じ値の再宣言(cross-module importはしない、
+  // TaskIntegrationPolicyDecisionと同じ既存パターン)。policy.evaluated
+  // Audit Eventのreason_code列へそのまま渡すためだけの、stable
+  // machine-readable値。
+  policyReasonCode?: string | null;
+
   reason?: string;
 
   action: TaskApprovalAction;

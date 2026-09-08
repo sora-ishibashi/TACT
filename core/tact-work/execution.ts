@@ -23,6 +23,11 @@ import { requestClarification as defaultRequestClarification } from "./clarifica
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "./completion";
 import type { Work } from "./types";
 import { buildApprovalSubject, type ApprovalSubject } from "./approvalIntegrity";
+// Fast Port P4b: Audit emission。onTaskFinished()が受理した
+// canonical PolicyDecisionの初回評価(policy.evaluated)のcanonical
+// emitterである(Step1: 「evaluatePolicyDecision()を呼んだだけでは
+// なく、live callerがそのDecisionを受理した地点」)。
+import { emitAuditSafely as defaultEmitAuditSafely } from "./audit";
 
 // =========================
 // TACT Work — Work Execution Boundary (Architecture Migration Phase B2)
@@ -203,6 +208,10 @@ export interface RunWorkTurnDeps {
   // (core/tact-conversation/orchestration.ts)がこのfieldを上書きする。
   executeReadIntegrationAction: ExecuteReadIntegrationAction;
 
+  // Fast Port P4b: Audit-safe emission(既定は実emitAuditSafely、
+  // approval.ts/clarification.tsと同じDI pattern、Step13)。
+  emitAuditEvent: typeof defaultEmitAuditSafely;
+
 }
 
 // core/tact-conversation/orchestration.ts(runWorkTurn()の唯一の
@@ -223,6 +232,7 @@ export const defaultRunWorkTurnDeps: RunWorkTurnDeps = {
   reconcileWorkCompletionStatus: defaultReconcileWorkCompletionStatus,
   resolveIntegrationConnection: defaultResolveIntegrationConnection,
   executeReadIntegrationAction: defaultExecuteReadIntegrationAction,
+  emitAuditEvent: defaultEmitAuditSafely,
 };
 
 export interface RunWorkTurnParams {
@@ -526,6 +536,35 @@ export async function runWorkTurn(
           ...summary.integrationRequirement.action,
           metadata: { ...metadata, connectionId: connectionResolution.connectionId },
         };
+
+        // Fast Port P4b(Step1/Step3): policy.evaluated(初回評価)の
+        // canonical emitter。「evaluatePolicyDecision()を呼んだだけ
+        // ではなく、live callerがそのDecisionを受理した地点」
+        // (Step1)——このonTaskFinished()がConnection解決を終え、
+        // 実際にswitch文でrouting判断を行う直前が該当する。ALLOW/
+        // REQUIRE_APPROVAL/REQUIRE_INPUT/DENYのいずれの結果でも
+        // 無条件にemitする(Step17/24: DENYでもpolicy.evaluatedは
+        // 残る)。canonicalInput/secret等は一切含めない(Step19: 安全な
+        // service/operation/decision/riskClassのみ)。actorはpolicy
+        // evaluator自体をsystem actorとして扱う(Step3で検討・確定)。
+        await deps.emitAuditEvent(
+          {
+            workId: work.id,
+            taskId: workTaskId,
+            category: "policy",
+            eventType: "policy.evaluated",
+            actor: { kind: "system", id: "policy-evaluator" },
+            reasonCode: summary.integrationRequirement.policyReasonCode ?? null,
+            details: {
+              service: service ?? null,
+              operation: operation ?? null,
+              decision: summary.integrationRequirement.policyDecision,
+              riskClass: summary.integrationRequirement.riskClass ?? null,
+            },
+          },
+          userId,
+          accessToken
+        );
 
         // Fast Port P2b(docs/architecture/p2-p5-final-architecture.md
         // Section5-9、絶対条件10/11を継承): 旧

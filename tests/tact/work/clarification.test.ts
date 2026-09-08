@@ -46,6 +46,10 @@ interface FakeBackend {
   deps: ClarificationExecutionDeps;
   workStatusUpdates: string[];
   clarifications: Map<string, Clarification>;
+  // Fast Port P4b: emitAuditEvent()呼び出しを記録するfake(絶対条件、
+  // Fast Port P4a incidentの教訓: 実recordAuditEvent()/実Supabaseへは
+  // 一切接続しない)。
+  auditEventCalls: { eventType: string; workId: string; clarificationId?: string | null; actorKind?: string; actorId?: string; details?: unknown }[];
   setWorkStatus: (workId: string, status: WorkStatus) => void;
   getWorkStatus: (workId: string) => WorkStatus | undefined;
 }
@@ -58,6 +62,7 @@ function makeFakeBackend(works: Record<string, string>): FakeBackend {
 
   const workStatusUpdates: string[] = [];
   const clarifications = new Map<string, Clarification>();
+  const auditEventCalls: { eventType: string; workId: string; clarificationId?: string | null; actorKind?: string; actorId?: string; details?: unknown }[] = [];
   const workStatuses = new Map<string, WorkStatus>(
     Object.keys(works).map((id) => [id, "waiting_for_input" as WorkStatus])
   );
@@ -163,12 +168,27 @@ function makeFakeBackend(works: Record<string, string>): FakeBackend {
       workStatuses.set(workId, status);
     },
 
+    // Fast Port P4b: 実emitAuditSafely()/実recordAuditEvent()は
+    // 一切呼ばない——呼び出しを記録するだけのfake(絶対条件、Fast
+    // Port P4a incidentの教訓)。
+    emitAuditEvent: async (request) => {
+      auditEventCalls.push({
+        eventType: request.eventType,
+        workId: request.workId,
+        clarificationId: request.clarificationId,
+        actorKind: request.actor?.kind,
+        actorId: request.actor?.id,
+        details: request.details ?? null,
+      });
+    },
+
   };
 
   return {
     deps,
     workStatusUpdates,
     clarifications,
+    auditEventCalls,
     setWorkStatus: (workId, status) => workStatuses.set(workId, status),
     getWorkStatus: (workId) => workStatuses.get(workId),
   };
@@ -488,6 +508,103 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         outcome.status === "answered" &&
           (outcome.status === "answered" ? outcome.workResumed === false : false) &&
           backend.getWorkStatus("work-1") === "waiting_for_input"
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P4b(Resume brief Step8/12) — Audit event wiring
+  // =========================
+
+  // ---- [Audit] requestClarification() -> clarification.requestedが
+  // 1回だけemitされ、question全文はdetailsに含まれない ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+
+    const clarification = await requestClarification(
+      makeRequest({ taskId: "task-1", allowedResponderIds: ["user-1"] }),
+      "user-1",
+      "fake-token",
+      backend.deps
+    );
+
+    const requestedEvents = backend.auditEventCalls.filter((e) => e.eventType === "clarification.requested");
+    const serialized = JSON.stringify(backend.auditEventCalls);
+
+    results.push(
+      check(
+        "[Audit] requestClarification() -> clarification.requestedが正確に1回emitされ、対象clarificationId/workIdを保持する",
+        requestedEvents.length === 1 &&
+          requestedEvents[0].workId === "work-1" &&
+          requestedEvents[0].clarificationId === clarification?.id
+      )
+    );
+
+    results.push(
+      check(
+        "[Data minimization] clarification.requestedのAudit detailsにquestion全文が含まれない",
+        !serialized.includes("どのチャンネルへ送信しますか?")
+      )
+    );
+  }
+
+  // ---- [Audit] resolveClarification() -> clarification.answeredが
+  // 1回だけemitされ、response全文はdetailsに含まれない ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const clarification = await requestClarification(makeRequest(), "user-1", "fake-token", backend.deps);
+
+    await resolveClarification(
+      "work-1", "user-1", "fake-token", clarification!.id, { kind: "user", id: "user-1" }, "general channel", backend.deps
+    );
+
+    const answeredEvents = backend.auditEventCalls.filter((e) => e.eventType === "clarification.answered");
+    const serialized = JSON.stringify(backend.auditEventCalls);
+
+    results.push(
+      check(
+        "[Audit] resolveClarification() -> clarification.answeredが正確に1回emitされる",
+        answeredEvents.length === 1 && answeredEvents[0].clarificationId === clarification?.id
+      )
+    );
+
+    results.push(
+      check(
+        "[Data minimization] clarification.answeredのAudit detailsにresponse全文(general channel)が含まれない",
+        !serialized.includes("general channel")
+      )
+    );
+  }
+
+  // ---- [Audit non-fatal] emitAuditEventが失敗(no-op相当)しても、
+  // requestClarification()/resolveClarification()のcanonical outcomeは
+  // 一切変化しない(絶対条件3/4) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+
+    const clarification = await requestClarification(makeRequest(), "user-1", "fake-token", {
+      ...backend.deps,
+      emitAuditEvent: async () => { /* Audit書き込み失敗を模す(no-op) */ },
+    });
+
+    results.push(
+      check(
+        "[Audit non-fatal] requestClarification(): Audit emitterが失敗相当でもClarification作成・Work状態遷移は成功する",
+        clarification?.status === "pending" && backend.getWorkStatus("work-1") === "waiting_for_input"
+      )
+    );
+
+    const outcome = await resolveClarification(
+      "work-1", "user-1", "fake-token", clarification!.id, { kind: "user", id: "user-1" }, "general channel", {
+        ...backend.deps,
+        emitAuditEvent: async () => { /* no-op */ },
+      }
+    );
+
+    results.push(
+      check(
+        "[Audit non-fatal] resolveClarification(): Audit emitterが失敗相当でもanswered確定・response保存は成功する",
+        outcome.status === "answered" && outcome.clarification.response === "general channel"
       )
     );
   }

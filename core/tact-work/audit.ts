@@ -209,6 +209,72 @@ export async function recordAuditEvent(
 }
 
 // =========================
+// emitAuditSafely (Fast Port P4b Step2: Audit-safe emission helper)
+// =========================
+//
+// 設計判断(brief Step2、generic event bus化禁止への回答): Kafka/
+// EventEmitter/message broker等は一切導入しない。この関数は
+// recordAuditEvent()を呼ぶだけの薄いsafe wrapperであり、責務は
+// 以下の2つだけ:
+//   1. Audit書き込みのfailure(recordAuditEvent()が非recorded
+//      outcomeを返す、またはexceptionを投げる)を、呼び出し元の
+//      business outcomeへ絶対に昇格させない(絶対条件3/4、最重要:
+//      Approval承認・Clarification応答・Provider実行成功・Run確定
+//      等の既存canonical mutationは、Audit insertが失敗しても
+//      一切rollback/取り消しされない)。
+//   2. ただし完全にsilentに握り潰さない——既存のconsole.warn
+//      best-effortログpattern(core/tact-integration/execution.tsの
+//      reconcileAfterTaskUpdate()と同じ精神)で、診断可能な形にする。
+//      raw secret/token等がこのログへ漏れないよう、recordAuditEvent()
+//      自身がunsafe_detailsとして事前に拒否する設計(P4a)にそのまま
+//      乗る——ここでは追加のredactionを行わない。
+//
+// 呼び出し元(approval.ts/clarification.ts/execution.ts×2)は全て
+// このrelaxedな戻り値(void)を持つ関数をdeps経由で注入する
+// (Step13: 既存DI styleに合わせる、テストがreal Supabaseを
+// 誤って呼ばないようdefault実装ではなくfake実装を注入できるように
+// する——Fast Port P4a incidentの教訓)。
+//
+// 絶対条件(Step12、event ordering): この関数は常にawaitされる想定
+// (fire-and-forgetにしない)。Audit insert自体のlatencyは許容し、
+// event orderingの正確性を優先する(将来のbatch/async化はP4c以降で
+// 再評価、今回はDEFER)。
+export async function emitAuditSafely(
+  request: RecordAuditEventRequest,
+  userId: string,
+  accessToken: string,
+  deps: AuditEventExecutionDeps = defaultDeps
+): Promise<void> {
+
+  try {
+
+    const outcome = await recordAuditEvent(request, userId, accessToken, deps);
+
+    if (outcome.status !== "recorded") {
+
+      console.warn(
+        "[tact-work/audit] emitAuditSafely(): recordAuditEvent()がrecorded以外を返した" +
+        `(status=${outcome.status})。business操作は既に確定済みのため、この境界での` +
+        "Audit失敗によって取り消し・再試行は一切行わない。",
+        outcome.status === "unsafe_details" ? { suspiciousKeys: outcome.suspiciousKeys } : undefined
+      );
+
+    }
+
+  } catch (error) {
+
+    console.warn(
+      "[tact-work/audit] emitAuditSafely(): recordAuditEvent()が例外を投げた。" +
+      "business操作は既に確定済みのため、この境界でのAudit失敗によって取り消し・" +
+      "再試行は一切行わない(絶対条件3/4、Audit failure ≠ business operation failure)。",
+      error
+    );
+
+  }
+
+}
+
+// =========================
 // listAuditEventsForWork
 // =========================
 //

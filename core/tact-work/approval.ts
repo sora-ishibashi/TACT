@@ -13,6 +13,11 @@ import {
   hashApprovalSubject,
   type ApprovalSubject,
 } from "./approvalIntegrity";
+// Fast Port P4b(docs/architecture/p2-p5-final-architecture.md
+// Section15-20): Audit emission。approval.ts自身がapproval.requested/
+// approved/rejectedのcanonical emitterである(絶対条件Step14: 二重
+// emission回避、canonical mutation ownerがemitする)。
+import { emitAuditSafely } from "./audit";
 
 // =========================
 // TACT Work — Approval Execution Boundary (Architecture Migration
@@ -112,6 +117,11 @@ export interface ApprovalExecutionDeps {
 
   updateTaskStatus: typeof updateTaskStatus;
 
+  // Fast Port P4b: Audit-safe emission(既定は実emitAuditSafely——
+  // テストはfake実装を注入し、real Supabaseへの誤接続を防ぐ、Fast
+  // Port P4a incidentの教訓、Step13)。
+  emitAuditEvent: typeof emitAuditSafely;
+
 }
 
 const defaultDeps: ApprovalExecutionDeps = {
@@ -122,6 +132,7 @@ const defaultDeps: ApprovalExecutionDeps = {
   listApprovalsForWork,
   updateWorkStatus,
   updateTaskStatus,
+  emitAuditEvent: emitAuditSafely,
 };
 
 function toApprovalPayload(request: ApprovalRequest): Record<string, unknown> {
@@ -209,6 +220,29 @@ export async function requestApproval(
   }
 
   await deps.updateWorkStatus(request.workId, userId, accessToken, "waiting_for_approval");
+
+  // Fast Port P4b(Step4): approval.requestedのcanonical emitter。
+  // Approval row作成成功後にemitする(絶対条件: 事実が確定した地点、
+  // 推測でemit位置を決めない)。details/reasonCodeはStep19の
+  // data minimization方針に従い最小限(riskClass snapshotと
+  // allowedApproverの件数のみ、subject_json/canonicalInput/secretは
+  // 一切含めない)。
+  await deps.emitAuditEvent(
+    {
+      workId: request.workId,
+      taskId: approval.taskId,
+      approvalId: approval.id,
+      category: "approval",
+      eventType: "approval.requested",
+      actor: request.requestedByActor,
+      details: {
+        riskClass: request.subject?.riskClassSnapshot ?? null,
+        allowedApproverCount: request.allowedApproverIds?.length ?? 0,
+      },
+    },
+    userId,
+    accessToken
+  );
 
   return approval;
 
@@ -382,6 +416,25 @@ export async function approveApproval(
 
   await deps.updateApprovalStatus(workId, userId, accessToken, approvalId, "approved", response);
 
+  // Fast Port P4b(Step5): approval.approvedのcanonical emitter。
+  // status mutation成功後にemitする。actorは実際に決定を下した
+  // canonical user(userId)——Step5絶対条件通り。self_approval_forbidden/
+  // approver_not_allowed等の拒否されたattemptはこのPhaseではemit
+  // しない(successful state transitionのみをcanonical lifecycle
+  // eventとする、Step5の明示的な最小推奨——理由はFinal Reportで報告)。
+  await deps.emitAuditEvent(
+    {
+      workId,
+      taskId: approval.taskId,
+      approvalId: approval.id,
+      category: "approval",
+      eventType: "approval.approved",
+      actor: { kind: "user", id: userId },
+    },
+    userId,
+    accessToken
+  );
+
   // Phase B3指示Section9: Workをrunningへ戻す前に、同一Workに未解決
   // pending Approvalが残っていないか確認する(1件approveしただけで
   // Workを誤ってresumeしない)。
@@ -476,6 +529,21 @@ export async function rejectApproval(
   }
 
   await deps.updateApprovalStatus(workId, userId, accessToken, approvalId, "rejected", response);
+
+  // Fast Port P4b(Step5): approval.rejectedのcanonical emitter。
+  // status mutation成功後にemitする(approval.approvedと対称)。
+  await deps.emitAuditEvent(
+    {
+      workId,
+      taskId: approval.taskId,
+      approvalId: approval.id,
+      category: "approval",
+      eventType: "approval.rejected",
+      actor: { kind: "user", id: userId },
+    },
+    userId,
+    accessToken
+  );
 
   if (approval.taskId) {
     await deps.updateTaskStatus(workId, userId, accessToken, approval.taskId, "failed");

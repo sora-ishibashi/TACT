@@ -179,6 +179,18 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
     updateTaskStatusCalls: [] as { taskId: string; status: string }[],
     executeIntegrationActionCalls: 0,
     reconcileWorkCompletionStatusCalls: 0,
+    // Fast Port P4b: emitAuditEvent()呼び出しの記録(Fast Port P4a
+    // incidentの教訓——実装のrecordAuditEvent()/Supabaseへは絶対に
+    // 委譲せず、手書きのfakeだけを注入する)。
+    emitAuditEventCalls: [] as { eventType: string; category: string; reasonCode?: string | null; details?: unknown }[],
+    // Fast Port P4b(Step9/Resume brief Step12 ordering tests): 各fake
+    // handlerが呼ばれた実際の相対順序を1本のarrayへ記録する。Audit
+    // eventは"audit:<eventType>"、非Audit呼び出しはその名前で記録する
+    // (ordering testが「policy.evaluated→run.created→provider.called
+    // →provider呼び出し本体→provider.completed→completeRun→
+    // run.completed」等のtimelineをdeps境界だけから直接確認できる
+    // ようにするため)。
+    callOrder: [] as string[],
   };
 
   const deps: ExecuteApprovedIntegrationActionDeps = {
@@ -213,15 +225,18 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
 
     createRun: async (workId, userId, accessToken, taskId, params) => {
       calls.createRunCalls += 1;
+      calls.callOrder.push("createRun");
       return makeRun({ workId, taskId, attempt: params.attempt, capability: params.capability, provider: params.provider ?? null });
     },
 
     completeRun: async () => {
       calls.completeRunCalls += 1;
+      calls.callOrder.push("completeRun");
     },
 
     failRun: async () => {
       calls.failRunCalls += 1;
+      calls.callOrder.push("failRun");
     },
 
     updateTaskStatus: async (_workId, _userId, _accessToken, taskId, status) => {
@@ -230,12 +245,23 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
 
     executeIntegrationAction: async (): Promise<IntegrationExecutionResult> => {
       calls.executeIntegrationActionCalls += 1;
+      calls.callOrder.push("executeIntegrationAction");
       return { status: "completed", providerExecutionRef: "log-1", output: { ok: true } };
     },
 
     reconcileWorkCompletionStatus: async () => {
       calls.reconcileWorkCompletionStatusCalls += 1;
       return { status: "no_change", reason: "tasks_not_all_terminal" };
+    },
+
+    emitAuditEvent: async (request) => {
+      calls.emitAuditEventCalls.push({
+        eventType: request.eventType,
+        category: request.category,
+        reasonCode: request.reasonCode ?? null,
+        details: request.details ?? null,
+      });
+      calls.callOrder.push(`audit:${request.eventType}`);
     },
 
     ...overrides,
@@ -1904,6 +1930,261 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         calls.executeIntegrationActionCalls === 1 &&
           outcome.status === "failed" &&
           calls.updateTaskStatusCalls[calls.updateTaskStatusCalls.length - 1]?.status === "failed"
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P4b(Resume brief Step12) — Audit event ordering
+  // =========================
+  //
+  // 絶対条件(Resume brief Step10/Expected event ordering): read
+  // success timelineはpolicy.evaluated→run.created→provider.called→
+  // provider.completed→run.completedの順で確定する。この境界(core/
+  // tact-integration/execution.ts)自身が呼ぶdeps呼び出しの実際の
+  // 相対順序を、callOrder(実装/非Audit呼び出し双方を1本のarrayへ
+  // 記録するfake)で直接確認する。
+
+  // ---- [Ordering] read success timeline ----
+  {
+    const { deps, calls } = makeDeps();
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Ordering] read success: policy.evaluated→createRun→run.created→provider.called→executeIntegrationAction→provider.completed→completeRun→run.completedの順",
+        outcome.status === "completed" &&
+          JSON.stringify(calls.callOrder) ===
+            JSON.stringify([
+              "audit:policy.evaluated",
+              "createRun",
+              "audit:run.created",
+              "audit:provider.called",
+              "executeIntegrationAction",
+              "audit:provider.completed",
+              "completeRun",
+              "audit:run.completed",
+            ])
+      )
+    );
+  }
+
+  // ---- [Ordering] protected write success timeline(この境界内、
+  // live policy recheckからrun.completedまで) ----
+  {
+    const { deps, calls } = makeDeps();
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Ordering] protected write success(この境界内): policy.evaluated(live recheck)→createRun→run.created→provider.called→executeIntegrationAction→provider.completed→completeRun→run.completedの順",
+        outcome.status === "completed" &&
+          JSON.stringify(calls.callOrder) ===
+            JSON.stringify([
+              "audit:policy.evaluated",
+              "createRun",
+              "audit:run.created",
+              "audit:provider.called",
+              "executeIntegrationAction",
+              "audit:provider.completed",
+              "completeRun",
+              "audit:run.completed",
+            ])
+      )
+    );
+  }
+
+  // ---- [Ordering] provider failure timeline ----
+  {
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async () => {
+        calls.executeIntegrationActionCalls += 1;
+        calls.callOrder.push("executeIntegrationAction");
+        return { status: "failed", error: { code: "provider_execution_failed", message: "simulated provider failure", retryable: false } };
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Ordering] provider failure: policy.evaluated→createRun→run.created→provider.called→executeIntegrationAction→provider.failed→failRun→run.failedの順(completeRun/run.completedは一切呼ばれない)",
+        outcome.status === "failed" &&
+          calls.callOrder.includes("audit:provider.failed") &&
+          !calls.callOrder.includes("completeRun") &&
+          !calls.callOrder.includes("audit:run.completed") &&
+          JSON.stringify(calls.callOrder) ===
+            JSON.stringify([
+              "audit:policy.evaluated",
+              "createRun",
+              "audit:run.created",
+              "audit:provider.called",
+              "executeIntegrationAction",
+              "audit:provider.failed",
+              "failRun",
+              "audit:run.failed",
+            ])
+      )
+    );
+  }
+
+  // ---- [Ordering] Approval Integrity failure: run.created/provider.
+  // called共に0回(絶対条件、Resume brief Expected event ordering
+  // "Integrity failure: no run.created / no provider.called") ----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, accessToken, approvalId) => {
+        calls.getApprovalCalls += 1;
+        // subjectを承認後に変化させ、Integrity検証をmismatchさせる。
+        return makeApproval({ id: approvalId, workId, ...subjectStorageFields(makeMatchingSubject({ canonicalInput: { channel: "#other", text: "hi" } })) });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Ordering] Approval Integrity failure: audit event(run.created/provider.called)が一切emitされない",
+        outcome.status === "approval_integrity_failed" &&
+          calls.createRunCalls === 0 &&
+          calls.executeIntegrationActionCalls === 0 &&
+          !calls.callOrder.some((entry) => entry.startsWith("audit:run.") || entry.startsWith("audit:provider."))
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P4b(Resume brief Step12) — Audit failure is non-fatal
+  // =========================
+  //
+  // 絶対条件(最重要): Audit insert失敗(emitAuditEvent自体が例外を
+  // 投げる場合を含む)によって、既に確定した/確定しつつあるbusiness
+  // outcomeを一切変更しない。emitAuditEvent()はこの境界の視点からは
+  // 「呼ぶだけ」であり(実際の安全化はcore/tact-work/audit.tsの
+  // emitAuditSafely()内部で行われる)、ここでは「emitAuditEventが
+  // 例外を投げても、この境界のexecuteIntegrationActionCore()自体が
+  // 落ちない」ことまでは保証しない設計(emitAuditSafely()が例外を
+  // 握り潰す責務を持つため、この境界はemitAuditEventをtry/catchで
+  // 包まない——二重に安全化しない、絶対条件Step2の「責務は
+  // audit.ts側に一本化する」を守る)。そのため、この境界のテストでは
+  // 「emitAuditSafely()と同じcontractを守るfake(例外を投げず、単に
+  // 失敗をmarkするだけ)」を注入し、それでもbusiness outcomeが一切
+  // 影響を受けないことを確認する。
+  {
+    const { deps, calls } = makeDeps({
+      emitAuditEvent: async (request) => {
+        calls.emitAuditEventCalls.push({ eventType: request.eventType, category: request.category });
+        calls.callOrder.push(`audit:${request.eventType}`);
+        // emitAuditSafely()の実際の契約(例外を外へ伝播させない)を
+        // そのまま模す——ここでは意図的に何もしない(diagnostic
+        // loggingのみ、no-op)ことで「Audit書き込みが実質失敗した」
+        // 状況を安全に再現する。
+        return;
+      },
+    });
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Audit non-fatal] read success時、Audit emitterがno-op(=失敗相当)でもprovider成功・Run確定は一切影響を受けない(provider call=1・createRun=1・completeRun=1・failRun=0)",
+        outcome.status === "completed" &&
+          calls.executeIntegrationActionCalls === 1 &&
+          calls.createRunCalls === 1 &&
+          calls.completeRunCalls === 1 &&
+          calls.failRunCalls === 0
+      )
+    );
+  }
+
+  {
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async () => {
+        calls.executeIntegrationActionCalls += 1;
+        calls.callOrder.push("executeIntegrationAction");
+        return { status: "failed", error: { code: "provider_execution_failed", message: "simulated provider failure", retryable: false } };
+      },
+      emitAuditEvent: async (request) => {
+        calls.emitAuditEventCalls.push({ eventType: request.eventType, category: request.category });
+        calls.callOrder.push(`audit:${request.eventType}`);
+        return;
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[Audit non-fatal] provider失敗時、Audit emitterが失敗相当でもfailRun/Task failedは正しく確定し、providerの自動retry(2回目呼び出し)は発生しない(provider call=1・createRun=1・failRun=1・completeRun=0)",
+        outcome.status === "failed" &&
+          calls.executeIntegrationActionCalls === 1 &&
+          calls.createRunCalls === 1 &&
+          calls.failRunCalls === 1 &&
+          calls.completeRunCalls === 0
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P4b(Resume brief Step11/Step23) — Data minimization
+  // =========================
+  //
+  // 絶対条件: raw secret/token/provider credential/Approval subject_json
+  // 全文/canonicalInput全文のいずれもAuditへ複製されない。この境界が
+  // 実際にemitするdetailsの中身(service/operation/provider/attempt/
+  // capability程度の安全なmachine-readable値のみ)を、疑わしいkey名
+  // (P4aのcontainsSuspiciousKey()と同じ固定blocklist)およびcanonical
+  // Approval Subjectの既知key名(canonicalInput/connectionId/
+  // providerConnectionRef等)の不在で確認する。
+  {
+    const { deps, calls } = makeDeps();
+
+    await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    const serializedDetails = JSON.stringify(calls.emitAuditEventCalls.map((entry) => entry.details));
+    const forbiddenSubstrings = [
+      "token",
+      "secret",
+      "password",
+      "credential",
+      "apikey",
+      "api_key",
+      "authorization",
+      "subject_json",
+      "subjecthash",
+      "subjectHash",
+      "canonicalInput",
+      "providerConnectionRef",
+      "connectionId",
+      "ca_slack_123",
+    ];
+
+    results.push(
+      check(
+        "[Data minimization] 承認後write成功timelineでemitされた全auditイベントのdetailsに、secret/subject_json/canonicalInput/providerConnectionRef/実connectionId等が一切含まれない",
+        forbiddenSubstrings.every((substring) => !serializedDetails.toLowerCase().includes(substring.toLowerCase()))
       )
     );
   }

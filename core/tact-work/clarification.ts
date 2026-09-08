@@ -7,6 +7,9 @@ import {
   updateWorkStatus,
 } from "./store";
 import type { Clarification, ClarificationReasonCode, ActorReference, WorkStatus } from "./types";
+// Fast Port P4b: Audit emission。clarification.ts自身がclarification.
+// requested/answeredのcanonical emitterである(絶対条件Step14)。
+import { emitAuditSafely } from "./audit";
 
 // =========================
 // TACT Work — Clarification Execution Boundary (Fast Port P3a:
@@ -77,6 +80,10 @@ export interface ClarificationExecutionDeps {
 
   updateWorkStatus: typeof updateWorkStatus;
 
+  // Fast Port P4b: Audit-safe emission(既定は実emitAuditSafely、
+  // approval.tsと同じDI pattern、Step13)。
+  emitAuditEvent: typeof emitAuditSafely;
+
 }
 
 const defaultDeps: ClarificationExecutionDeps = {
@@ -86,6 +93,7 @@ const defaultDeps: ClarificationExecutionDeps = {
   updateClarificationStatus,
   listClarificationsForWork,
   updateWorkStatus,
+  emitAuditEvent: emitAuditSafely,
 };
 
 // =========================
@@ -126,6 +134,28 @@ export async function requestClarification(
   }
 
   await deps.updateWorkStatus(request.workId, userId, accessToken, "waiting_for_input");
+
+  // Fast Port P4b(Step6): clarification.requestedのcanonical emitter。
+  // Clarification row作成成功後にemitする。question全文はAuditへ
+  // 複製しない(Clarification row自体がcanonical current/history
+  // entity、Step6の明示的な方針)——detailsはallowedResponderの件数
+  // 程度の最小限。
+  await deps.emitAuditEvent(
+    {
+      workId: request.workId,
+      taskId: clarification.taskId,
+      clarificationId: clarification.id,
+      category: "clarification",
+      eventType: "clarification.requested",
+      actor: request.requestedByActor,
+      reasonCode: clarification.reasonCode,
+      details: {
+        allowedResponderCount: request.allowedResponderIds?.length ?? 0,
+      },
+    },
+    userId,
+    accessToken
+  );
 
   return clarification;
 
@@ -222,6 +252,23 @@ export async function resolveClarification(
     respondedByActorKind: responderActor.kind,
     respondedByActorId: responderActor.id,
   });
+
+  // Fast Port P4b(Step7): clarification.answeredのcanonical emitter。
+  // status answered確定後にemitする。response全文はAuditへコピー
+  // しない(Clarification rowがcanonical current/history entity、
+  // Step7の明示的な方針)——「answered occurred」だけで十分。
+  await deps.emitAuditEvent(
+    {
+      workId,
+      taskId: clarification.taskId,
+      clarificationId: clarification.id,
+      category: "clarification",
+      eventType: "clarification.answered",
+      actor: responderActor,
+    },
+    userId,
+    accessToken
+  );
 
   // approveApproval()と対称的な最小実装: 他に未解決のpending
   // Clarificationが残っていなければ、Workを"running"へ戻し

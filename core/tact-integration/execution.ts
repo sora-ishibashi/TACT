@@ -17,6 +17,13 @@ import {
   verifyApprovalIntegrity,
   type ApprovalIntegrityCheck,
 } from "../tact-work/approvalIntegrity";
+// Fast Port P4b(docs/architecture/p2-p5-final-architecture.md
+// Section15-20): Audit emission。このfileがpolicy.evaluated(live
+// recheck)・run.created/completed/failed・provider.called/completed/
+// failedのcanonical emitterである(絶対条件Step14: 二重emission回避、
+// canonical mutation ownerがemitする——Run/Provider lifecycleは
+// このfile以外どこにも作られない)。
+import { emitAuditSafely as defaultEmitAuditSafely } from "../tact-work/audit";
 import type { Approval, ApprovalStatus, Run, TaskStatus, WorkStatus } from "../tact-work/types";
 import type { Connection, IntegrationAction, IntegrationService } from "./types";
 
@@ -106,6 +113,10 @@ export interface ExecuteApprovedIntegrationActionDeps {
   // 状態)には影響させない(下記reconcileAfterTaskUpdate()参照)。
   reconcileWorkCompletionStatus: typeof defaultReconcileWorkCompletionStatus;
 
+  // Fast Port P4b: Audit-safe emission(既定は実emitAuditSafely、
+  // core/tact-work/approval.ts等と同じDI pattern、Step13)。
+  emitAuditEvent: typeof defaultEmitAuditSafely;
+
 }
 
 const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
@@ -120,6 +131,7 @@ const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
   updateTaskStatus,
   executeIntegrationAction: defaultExecuteIntegrationAction,
   reconcileWorkCompletionStatus: defaultReconcileWorkCompletionStatus,
+  emitAuditEvent: defaultEmitAuditSafely,
 };
 
 // 絶対条件(Phase C2.1a指示、最重要): reconciliation自体が失敗しても、
@@ -355,6 +367,42 @@ async function executeIntegrationActionCore(
     return { status: "not_found" };
   }
 
+  // Fast Port P4b(Step8): run.createdのcanonical emitter。Run row
+  // 作成成功直後、provider.calledより前にemitする(絶対条件、Step12
+  // event ordering)。P5前のためruntime-specific detailsは含めない
+  // (Step8: externalRef全体を無制限copyしない)。
+  await deps.emitAuditEvent(
+    {
+      workId,
+      taskId,
+      runId: run.id,
+      category: "execution",
+      eventType: "run.created",
+      details: { attempt: run.attempt, capability: run.capability },
+    },
+    userId,
+    accessToken
+  );
+
+  // Fast Port P4b(Step9): provider.calledのcanonical emitter。actual
+  // external provider invocationの直前にemitする。このevent emit自体が
+  // 失敗してもProvider callを中止しない(emitAuditSafely()自体が
+  // fail closedしない設計、絶対条件)。connectionId/providerConnectionRef
+  // 等のcredential-adjacent参照はdetailsへ一切含めない
+  // (Step9絶対条件、safe service/operationのみ)。
+  await deps.emitAuditEvent(
+    {
+      workId,
+      taskId,
+      runId: run.id,
+      category: "provider",
+      eventType: "provider.called",
+      details: { service: action.service, operation: action.operation, provider: connection.provider },
+    },
+    userId,
+    accessToken
+  );
+
   // Integration Gatewayへdispatch(絶対条件Section20: 1回だけ呼ぶ、
   // 自動retryしない)。
   const result = await deps.executeIntegrationAction({
@@ -377,10 +425,39 @@ async function executeIntegrationActionCore(
 
     const completedResult = { success: true, output: JSON.stringify(result.output ?? null) };
 
+    // Fast Port P4b(Step10): provider.completedのcanonical emitter。
+    // actual provider result取得直後にemitする(canonical Run status
+    // mutation確定より前——Step11: provider resultとRun outcomeを
+    // 分離する)。raw provider result全体はdetailsへ含めない(Step10
+    // 絶対条件: safe provider status/error categoryのみ)。
+    await deps.emitAuditEvent(
+      {
+        workId,
+        taskId,
+        runId: run.id,
+        category: "provider",
+        eventType: "provider.completed",
+        details: { service: action.service, operation: action.operation },
+      },
+      userId,
+      accessToken
+    );
+
     await deps.completeRun(workId, userId, accessToken, run.id, {
       result: completedResult,
       externalRef,
     });
+
+    // Fast Port P4b(Step11): run.completedのcanonical emitter。
+    // canonical Run status mutation確定後にemitする(provider.completed
+    // とは別event——infrastructure/storage failure等でprovider result
+    // とRun resultが一致しない可能性があるため、別eventとして残す
+    // 価値がある、Step11)。
+    await deps.emitAuditEvent(
+      { workId, taskId, runId: run.id, category: "execution", eventType: "run.completed" },
+      userId,
+      accessToken
+    );
 
     await deps.updateTaskStatus(workId, userId, accessToken, taskId, "completed");
 
@@ -403,10 +480,39 @@ async function executeIntegrationActionCore(
 
   externalRef.providerExecutionRef = result.providerExecutionRef ?? null;
 
+  // Fast Port P4b(Step10): provider.failedのcanonical emitter。raw
+  // provider error全文(result.error.message)はdetailsへそのまま
+  // 入れない——既存のcanonical IntegrationErrorCode(core/tact-integration/
+  // types.ts、"connection_missing"|"authentication_error"|
+  // "invalid_action"|"provider_execution_failed"|"temporary_failure"|
+  // "authorization_denied"という既に安全なmachine-readable taxonomy)の
+  // codeだけを使う——secret混入の可能性が既に排除された既存の型を
+  // 再利用するだけで、新しいnormalize処理を作らない。
+  await deps.emitAuditEvent(
+    {
+      workId,
+      taskId,
+      runId: run.id,
+      category: "provider",
+      eventType: "provider.failed",
+      reasonCode: result.error.code,
+      details: { service: action.service, operation: action.operation },
+    },
+    userId,
+    accessToken
+  );
+
   await deps.failRun(workId, userId, accessToken, run.id, {
     error: result.error.message,
     externalRef,
   });
+
+  // Fast Port P4b(Step11): run.failedのcanonical emitter。
+  await deps.emitAuditEvent(
+    { workId, taskId, runId: run.id, category: "execution", eventType: "run.failed", reasonCode: result.error.code },
+    userId,
+    accessToken
+  );
 
   await deps.updateTaskStatus(workId, userId, accessToken, taskId, "failed");
 
@@ -477,6 +583,30 @@ export async function executeApprovedIntegrationAction(
   // 内部Decisionそのものは必ず区別する)、statusは既存の
   // invalid_actionのままAPI surfaceを拡張しない。
   const policyDecision = evaluatePolicyDecision(extracted.action.service, extracted.action.operation);
+
+  // Fast Port P4b(Step7): policy.evaluatedのcanonical emitter(live
+  // recheck側)。この境界での再評価はここで一度だけ行われる——結果が
+  // "require_approval"以外(=defense-in-depthで拒否される)場合も含め、
+  // 必ずemitする(Step17: DENY相当のtimelineでもpolicy.evaluatedだけは
+  // 残す)。
+  await deps.emitAuditEvent(
+    {
+      workId,
+      taskId: approval.taskId,
+      approvalId,
+      category: "policy",
+      eventType: "policy.evaluated",
+      reasonCode: policyDecision.reasonCode,
+      details: {
+        service: extracted.action.service,
+        operation: extracted.action.operation,
+        decision: policyDecision.decision,
+        riskClass: policyDecision.riskClass ?? null,
+      },
+    },
+    userId,
+    accessToken
+  );
 
   if (policyDecision.decision !== "require_approval") {
     return {
@@ -644,6 +774,27 @@ export async function executeReadIntegrationAction(
   // なる、requiresApprovalForRiskClass()経由の既存導出をそのまま
   // 再利用しているため)。
   const policyDecision = evaluatePolicyDecision(action.service, action.operation);
+
+  // Fast Port P4b(Step7): policy.evaluatedのcanonical emitter(read
+  // 境界側のlive recheck)。write側(executeApprovedIntegrationAction())
+  // と同じ理由で、"allow"以外へ倒れる場合も含め必ずemitする。
+  await deps.emitAuditEvent(
+    {
+      workId,
+      taskId,
+      category: "policy",
+      eventType: "policy.evaluated",
+      reasonCode: policyDecision.reasonCode,
+      details: {
+        service: action.service,
+        operation: action.operation,
+        decision: policyDecision.decision,
+        riskClass: policyDecision.riskClass ?? null,
+      },
+    },
+    userId,
+    accessToken
+  );
 
   if (policyDecision.decision !== "allow") {
     return {

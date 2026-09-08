@@ -66,6 +66,10 @@ function makeRecordingDeps(
     requestApprovalCalls: { workId: string; taskId?: string | null; reason: string; action?: unknown; subject?: unknown }[];
     executeReadIntegrationActionCalls: { taskId: string; connectionId: string; action: unknown }[];
     requestClarificationCalls: { workId: string; taskId?: string | null; reasonCode: string; question: string }[];
+    // Fast Port P4b: emitAuditEvent()呼び出しを記録するfake(絶対条件、
+    // Fast Port P4a incidentの教訓: 実recordAuditEvent()/実Supabaseへは
+    // 一切接続しない)。
+    emitAuditEventCalls: { eventType: string; workId: string; taskId?: string | null; reasonCode?: string | null }[];
   } = {
     workStatusUpdates: [],
     createTaskDescriptions: [],
@@ -78,6 +82,7 @@ function makeRecordingDeps(
     requestApprovalCalls: [],
     executeReadIntegrationActionCalls: [],
     requestClarificationCalls: [],
+    emitAuditEventCalls: [],
   };
 
   let nextTaskDbId = 1;
@@ -247,6 +252,18 @@ function makeRecordingDeps(
         action: params.action,
       });
       return { status: "invalid_action" };
+    },
+
+    // Fast Port P4b: 実emitAuditSafely()/実recordAuditEvent()は
+    // 一切呼ばない——呼び出しを記録するだけのfake(絶対条件、Fast
+    // Port P4a incidentの教訓)。
+    emitAuditEvent: async (request) => {
+      calls.emitAuditEventCalls.push({
+        eventType: request.eventType,
+        workId: request.workId,
+        taskId: request.taskId,
+        reasonCode: request.reasonCode,
+      });
     },
 
     ...overrides,
@@ -877,6 +894,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Case1(C2.1c-a)] Approval proposal段階ではupdateTaskStatus()が一切呼ばれず、Taskはcreated時の初期status(pending)のまま(completedとしてpersistしない、Approvalはcompletion前のgate)",
         calls.updateTaskStatusCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Audit/Fast Port P4b] policyDecision='require_approval': onTaskFinished()がpolicy.evaluatedを正確に1回emitし、requestApproval()呼び出しより前に評価済みである(reasonCode/decision/riskClassを保持)",
+        calls.emitAuditEventCalls.length === 1 &&
+          calls.emitAuditEventCalls[0].eventType === "policy.evaluated" &&
+          calls.requestApprovalCalls.length === 1
       )
     );
 
@@ -1570,6 +1596,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
             ?.operation === "send_message"
       )
     );
+
+    results.push(
+      check(
+        "[Audit/Fast Port P4b][Case R4] policyDecision='allow'(requiresApproval:false)でもonTaskFinished()がpolicy.evaluatedを正確に1回emitする(絶対条件: allowでもDENYでも一律にemitする)",
+        calls.emitAuditEventCalls.length === 1 && calls.emitAuditEventCalls[0].eventType === "policy.evaluated"
+      )
+    );
   }
 
   // ---- Fast Port P2b — canonical PolicyDecision exhaustive switch ----
@@ -1700,6 +1733,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         calls.workStatusUpdates.includes("waiting_for_input")
       )
     );
+
+    results.push(
+      check(
+        "[Audit/Fast Port P4b][Case R5] policyDecision='require_input'でもonTaskFinished()がpolicy.evaluatedを正確に1回emitする",
+        calls.emitAuditEventCalls.length === 1 && calls.emitAuditEventCalls[0].eventType === "policy.evaluated"
+      )
+    );
   }
 
   // ---- [Case R6] policyDecision==="deny" -> provider 0 / Run 0 / Approval 0、Taskはpendingのまま ----
@@ -1788,6 +1828,54 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Case R6] policyDecision==='deny'はTask statusを変更しない(updateTaskStatusCalls===0、pendingのまま据え置く)",
         calls.updateTaskStatusCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Audit/Fast Port P4b][Case R6/DENY] policy.evaluatedのみが正確に1回emitされ、Approval/Clarification/Run/Providerのいずれのeventも一切emitされない(絶対条件、Expected event ordering: DENY -> policy event only)",
+        calls.emitAuditEventCalls.length === 1 && calls.emitAuditEventCalls[0].eventType === "policy.evaluated"
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P4b(Resume brief Step12) — Audit failure is non-fatal
+  // (work/execution.tsのonTaskFinished()境界)
+  // =========================
+  //
+  // 絶対条件(最重要): Audit emitterが失敗相当(no-op、emitAuditSafely()
+  // 自身の契約=例外を投げない)であっても、require_approval分岐の
+  // requestApproval()呼び出し・Work状態遷移は一切影響を受けない。
+  {
+    const { deps, calls } = makeRecordingDeps(makeIntegrationOrchestration("task-integration-audit-nonfatal-1"), {
+      resolveIntegrationConnection: async (params) => {
+        calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
+        return { status: "single", connectionId: "conn-audit-nonfatal-1" };
+      },
+      emitAuditEvent: async (request) => {
+        calls.emitAuditEventCalls.push({
+          eventType: request.eventType,
+          workId: request.workId,
+          taskId: request.taskId,
+          reasonCode: request.reasonCode,
+        });
+        // Audit書き込み失敗(emitAuditSafely()契約通りno-op、例外は
+        // 投げない)を模す。
+      },
+    });
+
+    await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Audit non-fatal] Audit emitterが失敗相当でも、policy.evaluated emit後のrequestApproval()呼び出し・Work waiting_for_approval遷移は正常に完了する",
+        calls.emitAuditEventCalls.length === 1 &&
+          calls.requestApprovalCalls.length === 1 &&
+          calls.workStatusUpdates[calls.workStatusUpdates.length - 1] === "waiting_for_approval"
       )
     );
   }

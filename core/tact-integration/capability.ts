@@ -123,6 +123,10 @@ export async function runIntegrationSlackSendMessageCapability(
       // exhaustive switchする。
       policyDecision: decision.decision,
 
+      // Fast Port P4b: policy.evaluated Audit Eventのreason_code列へ
+      // そのまま渡すためだけの値。
+      policyReasonCode: decision.reasonCode,
+
       reason: "外部SaaS(Slack)への投稿には承認が必要です",
 
       // Architecture Migration ARCH-P1b: このrequirementを判定した
@@ -203,6 +207,10 @@ export async function runIntegrationSlackListChannelsCapability(): Promise<Capab
 
       // Fast Port P2b: live decisionのsource of truth。
       policyDecision: decision.decision,
+
+      // Fast Port P4b: policy.evaluated Audit Eventのreason_code列へ
+      // そのまま渡すためだけの値。
+      policyReasonCode: decision.reasonCode,
 
       // Architecture Migration ARCH-P1b: readはApprovalを一切経由
       // しない(絶対条件Correction2)ためriskClassSnapshotが実際に

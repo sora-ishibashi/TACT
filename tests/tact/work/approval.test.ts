@@ -52,6 +52,10 @@ interface FakeBackend {
   workStatusUpdates: string[];
   taskStatusUpdates: { taskId: string; status: string }[];
   approvals: Map<string, Approval>;
+  // Fast Port P4b: emitAuditEvent()呼び出しを記録するfake
+  // (絶対条件、Fast Port P4a incidentの教訓: 実recordAuditEvent()/
+  // 実Supabaseへは一切接続しない)。
+  auditEventCalls: { eventType: string; workId: string; approvalId?: string | null; actorKind?: string; actorId?: string; details?: unknown }[];
   setWorkStatus: (workId: string, status: WorkStatus) => void;
   getWorkStatus: (workId: string) => WorkStatus | undefined;
 }
@@ -64,6 +68,7 @@ function makeFakeBackend(works: Record<string, string>): FakeBackend {
   const workStatusUpdates: string[] = [];
   const taskStatusUpdates: { taskId: string; status: string }[] = [];
   const approvals = new Map<string, Approval>();
+  const auditEventCalls: { eventType: string; workId: string; approvalId?: string | null; actorKind?: string; actorId?: string; details?: unknown }[] = [];
   const workStatuses = new Map<string, WorkStatus>(
     Object.keys(works).map((id) => [id, "running" as WorkStatus])
   );
@@ -169,12 +174,27 @@ function makeFakeBackend(works: Record<string, string>): FakeBackend {
       taskStatusUpdates.push({ taskId, status });
     },
 
+    // Fast Port P4b: 実emitAuditSafely()/実recordAuditEvent()は
+    // 一切呼ばない——呼び出しを記録するだけのfake(絶対条件、Fast
+    // Port P4a incidentの教訓)。
+    emitAuditEvent: async (request) => {
+      auditEventCalls.push({
+        eventType: request.eventType,
+        workId: request.workId,
+        approvalId: request.approvalId,
+        actorKind: request.actor?.kind,
+        actorId: request.actor?.id,
+        details: request.details ?? null,
+      });
+    },
+
   };
 
   return {
     deps,
     workStatusUpdates,
     taskStatusUpdates,
+    auditEventCalls,
     approvals,
     setWorkStatus: (workId, status) => workStatuses.set(workId, status),
     getWorkStatus: (workId) => workStatuses.get(workId),
@@ -1134,6 +1154,126 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[checkApproverAllowed] requestedByActorId(文字列として同じ)でも、kind='ai'であればself-approval判定は発火しない(kind差による分離、Step4)",
         checkApproverAllowed(requesterAi, "user-1").ok === true
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P4b(Resume brief Step7/12) — Audit event wiring
+  // =========================
+
+  // ---- [Audit] requestApproval() -> approval.requestedが1回だけ
+  // emitされ、riskClass/allowedApproverCountのみを保持する(subject
+  // 全文・reason文字列は含まれない) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+
+    const subjectResult = buildApprovalSubject({
+      workId: "work-1",
+      taskId: "task-1",
+      service: "slack",
+      operation: "send_message",
+      input: { channel: "#general", text: "secret-looking-but-just-a-message" },
+      connectionId: "conn-1",
+      riskClassSnapshot: "write",
+    });
+
+    if (!subjectResult.ok) {
+      throw new Error("test fixture subject must build");
+    }
+
+    const approval = await requestApproval(
+      makeRequest({ taskId: "task-1", allowedApproverIds: ["user-2"], subject: subjectResult.subject }),
+      "user-1",
+      "fake-token",
+      backend.deps
+    );
+
+    const requestedEvents = backend.auditEventCalls.filter((e) => e.eventType === "approval.requested");
+    const serialized = JSON.stringify(backend.auditEventCalls);
+
+    results.push(
+      check(
+        "[Audit] requestApproval() -> approval.requestedが正確に1回emitされ、対象approvalId/workIdを保持する",
+        requestedEvents.length === 1 &&
+          requestedEvents[0].workId === "work-1" &&
+          requestedEvents[0].approvalId === approval?.id
+      )
+    );
+
+    results.push(
+      check(
+        "[Data minimization] approval.requestedのAudit detailsにsubject_json/canonicalInput/reason文字列/connectionIdが含まれない",
+        !serialized.includes("secret-looking-but-just-a-message") &&
+          !serialized.includes("conn-1") &&
+          !serialized.toLowerCase().includes("subject_json") &&
+          !serialized.includes("外部SaaSへの投稿には承認が必要です")
+      )
+    );
+  }
+
+  // ---- [Audit] approveApproval() -> approval.approvedが1回だけ
+  // emitされる。rejectApproval()も対称的にapproval.rejectedを1回だけ
+  // emitする(絶対条件、二重emission禁止) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest(), "user-1", "fake-token", backend.deps);
+
+    await approveApproval("work-1", "user-1", "fake-token", approval!.id, "OK", backend.deps);
+
+    const approvedEvents = backend.auditEventCalls.filter((e) => e.eventType === "approval.approved");
+    const rejectedEvents = backend.auditEventCalls.filter((e) => e.eventType === "approval.rejected");
+
+    results.push(
+      check(
+        "[Audit] approveApproval() -> approval.approvedが正確に1回emitされ、approval.rejectedは一切emitされない",
+        approvedEvents.length === 1 && rejectedEvents.length === 0
+      )
+    );
+  }
+
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest({ taskId: "task-1" }), "user-1", "fake-token", backend.deps);
+
+    await rejectApproval("work-1", "user-1", "fake-token", approval!.id, "却下します", backend.deps);
+
+    const approvedEvents = backend.auditEventCalls.filter((e) => e.eventType === "approval.approved");
+    const rejectedEvents = backend.auditEventCalls.filter((e) => e.eventType === "approval.rejected");
+
+    results.push(
+      check(
+        "[Audit] rejectApproval() -> approval.rejectedが正確に1回emitされ、approval.approvedは一切emitされない",
+        rejectedEvents.length === 1 && approvedEvents.length === 0
+      )
+    );
+  }
+
+  // ---- [Audit non-fatal] emitAuditEventが失敗(no-op相当)しても、
+  // approve/rejectのcanonical outcomeは一切変化しない(絶対条件3/4) ----
+  {
+    const backend = makeFakeBackend({ "work-1": "user-1" });
+    const approval = await requestApproval(makeRequest(), "user-1", "fake-token", {
+      ...backend.deps,
+      emitAuditEvent: async () => { /* Audit書き込み失敗を模す(no-op、例外は投げない契約はemitAuditSafely側の責務) */ },
+    });
+
+    results.push(
+      check(
+        "[Audit non-fatal] requestApproval(): Audit emitterが失敗相当でもApproval作成・Work状態遷移は成功する",
+        approval?.status === "pending" && backend.workStatusUpdates[0] === "waiting_for_approval"
+      )
+    );
+
+    const outcome = await approveApproval("work-1", "user-1", "fake-token", approval!.id, "OK", {
+      ...backend.deps,
+      emitAuditEvent: async () => { /* no-op */ },
+    });
+
+    results.push(
+      check(
+        "[Audit non-fatal] approveApproval(): Audit emitterが失敗相当でもapproved確定・Work resumeは成功する",
+        outcome.status === "approved" && outcome.workResumed === true
       )
     );
   }
