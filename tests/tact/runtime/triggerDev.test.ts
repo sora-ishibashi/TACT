@@ -65,6 +65,22 @@ function makeFailingAdapter(error: unknown): TriggerDevRuntimeAdapter {
   });
 }
 
+// Fast Port P5d: dispatch idempotencyのtest用。実際にadapterへ渡された
+// options(idempotencyKey/tags)を検査できるようにする。
+function makeCapturingAdapter(): {
+  adapter: TriggerDevRuntimeAdapter;
+  capturedCalls: { taskId: string; payload: TriggerDevJobPayload; options?: { idempotencyKey?: string; idempotencyKeyTTL?: string; tags?: string[] } }[];
+} {
+  const capturedCalls: { taskId: string; payload: TriggerDevJobPayload; options?: { idempotencyKey?: string; idempotencyKeyTTL?: string; tags?: string[] } }[] = [];
+  const adapter = new TriggerDevRuntimeAdapter(TEST_CONFIG, {
+    triggerFn: async (taskId, payload, options) => {
+      capturedCalls.push({ taskId, payload, options });
+      return { id: `run_fake_${capturedCalls.length}` };
+    },
+  });
+  return { adapter, capturedCalls };
+}
+
 export async function run(): Promise<{ pass: number; fail: number }> {
 
   const results: CheckResult[] = [];
@@ -456,6 +472,175 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         resolved?.secretKey === "tr_dev_x" &&
           resolved?.baseURL === "https://self-hosted.example.com" &&
           resolved?.taskIds.integrationAction === DEFAULT_TRIGGER_DEV_TASK_IDS.integrationAction
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P5d — dispatch idempotency(Step29)
+  // =========================
+
+  // ---- [P5d-1] same TACT Run(runId)を2回startExecution()しても、
+  // official idempotencyKey primitive経由で同じdispatch identityが
+  // 使われる(自前in-memory dedupではない、triggerFnは単に2回呼ばれる
+  // が、同じidempotencyKeyが渡ることをこのtestで確認する。実際の
+  // dedupはTrigger.dev server側の責務であり、fakeでは再現しない) ----
+  {
+    const { adapter, capturedCalls } = makeCapturingAdapter();
+
+    await adapter.startExecution(makeRequest({ runId: "run-dup-1" }));
+    await adapter.startExecution(makeRequest({ runId: "run-dup-1" }));
+
+    results.push(
+      check(
+        "[P5d-1] 同じrunIdでの2回のstartExecution()呼び出しは、同じidempotencyKeyを持つ(Trigger.dev server側のidempotent lookupに委ねる、自前dedupはしない)",
+        capturedCalls.length === 2 &&
+          capturedCalls[0].options?.idempotencyKey === capturedCalls[1].options?.idempotencyKey
+      )
+    );
+  }
+
+  // ---- [P5d-2] new TACT Run(異なるrunId)は異なるidempotencyKeyを持つ ----
+  {
+    const { adapter, capturedCalls } = makeCapturingAdapter();
+
+    await adapter.startExecution(makeRequest({ runId: "run-a" }));
+    await adapter.startExecution(makeRequest({ runId: "run-b" }));
+
+    results.push(
+      check(
+        "[P5d-2] 異なるrunIdは異なるidempotencyKeyを持つ(Retry = new Run ⇒ new idempotency keyという絶対条件の直接確認)",
+        capturedCalls[0].options?.idempotencyKey !== capturedCalls[1].options?.idempotencyKey
+      )
+    );
+  }
+
+  // ---- [P5d-3][P5d-4] idempotencyKeyはrunIdだけから決定論的に導出される、secret/canonical inputを含まない ----
+  {
+    const { adapter, capturedCalls } = makeCapturingAdapter();
+
+    await adapter.startExecution(makeRequest({ runId: "run-stable-1" }));
+
+    const key = capturedCalls[0].options?.idempotencyKey;
+
+    results.push(
+      check(
+        "[P5d-3] idempotencyKeyはrunIdを含む安定した文字列であり、secret/token等を含まない",
+        typeof key === "string" && key.includes("run-stable-1") && !key.toLowerCase().includes("token") && !key.toLowerCase().includes("secret")
+      )
+    );
+
+    results.push(
+      check(
+        "[P5d-4] tagsにもsecretが含まれない(dashboard相関用の非secret情報のみ)",
+        (capturedCalls[0].options?.tags ?? []).every((tag) => !tag.toLowerCase().includes("token") && !tag.toLowerCase().includes("secret"))
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P5d — RuntimeError.outcomeKnown mapping(Step30)
+  // =========================
+  {
+    const definiteCodes: { status: number; label: string }[] = [
+      { status: 400, label: "BadRequestError" },
+      { status: 401, label: "AuthenticationError" },
+      { status: 403, label: "PermissionDeniedError" },
+      { status: 404, label: "NotFoundError" },
+      { status: 409, label: "ConflictError" },
+      { status: 422, label: "UnprocessableEntityError" },
+      { status: 429, label: "RateLimitError" },
+      { status: 500, label: "InternalServerError" },
+    ];
+
+    const allDefinite = definiteCodes.every(({ status }) => {
+      const normalized = normalizeTriggerDevError(ApiError.generate(status, {}, "msg", undefined));
+      return normalized.outcomeKnown === true;
+    });
+
+    results.push(
+      check(
+        "[P5d/ambiguity] 明確なHTTP応答(400/401/403/404/409/422/429/500)を返すエラーは、いずれもoutcomeKnown===true(definite failure)",
+        allDefinite
+      )
+    );
+
+    const ambiguous = normalizeTriggerDevError(ApiError.generate(undefined, undefined, undefined, undefined));
+
+    results.push(
+      check(
+        "[P5d/ambiguity] ネットワーク到達不能(status===undefined、ApiConnectionError相当)はoutcomeKnown===false(ambiguous)",
+        ambiguous.outcomeKnown === false
+      )
+    );
+
+    const unclassified = normalizeTriggerDevError(new TypeError("unexpected"));
+
+    results.push(
+      check(
+        "[P5d/ambiguity] ApiErrorではない分類不能な例外もoutcomeKnown===false(安全側=ambiguousへfallback)",
+        unclassified.outcomeKnown === false
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P5d — lookupExecution()(Step9/Step21)
+  // =========================
+  {
+    const adapter = new TriggerDevRuntimeAdapter(TEST_CONFIG, {
+      triggerFn: async () => ({ id: "unused" }),
+      lookupExecutionFn: async (executionId) => {
+        if (executionId === "exec-completed") return { status: "COMPLETED" };
+        if (executionId === "exec-running") return { status: "EXECUTING" };
+        if (executionId === "exec-unknown-status") return { status: "SOME_FUTURE_STATUS" };
+        return null;
+      },
+    });
+
+    const completed = await adapter.lookupExecution?.({ provider: "trigger_dev", executionId: "exec-completed" });
+    const running = await adapter.lookupExecution?.({ provider: "trigger_dev", executionId: "exec-running" });
+    const unknownStatus = await adapter.lookupExecution?.({ provider: "trigger_dev", executionId: "exec-unknown-status" });
+    const notFound = await adapter.lookupExecution?.({ provider: "trigger_dev", executionId: "exec-missing" });
+
+    results.push(
+      check(
+        "[lookupExecution] Trigger.dev raw status(COMPLETED/EXECUTING)がRuntimeExecutionState(completed/running)へ正規化される",
+        completed?.status === "found" && completed.state === "completed" &&
+          running?.status === "found" && running.state === "running"
+      )
+    );
+
+    results.push(
+      check(
+        "[lookupExecution] 未知のraw statusはunknownへ安全にfallbackする(Trigger-specific文字列をそのままunionへ持ち込まない)",
+        unknownStatus?.status === "found" && unknownStatus.state === "unknown"
+      )
+    );
+
+    results.push(
+      check(
+        "[lookupExecution] 存在しないexecutionIdはnot_foundを返す(例外を投げない)",
+        notFound?.status === "not_found"
+      )
+    );
+  }
+
+  // ---- [lookupExecution/失敗] lookup自体が失敗してもthrowせず、正規化されたlookup_failedを返す ----
+  {
+    const adapter = new TriggerDevRuntimeAdapter(TEST_CONFIG, {
+      triggerFn: async () => ({ id: "unused" }),
+      lookupExecutionFn: async () => {
+        throw ApiError.generate(500, {}, "Internal Server Error", undefined);
+      },
+    });
+
+    const outcome = await adapter.lookupExecution?.({ provider: "trigger_dev", executionId: "exec-x" });
+
+    results.push(
+      check(
+        "[lookupExecution/失敗] lookup自体のエラーはlookup_failedへ正規化され、raw errorが漏れない(Provider再実行やTrigger再startは一切行わない、read-only)",
+        outcome?.status === "lookup_failed" && outcome.error.code === "runtime_unavailable"
       )
     );
   }

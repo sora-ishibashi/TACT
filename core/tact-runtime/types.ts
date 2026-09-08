@@ -274,6 +274,20 @@ export interface RuntimeError {
   // 改めて設計する。
   retryable: boolean;
 
+  // Fast Port P5d(Step7、絶対条件、最重要): このstart試行がRuntime
+  // infrastructure側に実際に届いたかどうかを、呼び出し元が安全に
+  // 判定できるようにするための値。
+  //   - true(definite): Runtimeが要求を受理し、明確な応答(成功/拒否)
+  //     を返した——例えばTrigger.devがHTTP status付きでエラーを
+  //     返した場合、requestは確実にサーバへ届いている。
+  //   - false(ambiguous): ネットワーク到達不能・接続断等により、
+  //     requestが実際にRuntimeへ届いたかどうか自体が不明——同じ
+  //     dispatchを未知のままsame Runへ再送すると、既に実行開始
+  //     済みのexecutionを重複させる恐れがある(絶対条件17)。
+  // 呼び出し元(dispatchIntegrationReadToRuntime())は、false時に
+  // Runをfailedへ確定させず、reconciliationへ委ねる(Step8)。
+  outcomeKnown: boolean;
+
 }
 
 // 絶対条件(Step9): throw-onlyにしない。started/failedのdiscriminated
@@ -287,6 +301,30 @@ export type RuntimeStartOutcome =
       status: "failed";
       error: RuntimeError;
     };
+
+// =========================
+// RuntimeExecutionState / RuntimeExecutionLookupOutcome (Fast Port
+// P5d、Step14: P5aでDEFERしたstatus queryを実producer登場に伴い追加)
+// =========================
+//
+// 絶対条件(Step14): Trigger-specific status値(Trigger.devの
+// "COMPLETED"|"EXECUTING"|"CRASHED"等)をそのままunionへコピーしない
+// ——各Adapterが正規化してから返す最小共通taxonomy。TACT Run.status
+// (running/completed/failed)への自動mapは行わない(呼び出し元が
+// 意味を判断する、このstate自体はobservability目的の付随情報)。
+export type RuntimeExecutionState =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "unknown";
+
+export type RuntimeExecutionLookupOutcome =
+  | { status: "found"; state: RuntimeExecutionState }
+  | { status: "not_found" }
+  | { status: "lookup_failed"; error: RuntimeError };
 
 // =========================
 // RuntimeAdapter (Step3)
@@ -306,6 +344,16 @@ export interface RuntimeAdapter {
   getCapabilities(): RuntimeCapabilities;
 
   startExecution(request: RuntimeExecutionRequest): Promise<RuntimeStartOutcome>;
+
+  // Fast Port P5d(Step9/Step21): optional/additive。P5aでDEFERした
+  // status query APIを、実producer(P5cのTrigger.dev read slice)が
+  // 生まれたことを受けて最小限追加する。絶対条件: Temporalでも
+  // 概念的に実装可能な形(DescribeWorkflowExecution相当)にとどめ、
+  // Trigger.devにしか存在しない概念をcontractへ持ち込まない。
+  // 未実装のAdapter(例: P5aのFakeRuntimeAdapter)はこのmethod自体を
+  // 省略でき、呼び出し元は`adapter.lookupExecution`の存在確認
+  // (optional chaining)で安全にfallbackする。
+  lookupExecution?(handle: RuntimeExecutionHandle): Promise<RuntimeExecutionLookupOutcome>;
 
 }
 

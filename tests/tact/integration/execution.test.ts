@@ -2299,7 +2299,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const { deps, calls } = makeDeps();
     const { adapter } = makeFakeRuntimeAdapter({
       status: "failed",
-      error: { code: "runtime_unavailable", message: "safe message", retryable: true },
+      error: { code: "runtime_unavailable", message: "safe message", retryable: true, outcomeKnown: true },
     });
 
     const outcome = await dispatchIntegrationReadToRuntime(
@@ -2479,6 +2479,95 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Resume/失敗] providerが失敗した場合はfailedを返し、createRunは一切呼ばれない",
         outcome.status === "failed" && calls.createRunCalls === 0 && calls.failRunCalls === 1
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P5d — ambiguous runtime start(Step30)
+  // =========================
+
+  // ---- [Ambiguous] outcomeKnown=falseの場合、Runはrunningのまま維持され、failRun/run.failedは一切発生しない ----
+  {
+    const { deps, calls } = makeDeps();
+    const { adapter, capturedRequests } = makeFakeRuntimeAdapter({
+      status: "failed",
+      error: { code: "runtime_unavailable", message: "safe message", retryable: true, outcomeKnown: false },
+    });
+
+    const outcome = await dispatchIntegrationReadToRuntime(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      adapter,
+      deps
+    );
+
+    results.push(
+      check(
+        "[Ambiguous] status='ambiguous'、failRun=0・run.failed emit=0・updateTaskStatus('failed')=0(Runをfailedへ確定させない、絶対条件Step8)",
+        outcome.status === "ambiguous" &&
+          calls.failRunCalls === 0 &&
+          !calls.emitAuditEventCalls.some((e) => e.eventType === "run.failed") &&
+          !calls.updateTaskStatusCalls.some((u) => u.status === "failed")
+      )
+    );
+
+    results.push(
+      check(
+        "[Ambiguous] provider callは一切発生しない(direct fallback禁止、絶対条件16)",
+        calls.executeIntegrationActionCalls === 0 && capturedRequests.length === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Ambiguous] 返り値のrunはstatus変更されず、dispatch直後のRun(status='running')のまま",
+        outcome.status === "ambiguous" && outcome.run.status === "running"
+      )
+    );
+  }
+
+  // ---- [Resume/dedup] 既にfailed状態のRunへのduplicate task呼び出しもprovider 0(Step32) ----
+  {
+    const { deps, calls } = makeDeps({
+      listRunsForTask: async () => [makeRun({ id: "run-failed-1", workId: "work-1", taskId: "task-1", status: "failed" })],
+    });
+
+    const outcome = await executeRuntimeIntegrationRead(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", runId: "run-failed-1", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Resume/dedup] 既にfailed状態のRunへのduplicate task呼び出しもalready_executedを返し、providerを実行しない",
+        outcome.status === "already_executed" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- [Resume/correlation] 別のRun(異なるtaskId)は互いに独立して扱われる(Step32/33) ----
+  {
+    const { deps } = makeDeps({
+      listRunsForTask: async (_workId, _userId, _accessToken, taskId) => {
+        if (taskId === "task-a") return [makeRun({ id: "run-a-1", workId: "work-1", taskId: "task-a", status: "running" })];
+        return [];
+      },
+    });
+
+    const outcomeA = await executeRuntimeIntegrationRead(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-a", runId: "run-a-1", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      deps
+    );
+
+    const outcomeB = await executeRuntimeIntegrationRead(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-b", runId: "run-a-1", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Resume/correlation] 同じrunIdでもtaskIdが一致しないRunはnot_foundとなる(Trigger payloadのcorrelationを鵜呑みにしない、絶対条件13/14/Step33)",
+        outcomeA.status === "completed" && outcomeB.status === "not_found"
       )
     );
   }

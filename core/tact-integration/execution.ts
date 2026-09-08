@@ -986,6 +986,11 @@ export function isRuntimeEligibleIntegrationAction(service: string, operation: s
 export type RuntimeReadDispatchOutcome =
   | { status: "dispatched"; run: Run }
   | { status: "runtime_start_failed"; run: Run; error: RuntimeError }
+  // Fast Port P5d(Step7/Step8): start要求がRuntimeへ実際に届いたか
+  // 不明(RuntimeError.outcomeKnown===false)な場合。Runはrunningの
+  // まま維持される(failedへ確定しない)——呼び出し元は
+  // reconcileRuntimeExecution()で事後解決する。
+  | { status: "ambiguous"; run: Run }
   | { status: "not_found" }
   | { status: "work_not_runnable"; workStatus: WorkStatus }
   | { status: "connection_unavailable" }
@@ -1077,9 +1082,26 @@ export async function dispatchIntegrationReadToRuntime(
 
   if (startOutcome.status === "failed") {
 
-    // 絶対条件(Step11): Runtime start失敗時はprovider call 0のまま
-    // Runをfailedへ閉じる。raw RuntimeError.messageではなくcanonical
-    // codeだけをsafe reasonへ使う(secret/内部詳細を含めない)。
+    // Fast Port P5d(Step7/Step8絶対条件、最重要): outcomeKnown===false
+    // (ambiguous——requestがTrigger.devへ実際に届いたか不明)の場合、
+    // Runをfailedへ確定させない。既にside effect(Trigger task起動)
+    // が実際には成功している可能性があり、ここでfailedへ倒すと、
+    // 後からTrigger task側がsame Runをcompleteしようとした際に
+    // canonical state transition(failed→completed)の矛盾が起きうる
+    // (絶対条件16: direct fallback after ambiguous runtime startは
+    // 禁止、絶対条件17: "startしたか不明"状態で再startしない)。
+    // Runはrunningのまま維持し、reconciliation(reconcileRuntime
+    // Execution())による事後解決へ委ねる。
+    if (!startOutcome.error.outcomeKnown) {
+
+      return { status: "ambiguous", run };
+
+    }
+
+    // 絶対条件(Step11): Runtime start失敗(definite)時はprovider
+    // call 0のままRunをfailedへ閉じる。raw RuntimeError.message
+    // ではなくcanonical codeだけをsafe reasonへ使う(secret/内部
+    // 詳細を含めない)。
     const safeErrorMessage = `Runtime dispatch failed: ${startOutcome.error.code}`;
 
     await deps.emitAuditEvent(
@@ -1207,6 +1229,16 @@ export async function executeRuntimeIntegrationRead(
     return { status: "already_executed", run };
   }
 
+  // 既知の残存リスク(Fast Port P5d Step18、隠さず明示): このcheckは
+  // read-then-act(非atomic)であり、同一Runに対してほぼ同時に2つの
+  // Trigger executionがこのentrypointへ到達した場合、両方が
+  // run.status==="running"を観測してどちらもprovider実行へ進む
+  // 可能性が構造的に残る(既存write pathのlistRunsForTask()ベース
+  // dedupと同じ性質の既存debtであり、新しいqueue/lease/atomic CAS
+  // machineryをこのPhaseでは追加しない、Step18/Step39)。read-only
+  // sliceのためside effect riskは低いと判断し、P5dでは意図的に
+  // 未解決のまま残す——protected writeをRuntime経由で実行する前には
+  // 解決が必要な項目として報告する。
   return executeIntegrationActionCore(
     {
       workId,

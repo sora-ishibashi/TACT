@@ -46,6 +46,7 @@
 //     かつ`status===undefined`という構造的条件で代わりに判定する)。
 import {
   tasks,
+  runs,
   configure,
   ApiError,
   BadRequestError,
@@ -64,6 +65,9 @@ import type {
   RuntimeExecutionRequest,
   RuntimeStartOutcome,
   RuntimeError,
+  RuntimeExecutionHandle,
+  RuntimeExecutionLookupOutcome,
+  RuntimeExecutionState,
 } from "../types";
 
 // =========================
@@ -158,13 +162,33 @@ export type TriggerDevJobPayload = TriggerDevIntegrationActionPayload;
 // 絶対条件(Fast Port P4a incidentの教訓を踏襲): testはこのfunctionを
 // 差し替えるだけで、実SDK(tasks.trigger()・configure())へは一切
 // 到達しない。real network call = 0(Step22)。
+// Fast Port P5d(Step3/Step5): dispatch idempotency。official Trigger.dev
+// primitive(TriggerOptions.idempotencyKey、installed types確認済み:
+// 「同じidempotencyKeyでtrigger()を2回呼ぶと、2回目は新しいrunを
+// 作らず1回目のhandleをそのまま返す」)をそのまま使う——自前in-memory
+// dedupやSupabase側の新dedup tableは作らない(絶対条件、Step5)。
+export interface TriggerDevTriggerOptions {
+  idempotencyKey?: string;
+  idempotencyKeyTTL?: string;
+  tags?: string[];
+}
+
 export type TriggerDevTriggerFn = (
   taskId: string,
-  payload: TriggerDevJobPayload
+  payload: TriggerDevJobPayload,
+  options?: TriggerDevTriggerOptions
 ) => Promise<{ id: string }>;
+
+// Fast Port P5d(Step9/Step21): optional test seam。real SDKの
+// runs.retrieve()を呼ぶ既定実装は、real network callが必要な場合
+// のみ使われる(testは常にfakeを注入する、Step34 test#33相当)。
+export type TriggerDevLookupExecutionFn = (
+  executionId: string
+) => Promise<{ status: string } | null>;
 
 export interface TriggerDevRuntimeAdapterDeps {
   triggerFn?: TriggerDevTriggerFn;
+  lookupExecutionFn?: TriggerDevLookupExecutionFn;
 }
 
 // =========================
@@ -180,6 +204,8 @@ export class TriggerDevRuntimeAdapter implements RuntimeAdapter {
   private readonly config: TriggerDevRuntimeConfig;
 
   private readonly triggerFn: TriggerDevTriggerFn;
+
+  private readonly lookupExecutionFn: TriggerDevLookupExecutionFn;
 
   constructor(config: TriggerDevRuntimeConfig, deps: TriggerDevRuntimeAdapterDeps = {}) {
 
@@ -197,13 +223,40 @@ export class TriggerDevRuntimeAdapter implements RuntimeAdapter {
       // (絶対条件、Step19 test #22)。
       configure({ accessToken: config.secretKey, baseURL: config.baseURL });
 
-      this.triggerFn = async (taskId, payload) => {
-        const handle = await tasks.trigger<AnyTask>(taskId, payload);
+      this.triggerFn = async (taskId, payload, options) => {
+        const handle = await tasks.trigger<AnyTask>(taskId, payload, {
+          idempotencyKey: options?.idempotencyKey,
+          idempotencyKeyTTL: options?.idempotencyKeyTTL,
+          tags: options?.tags,
+        });
         return { id: handle.id };
       };
 
     }
 
+    if (deps.lookupExecutionFn) {
+
+      this.lookupExecutionFn = deps.lookupExecutionFn;
+
+    } else {
+
+      this.lookupExecutionFn = async (executionId) => {
+        const result = await runs.retrieve(executionId);
+        return { status: result.status };
+      };
+
+    }
+
+  }
+
+  // Fast Port P5d(Step3): 1つのTACT Run(runId)につき1つの安定した
+  // dispatch identityを、adapter内部で決定論的に導出する。
+  // RuntimeExecutionRequestへprovider-specificなidempotency conceptを
+  // 漏らさない(Step4絶対条件: canonical契約を汚しすぎない、
+  // runIdという既存fieldだけから導出できるため新fieldは追加不要)。
+  // Retry = new Run(絶対条件)なので、new Run ⇒ new runId ⇒ new key。
+  private buildDispatchKey(runId: string): string {
+    return `tact-run:${runId}`;
   }
 
   // =========================
@@ -250,10 +303,13 @@ export class TriggerDevRuntimeAdapter implements RuntimeAdapter {
 
       return {
         status: "failed",
+        // ローカルvalidation失敗(この時点でTrigger.devへは一切送信
+        // していない)——outcomeKnown: trueで確定(絶対条件Step7)。
         error: {
           code: "invalid_request",
           message: "Unsupported RuntimeExecutionRequest.kind for TriggerDevRuntimeAdapter.",
           retryable: false,
+          outcomeKnown: true,
         },
       };
 
@@ -274,10 +330,12 @@ export class TriggerDevRuntimeAdapter implements RuntimeAdapter {
 
       return {
         status: "failed",
+        // 同上、ローカルvalidation失敗——outcomeKnown: true。
         error: {
           code: "invalid_request",
           message: "RuntimeExecutionRequest is missing a required correlation or action field.",
           retryable: false,
+          outcomeKnown: true,
         },
       };
 
@@ -300,13 +358,31 @@ export class TriggerDevRuntimeAdapter implements RuntimeAdapter {
       },
     };
 
+    // Fast Port P5d(Step3/Step5): 同じTACT Runに対してstartExecution()
+    // が複数回呼ばれても(dispatch側の再送・reconciliationからの
+    // 再送含む)、Trigger.dev側で重複task executionを作らせない。
+    // official idempotency primitive(TriggerOptions.idempotencyKey)
+    // だけを使う——自前in-memory dedupは実装しない(絶対条件)。
+    const dispatchKey = this.buildDispatchKey(request.runId);
+
     try {
 
       // 絶対条件(Step13): この呼び出し自身はcreateRun()もTask/Work
       // mutationも一切行わない(importしていないことが構造的に
       // 保証する)。startExecution failure時にnew Runを作る・
       // Task/Providerをretryする責務はこのAdapterには無い。
-      const result = await this.triggerFn(taskId, payload);
+      const result = await this.triggerFn(taskId, payload, {
+        idempotencyKey: dispatchKey,
+        // 既定30日(official docs確認済み)より短くする理由が無いため
+        // 明示指定しない——TACT Run自体がそれより短命な想定
+        // (read-only sliceのため)。
+        // Step11: 非secretなcorrelation(TACT run idのみ)をtagとして
+        // 付与する——Trigger.dev dashboard上でこのexecutionがどの
+        // TACT Runに対応するか確認できるようにするだけの補助情報
+        // (reconciliationのprimary機構ではない、Step10でOption Aを
+        // 採用したためtag検索には依存しない)。
+        tags: [dispatchKey],
+      });
 
       return {
         status: "started",
@@ -322,6 +398,81 @@ export class TriggerDevRuntimeAdapter implements RuntimeAdapter {
       return { status: "failed", error: normalizeTriggerDevError(error) };
 
     }
+
+  }
+
+  // =========================
+  // lookupExecution (Fast Port P5d、Step9/Step21)
+  // =========================
+  //
+  // Read-only observability——Provider再実行やTrigger再startを一切
+  // 行わない(絶対条件Step15)。official runs.retrieve()をそのまま
+  // 使う(installed types確認済み: statusは"CANCELED"|"COMPLETED"|
+  // "CRASHED"|"DELAYED"|"DEQUEUED"|"EXECUTING"|"EXPIRED"|"FAILED"|
+  // "PENDING_VERSION"|"QUEUED"|"SYSTEM_FAILURE"|"TIMED_OUT"|
+  // "WAITING"の13値)。
+  async lookupExecution(handle: RuntimeExecutionHandle): Promise<RuntimeExecutionLookupOutcome> {
+
+    try {
+
+      const result = await this.lookupExecutionFn(handle.executionId);
+
+      if (!result) {
+        return { status: "not_found" };
+      }
+
+      return { status: "found", state: normalizeTriggerDevExecutionState(result.status) };
+
+    } catch (error) {
+
+      const normalized = normalizeTriggerDevError(error);
+
+      if (normalized.code === "invalid_request" && error instanceof NotFoundError) {
+        return { status: "not_found" };
+      }
+
+      return { status: "lookup_failed", error: normalized };
+
+    }
+
+  }
+
+}
+
+// Fast Port P5d(Step14絶対条件): Trigger-specific statusをそのまま
+// unionへコピーせず、TACT canonical taxonomyへ正規化する。TACT
+// Run.statusへの自動mapはしない(呼び出し元の責務)。
+function normalizeTriggerDevExecutionState(rawStatus: string): RuntimeExecutionState {
+
+  switch (rawStatus) {
+
+    case "QUEUED":
+    case "DELAYED":
+    case "PENDING_VERSION":
+    case "DEQUEUED":
+      return "queued";
+
+    case "EXECUTING":
+      return "running";
+
+    case "WAITING":
+      return "waiting";
+
+    case "COMPLETED":
+      return "completed";
+
+    case "FAILED":
+    case "CRASHED":
+    case "SYSTEM_FAILURE":
+    case "TIMED_OUT":
+    case "EXPIRED":
+      return "failed";
+
+    case "CANCELED":
+      return "cancelled";
+
+    default:
+      return "unknown";
 
   }
 
@@ -355,6 +506,13 @@ export class TriggerDevRuntimeAdapter implements RuntimeAdapter {
 // 絶対条件(Step12/Step19 test #21): raw stack trace・response
 // body・secret(Authorization header値等)をmessageへ含めない
 // ——safe/正規化済みの固定文言のみを返す。
+// Fast Port P5d(Step7絶対条件): outcomeKnownの判定方針——Trigger.dev
+// サーバが明確なHTTP応答(status付き)を返した場合は、requestが確実に
+// 届いた(=side effectの有無が確定している)という意味でtrue。
+// ネットワーク到達不能(ApiConnectionError、status===undefined)、
+// および分類不能な例外(programming error等、fetch自体が完了した
+// 保証がない)はfalse——「届いたかどうか不明」を安全側(ambiguous)へ
+// 倒す。
 export function normalizeTriggerDevError(error: unknown): RuntimeError {
 
   if (error instanceof RateLimitError) {
@@ -362,6 +520,7 @@ export function normalizeTriggerDevError(error: unknown): RuntimeError {
       code: "runtime_rejected",
       message: "Trigger.dev rejected the request due to rate limiting.",
       retryable: true,
+      outcomeKnown: true,
     };
   }
 
@@ -370,6 +529,7 @@ export function normalizeTriggerDevError(error: unknown): RuntimeError {
       code: "runtime_rejected",
       message: "Trigger.dev rejected the request due to a conflict.",
       retryable: false,
+      outcomeKnown: true,
     };
   }
 
@@ -382,6 +542,7 @@ export function normalizeTriggerDevError(error: unknown): RuntimeError {
       code: "invalid_request",
       message: "Trigger.dev rejected the request as invalid (client-side request or configuration problem).",
       retryable: false,
+      outcomeKnown: true,
     };
   }
 
@@ -390,6 +551,7 @@ export function normalizeTriggerDevError(error: unknown): RuntimeError {
       code: "runtime_unavailable",
       message: "Trigger.dev rejected the request due to an authentication or authorization configuration problem.",
       retryable: false,
+      outcomeKnown: true,
     };
   }
 
@@ -398,6 +560,7 @@ export function normalizeTriggerDevError(error: unknown): RuntimeError {
       code: "runtime_unavailable",
       message: "Trigger.dev reported an internal server error.",
       retryable: true,
+      outcomeKnown: true,
     };
   }
 
@@ -412,6 +575,10 @@ export function normalizeTriggerDevError(error: unknown): RuntimeError {
         code: "runtime_unavailable",
         message: "Could not reach the Trigger.dev API.",
         retryable: true,
+        // 絶対条件(Step7、最重要): requestが実際にTrigger.devへ
+        // 届いたかどうか不明——ambiguous。呼び出し元はこのRunを
+        // failedへ確定させず、reconciliationへ委ねる。
+        outcomeKnown: false,
       };
     }
 
@@ -419,6 +586,8 @@ export function normalizeTriggerDevError(error: unknown): RuntimeError {
       code: "unknown_runtime_error",
       message: "Trigger.dev returned an unrecognized API error.",
       retryable: false,
+      // status付きの応答を受け取っている=requestは確実に届いている。
+      outcomeKnown: true,
     };
 
   }
@@ -427,6 +596,9 @@ export function normalizeTriggerDevError(error: unknown): RuntimeError {
     code: "unknown_runtime_error",
     message: "An unrecognized error occurred while starting Trigger.dev execution.",
     retryable: false,
+    // 分類不能な例外(ApiErrorではない)——fetch自体が完了した保証が
+    // 無いため、安全側でambiguous扱いにする。
+    outcomeKnown: false,
   };
 
 }

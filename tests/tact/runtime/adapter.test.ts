@@ -142,7 +142,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ---- [7][8] failure outcomeが正規化される、raw runtime errorが漏れない ----
   {
     const adapter = new FakeRuntimeAdapter({
-      failureMode: { code: "runtime_unavailable", message: "safe diagnostic message only", retryable: true },
+      failureMode: { code: "runtime_unavailable", message: "safe diagnostic message only", retryable: true, outcomeKnown: true },
     });
 
     const outcome = await adapter.startExecution(makeRequest());
@@ -377,7 +377,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
 
     const failingAdapter = new FakeRuntimeAdapter({
-      failureMode: { code: "runtime_rejected", message: "safe message", retryable: false },
+      failureMode: { code: "runtime_rejected", message: "safe message", retryable: false, outcomeKnown: true },
     });
 
     const outcome = await failingAdapter.startExecution(makeRequest());
@@ -393,7 +393,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ---- [27] retryable RuntimeErrorは自動TACT retryを意味しない ----
   {
     const adapter = new FakeRuntimeAdapter({
-      failureMode: { code: "runtime_unavailable", message: "safe message", retryable: true },
+      failureMode: { code: "runtime_unavailable", message: "safe message", retryable: true, outcomeKnown: false },
     });
 
     const outcome = await adapter.startExecution(makeRequest());

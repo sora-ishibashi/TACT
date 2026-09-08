@@ -1966,6 +1966,15 @@ export const executeReadIntegrationActionWithRuntimeRouting: ExecuteReadIntegrat
     case "dispatched":
       return { status: "runtime_dispatched" };
 
+    // Fast Port P5d: startがRuntimeへ実際に届いたか不明(ambiguous)な
+    // 場合も、Runは既にrunningのまま維持されている(failedへ確定
+    // していない)——同期的な呼び出し元から見た意味は「非同期に
+    // handoffされ、結果はまだ確定していない」という点でdispatched
+    // と同じであり、既存の"runtime_dispatched"へそのまま合流させる
+    // (callerに新statusを増やしすぎない、Step6)。
+    case "ambiguous":
+      return { status: "runtime_dispatched" };
+
     case "runtime_start_failed":
       return { status: "failed" };
 
