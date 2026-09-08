@@ -128,6 +128,11 @@ export interface TriggerDevIntegrationActionPayload {
 
   kind: "integration_action";
 
+  // Fast Port P5c: Trigger.dev task側(core/tact-runtime/execution.ts)が
+  // service role credential経由でownership-scoped queryを行うために
+  // 必要(secretではない、既存のworkId等と同じcanonical reference)。
+  userId: string;
+
   workId: string;
 
   taskId: string;
@@ -258,6 +263,7 @@ export class TriggerDevRuntimeAdapter implements RuntimeAdapter {
     // 必須のcorrelation/action fieldが空でないことだけを確認する
     // (深いschema検証はしない、過剰実装回避)。
     if (
+      !request.userId ||
       !request.workId ||
       !request.taskId ||
       !request.runId ||
@@ -282,6 +288,7 @@ export class TriggerDevRuntimeAdapter implements RuntimeAdapter {
     const payload: TriggerDevJobPayload = {
       schemaVersion: 1,
       kind: "integration_action",
+      userId: request.userId,
       workId: request.workId,
       taskId: request.taskId,
       runId: request.runId,

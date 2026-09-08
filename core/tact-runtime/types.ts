@@ -175,6 +175,13 @@ export type RuntimeExecutionRequest =
 
       kind: "integration_action";
 
+      // Fast Port P5c追記: Trigger.dev task側(core/tact-runtime/
+      // execution.tsのexecuteRuntimeIntegrationRead())がservice role
+      // credential経由でWork/Connectionを再取得する際に必要な、
+      // ownership-scoped queryのuserId。secretではなくcanonical
+      // reference(既存のworkId/taskId/runIdと同じ扱い)。
+      userId: string;
+
       // TACT canonical correlation(Step6の「再取得可能なreference」
       // 中心方針)。
       workId: string;

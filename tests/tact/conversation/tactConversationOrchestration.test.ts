@@ -36,7 +36,9 @@ import type { TaskExecutionSummary } from "../../../core/tact-orchestrator";
 import {
   mapOrchestrationTasksToExecutionStatus,
   planConversationTurn,
+  executeReadIntegrationActionWithRuntimeRouting,
 } from "../../../core/tact-conversation/orchestration";
+import { RUNTIME_TRIGGER_DEV_ENABLED_ENV_KEY } from "../../../core/tact-runtime/enablement";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeMetadata(): ResearchMetadata {
@@ -221,6 +223,67 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         "[Test10] Clarification入力 -> planConversationTurn()がclarification planを導出し、Capabilityは未実行(ExecutionRecord対象外)",
         plan.kind === "clarification" && !capabilityCalled,
         `plan=${JSON.stringify(plan)}, capabilityCalled=${capabilityCalled}`
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P5c — executeReadIntegrationActionWithRuntimeRouting()
+  // =========================
+  //
+  // 絶対条件(Step22最重要、no silent fallback): runtime flagが明示的に
+  // trueなのにconfigが不正な場合、既存direct pathへ黙って
+  // fallbackしない——fail closedでinvalid_actionを返す。このcaseは
+  // dispatchIntegrationReadToRuntime()/executeReadIntegrationAction()
+  // (いずれも実Supabaseへ接続する)のどちらにも到達する前に
+  // resolveRuntimeIntegrationReadAdapter()の時点でreturnするため、
+  // このtest fileの既存制約(実DBアクセスなし)を破らずに直接
+  // invoke可能な、唯一の安全な分岐(このファイル冒頭のコメント通り、
+  // 実Supabaseアクセスを要する分岐はこのHarnessでは検証しない)。
+  {
+    const originalFlag = process.env[RUNTIME_TRIGGER_DEV_ENABLED_ENV_KEY];
+    const originalSecret = process.env.TRIGGER_SECRET_KEY;
+
+    process.env[RUNTIME_TRIGGER_DEV_ENABLED_ENV_KEY] = "true";
+    delete process.env.TRIGGER_SECRET_KEY;
+
+    let outcome;
+
+    try {
+
+      outcome = await executeReadIntegrationActionWithRuntimeRouting({
+        workId: "work-1",
+        userId: "user-1",
+        accessToken: "fake-token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: {
+          kind: "integration_action",
+          summary: "test",
+          metadata: { service: "slack", operation: "list_channels", input: {} },
+        },
+      });
+
+    } finally {
+
+      if (originalFlag === undefined) {
+        delete process.env[RUNTIME_TRIGGER_DEV_ENABLED_ENV_KEY];
+      } else {
+        process.env[RUNTIME_TRIGGER_DEV_ENABLED_ENV_KEY] = originalFlag;
+      }
+
+      if (originalSecret === undefined) {
+        delete process.env.TRIGGER_SECRET_KEY;
+      } else {
+        process.env.TRIGGER_SECRET_KEY = originalSecret;
+      }
+
+    }
+
+    results.push(
+      check(
+        "[P5c/no silent fallback] runtime flag=true かつ TRIGGER_SECRET_KEY未設定(misconfigured)の場合、既存direct pathへ黙ってfallbackせず、invalid_actionでfail closedする",
+        outcome?.status === "invalid_action"
       )
     );
   }

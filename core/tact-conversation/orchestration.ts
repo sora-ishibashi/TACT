@@ -15,8 +15,18 @@ import type {
   ExecuteReadIntegrationAction,
   Approval,
 } from "../tact-work";
-import { listConnectionsForUser, executeReadIntegrationAction } from "../tact-integration";
+import {
+  listConnectionsForUser,
+  executeReadIntegrationAction,
+  dispatchIntegrationReadToRuntime,
+  isRuntimeEligibleIntegrationAction,
+} from "../tact-integration";
 import type { IntegrationService } from "../tact-integration";
+// Fast Port P5c: Trigger.dev routingの有効性(feature flag + config)を
+// 決定する唯一のchokepoint。このimport経由でのみ@trigger.dev/sdkへの
+// 依存がこのfileへ間接的に伝播する(orchestration.tsはwiring層のため
+// 許容——core/tact-work・core/tact-integration自体はSDKを一切知らない)。
+import { resolveRuntimeIntegrationReadAdapter } from "../tact-runtime/enablement";
 
 import type {
   Conversation,
@@ -1892,6 +1902,97 @@ const executeReadIntegrationActionViaTactIntegration: ExecuteReadIntegrationActi
 
 };
 
+// =========================
+// executeReadIntegrationActionWithRuntimeRouting
+// (Fast Port P5c: Route One Non-Side-Effecting Integration Read
+// Through Trigger.dev)
+// =========================
+//
+// executeReadIntegrationActionViaTactIntegration()の既存挙動を一切
+// 変えない、additiveなwrapper。絶対条件(Step2/20): routingは
+// service==="slack" && operation==="list_channels"のみのhard-gated
+// opt-in(isRuntimeEligibleIntegrationAction())——それ以外(send_message
+// を含む)は必ず既存direct pathへそのまま委譲する。Runtime未設定
+// (flag false/missing)の場合も同様に既存direct pathへ委譲する
+// (Step21: 既存Slack live flowを壊さない)。
+//
+// 絶対条件(Step22): flag=trueだがconfigが不正な場合はsilent direct
+// fallbackをしない——fail closed(invalid_action)で止める。operator
+// intentと実際のexecution substrateがズレたまま実行してしまうことを
+// 防ぐため。
+export const executeReadIntegrationActionWithRuntimeRouting: ExecuteReadIntegrationAction = async (
+  params
+) => {
+
+  const metadata = params.action.metadata as
+    | { service?: unknown; operation?: unknown }
+    | undefined;
+
+  const service = typeof metadata?.service === "string" ? metadata.service : undefined;
+  const operation = typeof metadata?.operation === "string" ? metadata.operation : undefined;
+
+  if (!service || !operation || !isRuntimeEligibleIntegrationAction(service, operation)) {
+    return executeReadIntegrationActionViaTactIntegration(params);
+  }
+
+  const resolution = resolveRuntimeIntegrationReadAdapter();
+
+  if (resolution.status === "disabled") {
+    return executeReadIntegrationActionViaTactIntegration(params);
+  }
+
+  if (resolution.status === "misconfigured") {
+    return { status: "invalid_action" };
+  }
+
+  const connectionId = typeof (metadata as { connectionId?: unknown })?.connectionId === "string"
+    ? (metadata as { connectionId?: string }).connectionId!
+    : params.connectionId;
+
+  const dispatchOutcome = await dispatchIntegrationReadToRuntime(
+    {
+      workId: params.workId,
+      userId: params.userId,
+      accessToken: params.accessToken,
+      taskId: params.taskId,
+      connectionId,
+      action: { service: "slack", operation, input: {} },
+    },
+    resolution.adapter
+  );
+
+  switch (dispatchOutcome.status) {
+
+    case "dispatched":
+      return { status: "runtime_dispatched" };
+
+    case "runtime_start_failed":
+      return { status: "failed" };
+
+    case "not_found":
+      return { status: "not_found" };
+
+    case "work_not_runnable":
+      return { status: "work_not_runnable" };
+
+    case "connection_unavailable":
+      return { status: "connection_unavailable" };
+
+    case "invalid_action":
+      return { status: "invalid_action" };
+
+    case "task_not_executable":
+      return { status: "task_not_executable" };
+
+    default: {
+      const exhaustiveCheck: never = dispatchOutcome;
+      return exhaustiveCheck;
+    }
+
+  }
+
+};
+
 export async function resolveAndRunWork(
   conversation: Conversation,
   accessToken: string,
@@ -1942,7 +2043,7 @@ export async function resolveAndRunWork(
     {
       ...defaultRunWorkTurnDeps,
       resolveIntegrationConnection: resolveIntegrationConnectionViaTactIntegration,
-      executeReadIntegrationAction: executeReadIntegrationActionViaTactIntegration,
+      executeReadIntegrationAction: executeReadIntegrationActionWithRuntimeRouting,
     }
   );
 

@@ -83,6 +83,7 @@ class FakeRuntimeAdapter implements RuntimeAdapter {
 function makeRequest(overrides: Partial<Extract<RuntimeExecutionRequest, { kind: "integration_action" }>> = {}): RuntimeExecutionRequest {
   return {
     kind: "integration_action",
+    userId: "user-1",
     workId: "work-1",
     taskId: "task-1",
     runId: "run-1",

@@ -144,6 +144,7 @@ import { run as runIntentSlackSendIntent } from "./intent/slackSendIntent.test";
 import { run as runIntentSlackListChannelsIntent } from "./intent/slackListChannelsIntent.test";
 import { run as runRuntimeAdapter } from "./runtime/adapter.test";
 import { run as runRuntimeTriggerDev } from "./runtime/triggerDev.test";
+import { run as runRuntimeEnablement } from "./runtime/enablement.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -263,6 +264,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "intent/slackListChannelsIntent", run: runIntentSlackListChannelsIntent },
   { name: "runtime/adapter", run: runRuntimeAdapter },
   { name: "runtime/triggerDev", run: runRuntimeTriggerDev },
+  { name: "runtime/enablement", run: runRuntimeEnablement },
 ];
 
 async function main() {

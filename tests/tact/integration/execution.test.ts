@@ -21,8 +21,12 @@
 import {
   executeApprovedIntegrationAction,
   executeReadIntegrationAction,
+  isRuntimeEligibleIntegrationAction,
+  dispatchIntegrationReadToRuntime,
+  executeRuntimeIntegrationRead,
   type ExecuteApprovedIntegrationActionDeps,
 } from "../../../core/tact-integration/execution";
+import type { RuntimeAdapter, RuntimeStartOutcome, RuntimeExecutionRequest } from "../../../core/tact-runtime/types";
 import { mapSlackActionToComposioTool } from "../../../core/tact-integration/providers/composio/mappings/slack";
 import { buildExecutionResultFromToolResult } from "../../../core/tact-integration/providers/composio/adapter";
 import type { Work, Approval, Run, WorkTask } from "../../../core/tact-work/types";
@@ -176,6 +180,8 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
     createRunCalls: 0,
     completeRunCalls: 0,
     failRunCalls: 0,
+    // Fast Port P5c: attachRunExternalRef()呼び出しの記録。
+    attachRunExternalRefCalls: [] as { runId: string; externalRef: Record<string, unknown> | null | undefined }[],
     updateTaskStatusCalls: [] as { taskId: string; status: string }[],
     executeIntegrationActionCalls: 0,
     reconcileWorkCompletionStatusCalls: 0,
@@ -237,6 +243,11 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
     failRun: async () => {
       calls.failRunCalls += 1;
       calls.callOrder.push("failRun");
+    },
+
+    attachRunExternalRef: async (_workId, _userId, _accessToken, runId, externalRef) => {
+      calls.attachRunExternalRefCalls.push({ runId, externalRef });
+      calls.callOrder.push("attachRunExternalRef");
     },
 
     updateTaskStatus: async (_workId, _userId, _accessToken, taskId, status) => {
@@ -2185,6 +2196,289 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Data minimization] 承認後write成功timelineでemitされた全auditイベントのdetailsに、secret/subject_json/canonicalInput/providerConnectionRef/実connectionId等が一切含まれない",
         forbiddenSubstrings.every((substring) => !serializedDetails.toLowerCase().includes(substring.toLowerCase()))
+      )
+    );
+  }
+
+  // =========================
+  // Fast Port P5c — Runtime read slice allowlist
+  // =========================
+  {
+    results.push(
+      check(
+        "[P5c allowlist] slack.list_channelsはeligible",
+        isRuntimeEligibleIntegrationAction("slack", "list_channels") === true
+      )
+    );
+    results.push(
+      check(
+        "[P5c allowlist] slack.send_messageはeligibleではない(protected write structural guard)",
+        isRuntimeEligibleIntegrationAction("slack", "send_message") === false
+      )
+    );
+    results.push(
+      check(
+        "[P5c allowlist] gmail.list_messages(未登録service)はeligibleではない",
+        isRuntimeEligibleIntegrationAction("gmail", "list_messages") === false
+      )
+    );
+  }
+
+  function makeFakeRuntimeAdapter(outcome: RuntimeStartOutcome): { adapter: RuntimeAdapter; capturedRequests: RuntimeExecutionRequest[] } {
+    const capturedRequests: RuntimeExecutionRequest[] = [];
+    const adapter: RuntimeAdapter = {
+      provider: "trigger_dev",
+      getCapabilities: () => ({ durableExecution: true, durableWait: true, scheduling: true }),
+      startExecution: async (request) => {
+        capturedRequests.push(request);
+        return outcome;
+      },
+    };
+    return { adapter, capturedRequests };
+  }
+
+  // =========================
+  // Fast Port P5c — dispatchIntegrationReadToRuntime()
+  // =========================
+
+  // ---- [Dispatch] eligible action + success: dispatched、run.created
+  // →attachRunExternalRefの順、provider callは一切発生しない ----
+  {
+    const { deps, calls } = makeDeps();
+    const { adapter, capturedRequests } = makeFakeRuntimeAdapter({
+      status: "started",
+      handle: { provider: "trigger_dev", executionId: "fake-trigger-run-1" },
+    });
+
+    const outcome = await dispatchIntegrationReadToRuntime(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      adapter,
+      deps
+    );
+
+    results.push(
+      check(
+        "[Dispatch] 成功時: status='dispatched'、createRun=1・provider call(executeIntegrationAction)=0・attachRunExternalRef=1",
+        outcome.status === "dispatched" &&
+          calls.createRunCalls === 1 &&
+          calls.executeIntegrationActionCalls === 0 &&
+          calls.attachRunExternalRefCalls.length === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Dispatch] 順序: policy.evaluated→createRun→run.created→attachRunExternalRef(completeRun/failRun/provider.*は一切発生しない)",
+        JSON.stringify(calls.callOrder) ===
+          JSON.stringify(["audit:policy.evaluated", "createRun", "audit:run.created", "attachRunExternalRef"])
+      )
+    );
+
+    results.push(
+      check(
+        "[Dispatch] RuntimeExecutionRequestにuserId/workId/taskId/runId/actionが正しく渡る(secretは含まれない)",
+        capturedRequests.length === 1 &&
+          capturedRequests[0].kind === "integration_action" &&
+          capturedRequests[0].userId === OWNER_USER_ID &&
+          capturedRequests[0].workId === "work-1" &&
+          !JSON.stringify(capturedRequests[0]).toLowerCase().includes("token")
+      )
+    );
+
+    results.push(
+      check(
+        "[Dispatch] Run.externalRefにtrigger_dev providerとexecutionIdが保存される",
+        calls.attachRunExternalRefCalls[0]?.externalRef?.runtimeProvider === "trigger_dev" &&
+          calls.attachRunExternalRefCalls[0]?.externalRef?.runtimeExecutionId === "fake-trigger-run-1"
+      )
+    );
+  }
+
+  // ---- [Dispatch] Runtime start失敗: run.created→run.failed、provider call=0、新しいRunは作られない ----
+  {
+    const { deps, calls } = makeDeps();
+    const { adapter } = makeFakeRuntimeAdapter({
+      status: "failed",
+      error: { code: "runtime_unavailable", message: "safe message", retryable: true },
+    });
+
+    const outcome = await dispatchIntegrationReadToRuntime(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      adapter,
+      deps
+    );
+
+    results.push(
+      check(
+        "[Dispatch/失敗] status='runtime_start_failed'、createRun=1(既に作成済みRunをfailedへ)・provider call=0・attachRunExternalRef=0・failRun=1",
+        outcome.status === "runtime_start_failed" &&
+          calls.createRunCalls === 1 &&
+          calls.executeIntegrationActionCalls === 0 &&
+          calls.attachRunExternalRefCalls.length === 0 &&
+          calls.failRunCalls === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Dispatch/失敗] 順序: policy.evaluated→createRun→run.created→run.failed→failRun(既存executeIntegrationActionCore()のfailure順序と同じ、completeRun/provider.*は一切発生しない)、run.failedのreasonCodeはRuntimeErrorCode",
+        JSON.stringify(calls.callOrder) ===
+          JSON.stringify(["audit:policy.evaluated", "createRun", "audit:run.created", "audit:run.failed", "failRun"]) &&
+          calls.emitAuditEventCalls.find((e) => e.eventType === "run.failed")?.reasonCode === "runtime_unavailable"
+      )
+    );
+  }
+
+  // ---- [Dispatch] ineligible action(send_message)はallowlistで即拒否、Run作成0・Runtime呼び出し0 ----
+  {
+    const { deps, calls } = makeDeps();
+    const { adapter, capturedRequests } = makeFakeRuntimeAdapter({
+      status: "started",
+      handle: { provider: "trigger_dev", executionId: "should-not-be-used" },
+    });
+
+    const outcome = await dispatchIntegrationReadToRuntime(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: { service: "slack", operation: "send_message", input: { channel: "#general", text: "hi" } } },
+      adapter,
+      deps
+    );
+
+    results.push(
+      check(
+        "[Dispatch/protected write guard] slack.send_messageはinvalid_actionで即拒否され、Run作成0・Runtime起動0(たとえruntime configが有効でも対象外)",
+        outcome.status === "invalid_action" &&
+          calls.createRunCalls === 0 &&
+          capturedRequests.length === 0
+      )
+    );
+  }
+
+  // ---- [Dispatch] Connection不正/Task不正時は既存statusをそのまま返す ----
+  {
+    const { deps } = makeDeps({ getConnection: async () => undefined });
+    const { adapter } = makeFakeRuntimeAdapter({ status: "started", handle: { provider: "trigger_dev", executionId: "x" } });
+
+    const outcome = await dispatchIntegrationReadToRuntime(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      adapter,
+      deps
+    );
+
+    results.push(check("[Dispatch/precondition] Connection不正時はconnection_unavailableをそのまま返す", outcome.status === "connection_unavailable"));
+  }
+
+  // =========================
+  // Fast Port P5c — executeRuntimeIntegrationRead()
+  // (Trigger.dev task側から呼ばれる、既存Run再開の中核ロジック)
+  // =========================
+
+  // ---- [Resume] 既存running Runを再開し、providerが成功 -> completed、createRunは一切呼ばれない(絶対条件Step9) ----
+  {
+    const { deps, calls } = makeDeps({
+      listRunsForTask: async () => {
+        calls.listRunsForTaskCalls += 1;
+        return [makeRun({ id: "run-existing-1", workId: "work-1", taskId: "task-1", status: "running" })];
+      },
+    });
+
+    const outcome = await executeRuntimeIntegrationRead(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", runId: "run-existing-1", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Resume] 既存Runを再開し、providerが成功するとcompletedを返す。createRunは一切呼ばれない(Trigger task内でcreateRun禁止、絶対条件Step9)",
+        outcome.status === "completed" && calls.createRunCalls === 0 && calls.completeRunCalls === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Resume] run.createdは再emitされない(既存Runをそのまま使う、二重emission防止)",
+        !calls.emitAuditEventCalls.some((e) => e.eventType === "run.created")
+      )
+    );
+
+    results.push(
+      check(
+        "[Resume] provider.called→provider.completed→run.completedはこの境界(Trigger task側)で正しくemitされる",
+        calls.emitAuditEventCalls.some((e) => e.eventType === "provider.called") &&
+          calls.emitAuditEventCalls.some((e) => e.eventType === "provider.completed") &&
+          calls.emitAuditEventCalls.some((e) => e.eventType === "run.completed")
+      )
+    );
+  }
+
+  // ---- [Resume] runIdが実在しない -> not_found ----
+  {
+    const { deps } = makeDeps({
+      listRunsForTask: async () => [],
+    });
+
+    const outcome = await executeRuntimeIntegrationRead(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", runId: "run-missing", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      deps
+    );
+
+    results.push(check("[Resume/correlation] 存在しないrunIdはnot_foundを返す(Run/Task/action correlation再検証)", outcome.status === "not_found"));
+  }
+
+  // ---- [Resume] 既にcompleted状態のRunは二重実行しない(duplicate provider call防止、絶対条件18) ----
+  {
+    const { deps, calls } = makeDeps({
+      listRunsForTask: async () => [makeRun({ id: "run-done-1", workId: "work-1", taskId: "task-1", status: "completed" })],
+    });
+
+    const outcome = await executeRuntimeIntegrationRead(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", runId: "run-done-1", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Resume/dedup] 既にcompleted状態のRunはalready_executedを返し、providerを再実行しない",
+        outcome.status === "already_executed" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- [Resume] ineligible actionはallowlistで即拒否(Trigger task側の二重ゲート) ----
+  {
+    const { deps, calls } = makeDeps();
+
+    const outcome = await executeRuntimeIntegrationRead(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", runId: "run-1", connectionId: "conn-1", action: { service: "slack", operation: "send_message", input: { channel: "#general", text: "hi" } } },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Resume/allowlist] slack.send_messageはinvalid_actionで即拒否される(Trigger task側でも二重にゲートする、絶対条件Step19)",
+        outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0
+      )
+    );
+  }
+
+  // ---- [Resume] providerが失敗した場合 -> failed、createRunは呼ばれない ----
+  {
+    const { deps, calls } = makeDeps({
+      listRunsForTask: async () => [makeRun({ id: "run-existing-2", workId: "work-1", taskId: "task-1", status: "running" })],
+      executeIntegrationAction: async () => {
+        calls.executeIntegrationActionCalls += 1;
+        return { status: "failed", error: { code: "provider_execution_failed", message: "simulated", retryable: false } };
+      },
+    });
+
+    const outcome = await executeRuntimeIntegrationRead(
+      { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", runId: "run-existing-2", connectionId: "conn-1", action: { service: "slack", operation: "list_channels", input: {} } },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Resume/失敗] providerが失敗した場合はfailedを返し、createRunは一切呼ばれない",
+        outcome.status === "failed" && calls.createRunCalls === 0 && calls.failRunCalls === 1
       )
     );
   }

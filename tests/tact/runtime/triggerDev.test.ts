@@ -37,6 +37,7 @@ const TEST_CONFIG: TriggerDevRuntimeConfig = {
 function makeRequest(overrides: Partial<Extract<RuntimeExecutionRequest, { kind: "integration_action" }>> = {}): RuntimeExecutionRequest {
   return {
     kind: "integration_action",
+    userId: "user-1",
     workId: "work-1",
     taskId: "task-1",
     runId: "run-1",
@@ -116,6 +117,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       )
     );
 
+    results.push(check("[5b] userIdが保持される(Fast Port P5c: Trigger.dev task側のservice role query用)", payload.userId === "user-1"));
     results.push(check("[6] workIdが保持される", payload.workId === "work-1"));
     results.push(check("[7] taskIdが保持される", payload.taskId === "task-1"));
     results.push(check("[8] runIdが保持される", payload.runId === "run-1"));

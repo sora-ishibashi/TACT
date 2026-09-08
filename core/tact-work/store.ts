@@ -916,6 +916,45 @@ export async function failRun(
 
 }
 
+// =========================
+// attachRunExternalRef (Fast Port P5c)
+// =========================
+//
+// completeRun()/failRun()はRun statusの確定と同時にしかexternalRefを
+// 設定できない。P5cのRuntime handoff(Trigger.dev startExecution()成功
+// 直後、providerがまだ実行されていない時点)ではRunをまだcompleted/
+// failedにできないため、externalRefだけを単独で更新する最小APIを
+// 追加する(Step10、絶対条件: Run statusは一切変更しない、新しいDB
+// columnは追加しない——既存external_ref列をそのまま使う)。
+export async function attachRunExternalRef(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  runId: string,
+  externalRef: Run["externalRef"],
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<void> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return;
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { error } = await client
+    .from("tact_runs")
+    .update({ external_ref: externalRef ?? null })
+    .eq("id", runId)
+    .eq("work_id", workId);
+
+  if (error) {
+    throw error;
+  }
+
+}
+
 export async function listRunsForTask(
   workId: string,
   userId: string,

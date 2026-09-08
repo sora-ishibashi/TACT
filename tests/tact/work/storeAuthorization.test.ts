@@ -34,6 +34,7 @@ import {
   createRun,
   completeRun,
   failRun,
+  attachRunExternalRef,
   listRunsForTask,
   createApproval,
   getApproval,
@@ -190,6 +191,24 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     results.push(
       check(
         "[cross-user] completeRun()/failRun(): 他userのWorkに対しても例外を投げず安全に早期returnする",
+        threw === false
+      )
+    );
+  }
+
+  {
+    // Fast Port P5c: attachRunExternalRef()も同じownership guardパターン
+    // (getWork()が先にfalse相当を返せば実DB呼び出しに到達しない)を
+    // 踏襲していることを確認する。
+    let threw = false;
+    try {
+      await attachRunExternalRef("work-1", "attacker-user", "fake-token", "run-1", { runtimeProvider: "trigger_dev", runtimeExecutionId: "x" }, notFoundDeps);
+    } catch {
+      threw = true;
+    }
+    results.push(
+      check(
+        "[cross-user] attachRunExternalRef(): 他userのWorkに対しても例外を投げず安全に早期returnする(Run statusには一切触れない)",
         threw === false
       )
     );

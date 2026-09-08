@@ -149,7 +149,17 @@ export type ExecuteReadIntegrationActionOutcome =
   | { status: "invalid_action" }
   | { status: "task_not_executable" }
   | { status: "not_found" }
-  | { status: "work_not_runnable" };
+  | { status: "work_not_runnable" }
+  // Fast Port P5c: Runtime(Trigger.dev)へhandoffされ、実際のprovider
+  // 実行はTrigger.dev task側で非同期に行われる状態。canonical Run
+  // は既にTACT側で作成済み(policy.evaluated→run.created完了)だが、
+  // このTurn内ではread結果を同期的に返せない——絶対条件(Resume
+  // brief Critical P5c architecture question、Option C): original
+  // caller result deliveryはこのPhaseの対象外(このstatusは既存の
+  // "completed"分岐(if文、exhaustive switchではない)には一致しない
+  // ため、単に何もせず素通りする——既存呼び出し元コードの変更は
+  // 不要)。
+  | { status: "runtime_dispatched" };
 
 export type ExecuteReadIntegrationAction = (
   params: ExecuteReadIntegrationActionParams

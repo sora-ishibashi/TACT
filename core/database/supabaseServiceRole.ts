@@ -47,6 +47,18 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 //       Boundary。tactUserIdはserver側で検証済みの値のみを受け取り、
 //       外部Channel user idは一切使わない、trustedConversationTurn.ts
 //       と同じ設計)。
+//   - core/tact-runtime/execution.ts
+//       (Fast Port P5c、Trusted Runtime Execution Boundary。
+//       Trigger.dev task(TACT外の実行infrastructure)から呼ばれる
+//       executeRuntimeIntegrationRead()専用。Trigger.dev payloadは
+//       secretを一切含まないため、Supabase server-side credentialは
+//       Trigger.dev自身のEnvironment Secret(このprocessのenv、
+//       core/tact-bot/execution/配下と同じgetServiceRoleKey()経由)
+//       からのみ解決する。tactUserIdはpayload(RuntimeExecutionRequest.
+//       userId、外部からの主張ではなくTACT側がdispatch時に埋め込んだ
+//       canonical値)を受け取るが、Work/Task/Run/actionのcorrelationを
+//       必ず再検証してから使う(trustedConversationTurn.tsと同じ、
+//       「値を受け取ったら即信用する」のではなく都度再検証する設計)。
 //
 // それ以外のCore module(core/tact-research・core/tact-orchestrator・
 // core/tact-core等)からは一切importしないこと。

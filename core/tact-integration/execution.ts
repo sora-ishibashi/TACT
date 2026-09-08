@@ -24,8 +24,15 @@ import {
 // canonical mutation ownerがemitする——Run/Provider lifecycleは
 // このfile以外どこにも作られない)。
 import { emitAuditSafely as defaultEmitAuditSafely } from "../tact-work/audit";
+import { attachRunExternalRef as defaultAttachRunExternalRef } from "../tact-work/store";
 import type { Approval, ApprovalStatus, Run, TaskStatus, WorkStatus } from "../tact-work/types";
 import type { Connection, IntegrationAction, IntegrationService } from "./types";
+// Fast Port P5c: provider-neutral型のみをimportする(絶対条件、
+// core/tact-runtime/providers/triggerDev.ts等のTrigger.dev SDK
+// importは一切ここへ持ち込まない——type-only importなので実行時の
+// 依存も生まれない)。
+import type { RuntimeAdapter, RuntimeError } from "../tact-runtime/types";
+import { toRunExternalRefFields } from "../tact-runtime/types";
 
 // =========================
 // TACT Integration — Execution Boundary
@@ -117,6 +124,11 @@ export interface ExecuteApprovedIntegrationActionDeps {
   // core/tact-work/approval.ts等と同じDI pattern、Step13)。
   emitAuditEvent: typeof defaultEmitAuditSafely;
 
+  // Fast Port P5c(Step10): Runtime handoff成功直後、Run未確定
+  // (completed/failedへ倒す前)のタイミングでRuntimeExecutionHandleを
+  // Run.externalRefへ保存するためだけに使う。Run statusは変更しない。
+  attachRunExternalRef: typeof defaultAttachRunExternalRef;
+
 }
 
 const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
@@ -132,6 +144,7 @@ const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
   executeIntegrationAction: defaultExecuteIntegrationAction,
   reconcileWorkCompletionStatus: defaultReconcileWorkCompletionStatus,
   emitAuditEvent: defaultEmitAuditSafely,
+  attachRunExternalRef: defaultAttachRunExternalRef,
 };
 
 // 絶対条件(Phase C2.1a指示、最重要): reconciliation自体が失敗しても、
@@ -321,14 +334,42 @@ interface ExecuteIntegrationActionCoreParams {
   // (read側は未指定のままでよく、この関数自身が取得する)。
   existingRunsForTask?: Run[];
 
+  // Fast Port P5c: Runtime handoff(dispatchIntegrationReadToRuntime())
+  // が既にcreateRun()済みのRunを渡す場合に使う。指定された場合、この
+  // 関数はcreateRun()を呼ばず(=新しいRunを作らない、絶対条件Step9:
+  // Trigger.dev task内でcreateRun禁止)、渡されたRunでそのまま
+  // provider dispatch以降を再開する(run.createdの再emissionもしない
+  // ——呼び出し元がdispatch時点で既にemit済み)。
+  existingRun?: Run;
+
 }
 
-async function executeIntegrationActionCore(
-  params: ExecuteIntegrationActionCoreParams,
-  deps: ExecuteApprovedIntegrationActionDeps
-): Promise<IntegrationActionExecutionOutcome> {
+// Fast Port P5c(Step6/Step9切り出し): Task pending state確認・attempt
+// 採番・Task→running遷移・Run作成・run.created emissionという、Run
+// 準備までの共通シーケンス。既存executeIntegrationActionCore()の
+// direct provider dispatch pathと、新設dispatchIntegrationReadToRuntime()
+// (Runtime handoff path)の両方がこの関数を共有する(絶対条件Step6:
+// 既存provider dispatch/Run lifecycle logicを複製しない)。
+interface PrepareRunForExecutionParams {
+  workId: string;
+  userId: string;
+  accessToken: string;
+  taskId: string;
+  connection: Connection;
+  action: IntegrationAction;
+  existingRunsForTask?: Run[];
+}
 
-  const { workId, userId, accessToken, taskId, connection, action, approvalId } = params;
+type PrepareRunForExecutionResult =
+  | { ok: true; run: Run }
+  | { ok: false; outcome: IntegrationActionExecutionOutcome };
+
+async function prepareRunForExecution(
+  params: PrepareRunForExecutionParams,
+  deps: ExecuteApprovedIntegrationActionDeps
+): Promise<PrepareRunForExecutionResult> {
+
+  const { workId, userId, accessToken, taskId, connection, action } = params;
 
   // Architecture Migration Phase C2.1c-a-fix(絶対条件、read/write共通):
   // 新規external executionを開始できるTask stateはpendingだけである。
@@ -338,11 +379,11 @@ async function executeIntegrationActionCore(
   const task = tasksForWork.find((t) => t.id === taskId);
 
   if (!task) {
-    return { status: "not_found" };
+    return { ok: false, outcome: { status: "not_found" } };
   }
 
   if (task.status !== "pending") {
-    return { status: "task_not_executable", taskStatus: task.status };
+    return { ok: false, outcome: { status: "task_not_executable", taskStatus: task.status } };
   }
 
   const existingRuns = params.existingRunsForTask ?? (await deps.listRunsForTask(workId, userId, accessToken, taskId));
@@ -364,7 +405,7 @@ async function executeIntegrationActionCore(
   );
 
   if (!run) {
-    return { status: "not_found" };
+    return { ok: false, outcome: { status: "not_found" } };
   }
 
   // Fast Port P4b(Step8): run.createdのcanonical emitter。Run row
@@ -383,6 +424,38 @@ async function executeIntegrationActionCore(
     userId,
     accessToken
   );
+
+  return { ok: true, run };
+
+}
+
+async function executeIntegrationActionCore(
+  params: ExecuteIntegrationActionCoreParams,
+  deps: ExecuteApprovedIntegrationActionDeps
+): Promise<IntegrationActionExecutionOutcome> {
+
+  const { workId, userId, accessToken, taskId, connection, action, approvalId } = params;
+
+  let run: Run;
+
+  if (params.existingRun) {
+
+    run = params.existingRun;
+
+  } else {
+
+    const prepared = await prepareRunForExecution(
+      { workId, userId, accessToken, taskId, connection, action, existingRunsForTask: params.existingRunsForTask },
+      deps
+    );
+
+    if (!prepared.ok) {
+      return prepared.outcome;
+    }
+
+    run = prepared.run;
+
+  }
 
   // Fast Port P4b(Step9): provider.calledのcanonical emitter。actual
   // external provider invocationの直前にemitする。このevent emit自体が
@@ -759,10 +832,29 @@ export interface ExecuteReadIntegrationActionParams {
 
 }
 
-export async function executeReadIntegrationAction(
-  params: ExecuteReadIntegrationActionParams,
-  deps: ExecuteApprovedIntegrationActionDeps = defaultDeps
-): Promise<IntegrationActionExecutionOutcome> {
+// Fast Port P5c(Step6切り出し): executeReadIntegrationAction()・
+// dispatchIntegrationReadToRuntime()の両方が共有するpre-check
+// sequence(live Policy recheck+emit・Work ownership/running確認・
+// Connection検証)。既存executeReadIntegrationAction()の挙動を一切
+// 変えない、純粋な抽出(絶対条件Step6: 既存Policy/Connection検証
+// logicを複製しない)。
+interface ReadExecutionPreconditionsParams {
+  workId: string;
+  userId: string;
+  accessToken: string;
+  taskId: string;
+  connectionId: string;
+  action: IntegrationAction;
+}
+
+type ReadExecutionPreconditionsResult =
+  | { ok: true; connection: Connection }
+  | { ok: false; outcome: IntegrationActionExecutionOutcome };
+
+async function validateReadExecutionPreconditions(
+  params: ReadExecutionPreconditionsParams,
+  deps: ExecuteApprovedIntegrationActionDeps
+): Promise<ReadExecutionPreconditionsResult> {
 
   const { workId, userId, accessToken, taskId, connectionId, action } = params;
 
@@ -798,8 +890,11 @@ export async function executeReadIntegrationAction(
 
   if (policyDecision.decision !== "allow") {
     return {
-      status: "invalid_action",
-      reason: "この操作はread実行境界の対象として登録されていません",
+      ok: false,
+      outcome: {
+        status: "invalid_action",
+        reason: "この操作はread実行境界の対象として登録されていません",
+      },
     };
   }
 
@@ -809,11 +904,11 @@ export async function executeReadIntegrationAction(
   const work = await deps.getWork(workId, userId, accessToken);
 
   if (!work) {
-    return { status: "not_found" };
+    return { ok: false, outcome: { status: "not_found" } };
   }
 
   if (work.status !== "running") {
-    return { status: "work_not_runnable", workStatus: work.status };
+    return { ok: false, outcome: { status: "work_not_runnable", workStatus: work.status } };
   }
 
   const connectionValidation = await validateConnectionForExecution(
@@ -824,7 +919,27 @@ export async function executeReadIntegrationAction(
   );
 
   if (!connectionValidation.ok) {
-    return connectionValidation.outcome;
+    return { ok: false, outcome: connectionValidation.outcome };
+  }
+
+  return { ok: true, connection: connectionValidation.connection };
+
+}
+
+export async function executeReadIntegrationAction(
+  params: ExecuteReadIntegrationActionParams,
+  deps: ExecuteApprovedIntegrationActionDeps = defaultDeps
+): Promise<IntegrationActionExecutionOutcome> {
+
+  const { workId, userId, accessToken, taskId, connectionId, action } = params;
+
+  const preconditions = await validateReadExecutionPreconditions(
+    { workId, userId, accessToken, taskId, connectionId, action },
+    deps
+  );
+
+  if (!preconditions.ok) {
+    return preconditions.outcome;
   }
 
   return executeIntegrationActionCore(
@@ -833,9 +948,274 @@ export async function executeReadIntegrationAction(
       userId,
       accessToken,
       taskId,
-      connection: connectionValidation.connection,
+      connection: preconditions.connection,
       action,
       // approvalIdなし(read実行はApprovalを一切経由しない、絶対条件)。
+    },
+    deps
+  );
+
+}
+
+// =========================
+// Runtime read slice allowlist (Fast Port P5c、Step19)
+// =========================
+//
+// 絶対条件(最重要): Runtimeへ流してよいIntegration Actionは、この
+// Phaseではslack.list_channelsただ1つだけ(read-only、side effectなし、
+// 既存PolicyDecision===allow)。general-purpose remote executor化を
+// 防ぐため、hard-codedの最小allowlistとして表現する(genericな
+// routing engineは作らない)。呼び出し元(dispatch側)・Trigger.dev
+// task側(executeRuntimeIntegrationRead()経由)の両方がこの同じ関数を
+// 呼び、二重にゲートする。
+export function isRuntimeEligibleIntegrationAction(service: string, operation: string): boolean {
+  return service === "slack" && operation === "list_channels";
+}
+
+// =========================
+// dispatchIntegrationReadToRuntime (Fast Port P5c、Step9/Step10/Step11)
+// =========================
+//
+// 絶対条件: IntegrationActionExecutionOutcome(既存の共有型)へは
+// 新しいstatusを追加しない——この型はcore/tact-bot/gateway/
+// receiveApprovalDecision.ts・core/tact-conversation/orchestration.ts
+// の既存exhaustive switchで使われており、新しいmemberを追加すると
+// それらのfile(原則変更禁止)を連鎖的に変更する必要が生じるため
+// (P5c実装時に検証済み)。そのため、この関数専用の独立した戻り値型
+// (RuntimeReadDispatchOutcome)を新設する。
+export type RuntimeReadDispatchOutcome =
+  | { status: "dispatched"; run: Run }
+  | { status: "runtime_start_failed"; run: Run; error: RuntimeError }
+  | { status: "not_found" }
+  | { status: "work_not_runnable"; workStatus: WorkStatus }
+  | { status: "connection_unavailable" }
+  | { status: "invalid_action"; reason: string }
+  | { status: "task_not_executable"; taskStatus: TaskStatus };
+
+export interface DispatchIntegrationReadToRuntimeParams {
+  workId: string;
+  userId: string;
+  accessToken: string;
+  taskId: string;
+  connectionId: string;
+  action: IntegrationAction;
+}
+
+// TACT live callerがRuntime start前にRunを作る(絶対条件Step9)。
+// この関数がcreateRun()(prepareRunForExecution()経由)を呼び、
+// run.createdをemitした直後にTriggerDevRuntimeAdapter(等の
+// RuntimeAdapter実装)へhandoffする。provider(Composio等)は一切
+// 呼ばない——実際のprovider dispatchはTrigger.dev task側
+// (executeRuntimeIntegrationRead())の責務。
+export async function dispatchIntegrationReadToRuntime(
+  params: DispatchIntegrationReadToRuntimeParams,
+  runtimeAdapter: RuntimeAdapter,
+  deps: ExecuteApprovedIntegrationActionDeps = defaultDeps
+): Promise<RuntimeReadDispatchOutcome> {
+
+  const { workId, userId, accessToken, taskId, connectionId, action } = params;
+
+  // 絶対条件(Step19/Step20、defense-in-depth): 呼び出し元のrouting
+  // 判定を信用せず、この境界自身も再度allowlistを確認する。
+  if (!isRuntimeEligibleIntegrationAction(action.service, action.operation)) {
+    return {
+      status: "invalid_action",
+      reason: "この操作はRuntime実行対象のread sliceとして登録されていません",
+    };
+  }
+
+  const preconditions = await validateReadExecutionPreconditions(
+    { workId, userId, accessToken, taskId, connectionId, action },
+    deps
+  );
+
+  if (!preconditions.ok) {
+
+    // validateReadExecutionPreconditions()自身の実装(上記)が返す
+    // outcomeは必ずnot_found/work_not_runnable/connection_unavailable/
+    // invalid_actionのいずれかであり、それらはRuntimeReadDispatchOutcome
+    // にもそのまま存在する——安全にそのまま返せる。
+    switch (preconditions.outcome.status) {
+      case "not_found":
+      case "work_not_runnable":
+      case "connection_unavailable":
+      case "invalid_action":
+        return preconditions.outcome;
+      default:
+        return { status: "invalid_action", reason: "この操作を検証できませんでした" };
+    }
+
+  }
+
+  const prepared = await prepareRunForExecution(
+    { workId, userId, accessToken, taskId, connection: preconditions.connection, action },
+    deps
+  );
+
+  if (!prepared.ok) {
+
+    switch (prepared.outcome.status) {
+      case "not_found":
+      case "task_not_executable":
+        return prepared.outcome;
+      default:
+        return { status: "invalid_action", reason: "Run準備に失敗しました" };
+    }
+
+  }
+
+  const run = prepared.run;
+
+  const startOutcome = await runtimeAdapter.startExecution({
+    kind: "integration_action",
+    userId,
+    workId,
+    taskId,
+    runId: run.id,
+    action: { service: action.service, operation: action.operation, connectionId },
+  });
+
+  if (startOutcome.status === "failed") {
+
+    // 絶対条件(Step11): Runtime start失敗時はprovider call 0のまま
+    // Runをfailedへ閉じる。raw RuntimeError.messageではなくcanonical
+    // codeだけをsafe reasonへ使う(secret/内部詳細を含めない)。
+    const safeErrorMessage = `Runtime dispatch failed: ${startOutcome.error.code}`;
+
+    await deps.emitAuditEvent(
+      {
+        workId,
+        taskId,
+        runId: run.id,
+        category: "execution",
+        eventType: "run.failed",
+        reasonCode: startOutcome.error.code,
+      },
+      userId,
+      accessToken
+    );
+
+    await deps.failRun(workId, userId, accessToken, run.id, { error: safeErrorMessage });
+
+    await deps.updateTaskStatus(workId, userId, accessToken, taskId, "failed");
+
+    await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
+
+    return {
+      status: "runtime_start_failed",
+      run: { ...run, status: "failed", error: safeErrorMessage },
+      error: startOutcome.error,
+    };
+
+  }
+
+  // 絶対条件(Step10、P5a helper再利用): Run.externalRefはTACT
+  // canonical IDを置き換えない、あくまでexternal execution reference。
+  // Run statusは変更しない(completed/failedへはまだ倒さない——実際の
+  // provider実行はまだこれから、Trigger.dev task側の責務)。
+  //
+  // 既知のreconciliation debt(P5d、Step「Trigger started, externalRef
+  // persistence fails」への回答): attachRunExternalRef()自体が失敗した
+  // 場合、Trigger.dev側のexecutionは既に開始済みだが、TACT側の
+  // Run.externalRefにはそれが反映されない。read-only sliceのため
+  // side effect riskは低いが、自動retryは行わない
+  // (絶対条件20、二重実行防止)——このgapを埋めるreconciliation/
+  // idempotency機構はP5dで扱う。
+  const externalRef: Record<string, unknown> = { ...toRunExternalRefFields(startOutcome.handle) };
+
+  try {
+
+    await deps.attachRunExternalRef(workId, userId, accessToken, run.id, externalRef);
+
+  } catch (error) {
+
+    console.warn(
+      "[tact-integration/execution] dispatchIntegrationReadToRuntime(): attachRunExternalRef()が失敗した。" +
+      "Trigger.dev側のexecutionは既に開始済みのため、自動retryは行わない" +
+      "(重複実行防止、P5d reconciliation debtとして既知)。",
+      error
+    );
+
+  }
+
+  return { status: "dispatched", run: { ...run, externalRef } };
+
+}
+
+// =========================
+// executeRuntimeIntegrationRead (Fast Port P5c、Step6)
+// =========================
+//
+// Trigger.dev taskから呼ばれるTrusted Runtime Execution Boundary
+// (core/tact-runtime/execution.ts)が、service role credential解決後に
+// 呼ぶ内部entrypoint。dispatchIntegrationReadToRuntime()が既に
+// createRun()済みのRunを、ここで実際にprovider実行して完了させる
+// (絶対条件Step9: Trigger task側でcreateRunしない——このrunIdは
+// 呼び出し元が渡した既存Run)。
+//
+// 絶対条件: Work/Task/Run/actionのcorrelationを必ず再検証する
+// (呼び出し元payloadの主張を信用しない、trustedConversationTurn.ts
+// と同じ設計原則)。allowlist・live Policy recheckも独立してもう一度
+// 行う(defense-in-depth、二重ゲート)。
+export interface ExecuteRuntimeIntegrationReadParams {
+  workId: string;
+  userId: string;
+  accessToken: string;
+  taskId: string;
+  runId: string;
+  connectionId: string;
+  action: IntegrationAction;
+}
+
+export async function executeRuntimeIntegrationRead(
+  params: ExecuteRuntimeIntegrationReadParams,
+  deps: ExecuteApprovedIntegrationActionDeps = defaultDeps
+): Promise<IntegrationActionExecutionOutcome> {
+
+  const { workId, userId, accessToken, taskId, runId, connectionId, action } = params;
+
+  if (!isRuntimeEligibleIntegrationAction(action.service, action.operation)) {
+    return {
+      status: "invalid_action",
+      reason: "この操作はRuntime実行対象のread sliceとして登録されていません",
+    };
+  }
+
+  const preconditions = await validateReadExecutionPreconditions(
+    { workId, userId, accessToken, taskId, connectionId, action },
+    deps
+  );
+
+  if (!preconditions.ok) {
+    return preconditions.outcome;
+  }
+
+  // Run/Work/Task correlationの再検証(絶対条件、最重要): payloadが
+  // 主張するrunIdが、実際にこのworkId/taskIdに属する既存Runと一致
+  // することを確認してから再開する。listRunsForTask()を再利用し
+  // (新しいDB queryを追加しない)、単発取得APIを新設しない。
+  const existingRuns = await deps.listRunsForTask(workId, userId, accessToken, taskId);
+  const run = existingRuns.find((candidate) => candidate.id === runId);
+
+  if (!run) {
+    return { status: "not_found" };
+  }
+
+  if (run.status !== "running") {
+    // 既にcompleted/failedへ確定済みのRunを二重に実行しない
+    // (絶対条件18、duplicate provider call防止)。
+    return { status: "already_executed", run };
+  }
+
+  return executeIntegrationActionCore(
+    {
+      workId,
+      userId,
+      accessToken,
+      taskId,
+      connection: preconditions.connection,
+      action,
+      existingRun: run,
     },
     deps
   );
