@@ -226,7 +226,19 @@ export async function receiveSlackBotApprovalDecisionAsTrustedActor(
   // BOT-P2.5と同じ順序: external identity → trusted tactUserId
   // resolution。外部Slack user idをそのままtactUserIdとして使わない
   // (絶対条件3/4)。
-  const identity = await deps.identityResolver.resolve(message.actor, message.channel);
+  // S1e Identity Hotfix: receiveBotMessage()(通常message path、
+  // core/tact-bot/gateway/receiveMessage.ts)と同じく、第3引数として
+  // message.organizationId(Slack envelope team_id由来)を渡す
+  // ——渡し忘れると、同じexternalUserIdでもexternal_workspace_id
+  // IS NULLという誤ったDB queryになり、実際は非NULLの既存workspace
+  // rowに一致しない(Root cause確認済み)。Slack team_idを独自に
+  // 再取得・再解析しない、既にnormalize済みのmessage.organizationId
+  // をそのまま転送するだけ。
+  const identity = await deps.identityResolver.resolve(
+    message.actor,
+    message.channel,
+    message.organizationId
+  );
 
   if (!identity) {
 
@@ -280,6 +292,10 @@ export async function receiveSlackBotApprovalDecisionAsTrustedActor(
     channel: message.channel,
     actor: message.actor,
     target,
+    // S1e Identity Hotfix: receiveBotApprovalDecision()内部の2回目の
+    // identity解決(Step7参照)でも同じworkspace-aware lookupが行える
+    // よう、同じmessage.organizationIdをそのまま転送する。
+    organizationId: message.organizationId,
     workId: resolution.workId,
     approvalId: resolution.approval.id,
     decision: decisionKind,

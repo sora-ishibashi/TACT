@@ -69,18 +69,33 @@ function makeApproval(overrides: Partial<Approval> = {}): Approval {
 function makeDeps(options: {
   identity?: BotIdentity | null;
   handleDecisionResult?: HandleApprovalDecisionAsTrustedActorResult;
+  // S1e Identity Hotfix: workspace-aware resolutionをシミュレートする
+  // 場合のみ指定する(未指定ならworkspace無視で既定identityを返す、
+  // 既存Caseへの影響を避ける)。
+  expectedOrganizationId?: string;
 } = {}): {
   deps: BotApprovalDecisionGatewayDeps;
-  identityResolveCalls: { externalUserId: string; channel: string }[];
+  identityResolveCalls: { externalUserId: string; channel: string; organizationId?: string }[];
   handleDecisionCalls: HandleApprovalDecisionAsTrustedActorParams[];
 } {
 
-  const identityResolveCalls: { externalUserId: string; channel: string }[] = [];
+  const identityResolveCalls: { externalUserId: string; channel: string; organizationId?: string }[] = [];
   const handleDecisionCalls: HandleApprovalDecisionAsTrustedActorParams[] = [];
 
   const identityResolver: BotIdentityResolver = {
-    async resolve(actor, channel) {
-      identityResolveCalls.push({ externalUserId: actor.externalUserId, channel });
+    async resolve(actor, channel, organizationId) {
+      identityResolveCalls.push({ externalUserId: actor.externalUserId, channel, organizationId });
+
+      // S1e Identity Hotfix: expectedOrganizationIdが指定された場合、
+      // findExternalIdentity()の既存workspace-scoped lookup semantics
+      // (external_workspace_id = <値> の完全一致、fallback無し)を
+      // fakeで再現する——不一致・欠落は常にnull(fail closed)。
+      if (options.expectedOrganizationId !== undefined) {
+        return organizationId === options.expectedOrganizationId
+          ? { tactUserId: "tact-user-1" }
+          : null;
+      }
+
       // 絶対条件: "identity: null"が明示的に指定された場合(未解決を
       // 表す)と、指定されなかった場合(既定でtact-user-1に解決)を
       // 区別する(?? だとnullも既定値へfallbackしてしまうため、
@@ -128,6 +143,72 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         "[Case9] identityResolver.resolve()へ渡るのはactor(外部platform user)であり、canonical handlerへはtrusted解決済みtactUserIdだけが渡る(外部actor idを直接使わない)",
         identityResolveCalls[0]?.externalUserId === "U-external-999" &&
           handleDecisionCalls[0]?.tactUserId === "tact-user-1"
+      )
+    );
+  }
+
+  // ---- S1e Identity Hotfix Case: decision.organizationIdがresolve()第3引数へ転送される ----
+  {
+    const { deps, identityResolveCalls } = makeDeps();
+
+    await receiveBotApprovalDecision(makeDecision({ organizationId: "T123TEAM" }), deps);
+
+    results.push(
+      check(
+        "[S1e Hotfix] identityResolver.resolve()の第3引数はdecision.organizationId('T123TEAM')そのもの(通常message pathと同じargument semantics)",
+        identityResolveCalls[0]?.organizationId === "T123TEAM"
+      )
+    );
+  }
+
+  // ---- S1e Identity Hotfix Case: workspace一致時のみ解決される(fail closed on mismatch) ----
+  {
+    const { deps, handleDecisionCalls } = makeDeps({ expectedOrganizationId: "T123TEAM" });
+
+    const matched = await receiveBotApprovalDecision(
+      makeDecision({ organizationId: "T123TEAM" }),
+      deps
+    );
+
+    results.push(
+      check(
+        "[S1e Hotfix] workspace(organizationId)が一致する場合、canonical handleDecisionへ到達しhandled:trueとなる",
+        matched.handled === true && handleDecisionCalls.length === 1
+      )
+    );
+  }
+
+  // ---- S1e Identity Hotfix Case: 同じexternal user idでもorganizationIdが違えばfail closed ----
+  {
+    const { deps: wrongWorkspaceDeps, handleDecisionCalls: wrongWorkspaceCalls } = makeDeps({
+      expectedOrganizationId: "T123TEAM",
+    });
+
+    const mismatched = await receiveBotApprovalDecision(
+      makeDecision({ organizationId: "T999OTHERTEAM" }),
+      wrongWorkspaceDeps
+    );
+
+    results.push(
+      check(
+        "[S1e Hotfix] 同一external user idでもorganizationIdが期待値と異なる場合、identity未解決としてfail closedされ、handleDecisionは一切呼ばれない(wildcard/fallback一致は行わない)",
+        mismatched.handled === false &&
+          mismatched.reason === "identity_unresolved" &&
+          wrongWorkspaceCalls.length === 0
+      )
+    );
+  }
+
+  // ---- S1e Identity Hotfix Case: organizationId欠落時は既存null-workspace semanticsのまま(resolverの挙動自体は変更しない) ----
+  {
+    const { deps, identityResolveCalls } = makeDeps();
+
+    await receiveBotApprovalDecision(makeDecision({ organizationId: undefined }), deps);
+
+    results.push(
+      check(
+        "[S1e Hotfix] decision.organizationId省略時、resolve()の第3引数はundefinedのまま渡る(独自のfallback値を作らない、既存resolver semantics — external_workspace_id IS NULL相当 — をそのまま維持する)",
+        identityResolveCalls[0]?.organizationId === undefined
       )
     );
   }

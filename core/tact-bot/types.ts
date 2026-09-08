@@ -182,6 +182,13 @@ export interface BotApprovalDecision {
   // coreへ新規追加するものではない。
   target: BotActionTarget;
 
+  // platform側のteam/workspace識別子(Slack team ID等)。
+  // BotIncomingMessage.organizationIdと同じsemantics(TACT
+  // Organization概念とは別の、外部platform由来の生の識別子)。
+  // identity解決(BotIdentityResolver.resolve()の第3引数)へそのまま
+  // 転送するためだけに保持する(S1e Identity Hotfix)。
+  organizationId?: string;
+
   workId: string;
 
   approvalId: string;

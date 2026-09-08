@@ -226,6 +226,38 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   }
 
+  // ==========================================================
+  // S1e Identity Hotfix regression: message.organizationIdが
+  // identityResolver.resolve()の第3引数へそのまま渡る(既存挙動、
+  // approval decision pathとの比較基準として明示的に固定する)
+  // ==========================================================
+
+  {
+    const capturedArgs: unknown[][] = [];
+
+    const capturingResolver: BotIdentityResolver = {
+      async resolve(...args: unknown[]) {
+        capturedArgs.push(args);
+        return null;
+      },
+    };
+
+    const message = makeMessage({
+      conversation: { externalConversationId: "d1", type: "dm" },
+      organizationId: "T123TEAM",
+    });
+
+    await receiveBotMessage(message, { identityResolver: capturingResolver });
+
+    results.push(
+      check(
+        "[Test7-1] identityResolver.resolve()の第3引数はmessage.organizationId('T123TEAM')そのもの",
+        capturedArgs.length === 1 && capturedArgs[0][2] === "T123TEAM"
+      )
+    );
+
+  }
+
   return summarize("bot/receiveBotMessage", results);
 
 }

@@ -181,7 +181,15 @@ export async function receiveBotApprovalDecision(
   // BOT-P2.5と全く同じ順序: external identity → trusted tactUserId
   // resolution → canonical handler。外部Bot user id(decision.actor.
   // externalUserId)を直接canonical handlerのtactUserIdとして使わない。
-  const identity = await identityResolver.resolve(decision.actor, decision.channel);
+  // S1e Identity Hotfix: receiveBotMessage()(通常message path)と
+  // 同じargument semanticsにするため、第3引数としてdecision.
+  // organizationId(呼び出し元がBotIncomingMessage.organizationIdを
+  // そのまま転送したもの)を渡す。
+  const identity = await identityResolver.resolve(
+    decision.actor,
+    decision.channel,
+    decision.organizationId
+  );
 
   if (!identity) {
 

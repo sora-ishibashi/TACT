@@ -68,17 +68,20 @@ function makeApproval(overrides: Partial<Approval> = {}): Approval {
 function makeDeps(overrides: Partial<ReceiveSlackBotApprovalDecisionDeps> = {}): {
   deps: ReceiveSlackBotApprovalDecisionDeps;
   identityResolveCalls: number;
+  identityResolveArgs: { channel: string; organizationId?: string }[];
   resolveCalls: ResolvePendingApprovalForThreadParams[];
   receiveBotApprovalDecisionCalls: BotApprovalDecision[];
 } {
 
   const identityResolveState = { count: 0 };
+  const identityResolveArgs: { channel: string; organizationId?: string }[] = [];
   const resolveCalls: ResolvePendingApprovalForThreadParams[] = [];
   const receiveBotApprovalDecisionCalls: BotApprovalDecision[] = [];
 
   const identityResolver: BotIdentityResolver = {
-    async resolve(actor) {
+    async resolve(actor, channel, organizationId) {
       identityResolveState.count += 1;
+      identityResolveArgs.push({ channel, organizationId });
       return actor.externalUserId === "U123EXTERNAL" ? { tactUserId: "trusted-user-1" } : null;
     },
   };
@@ -120,6 +123,7 @@ function makeDeps(overrides: Partial<ReceiveSlackBotApprovalDecisionDeps> = {}):
     get identityResolveCalls() {
       return identityResolveState.count;
     },
+    identityResolveArgs,
     resolveCalls,
     receiveBotApprovalDecisionCalls,
   };
@@ -255,6 +259,42 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Approve] 最終的なhandled/actionsはcanonical receiverの結果をそのまま返す",
         result.handled === true && result.actions[0]?.kind === "reply"
+      )
+    );
+  }
+
+  // ---- S1e Identity Hotfix: message.organizationIdが最初のidentityResolver.resolve()へ転送される ----
+  {
+    const { deps, identityResolveArgs } = makeDeps();
+
+    await receiveSlackBotApprovalDecisionAsTrustedActor(
+      makeMessage({ organizationId: "T123TEAM" }),
+      "approve",
+      deps
+    );
+
+    results.push(
+      check(
+        "[S1e Hotfix] identityResolver.resolve()の第3引数はmessage.organizationId('T123TEAM')そのもの(Slack team_idを再取得・再解析しない)",
+        identityResolveArgs[0]?.organizationId === "T123TEAM"
+      )
+    );
+  }
+
+  // ---- S1e Identity Hotfix: BotApprovalDecision.organizationIdへmessage.organizationIdが転送される ----
+  {
+    const { deps, receiveBotApprovalDecisionCalls } = makeDeps();
+
+    await receiveSlackBotApprovalDecisionAsTrustedActor(
+      makeMessage({ organizationId: "T123TEAM" }),
+      "approve",
+      deps
+    );
+
+    results.push(
+      check(
+        "[S1e Hotfix] canonical receiveBotApprovalDecision()へ渡るBotApprovalDecision.organizationIdは、message.organizationId('T123TEAM')と一致する(receiveBotApprovalDecision()内部の2回目のidentity解決でも同じworkspace-aware lookupを行えるようにするため)",
+        receiveBotApprovalDecisionCalls[0]?.organizationId === "T123TEAM"
       )
     );
   }
