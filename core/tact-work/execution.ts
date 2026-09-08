@@ -501,72 +501,152 @@ export async function runWorkTurn(
           metadata: { ...metadata, connectionId: connectionResolution.connectionId },
         };
 
-        if (summary.integrationRequirement.requiresApproval) {
+        // Fast Port P2b(docs/architecture/p2-p5-final-architecture.md
+        // Section5-9、絶対条件10/11を継承): 旧
+        // `if (summary.integrationRequirement.requiresApproval) {...} else {...}`
+        // というboolean分岐を、canonical PolicyDecisionの4値
+        // (core/tact-orchestrator/task.tsのTaskIntegrationPolicyDecision、
+        // core/tact-integration/policy.tsのPolicyDecisionOutcomeと
+        // 同じ値)によるexhaustive switchへformalizeする。allow/
+        // require_approvalの2分岐は既存挙動と完全に同一
+        // (summary.integrationRequirement.requiresApprovalは
+        // policyDecision==="require_approval"からの導出fieldであり、
+        // 二重判断はしていない)。require_input/denyはP2a時点で
+        // 実際にこの値を生成するCapability Producerが存在しないため
+        // 通常到達しないが、型としてのcanonical decisionが4値である
+        // 以上、防御的に必ず処理する(絶対条件: fail-closed、
+        // Provider call 0・Run作成0・Approval作成0を保証する)。
+        switch (summary.integrationRequirement.policyDecision) {
 
-          // Architecture Migration ARCH-P1b: Approval作成前に、この
-          // 時点で確定しているcanonical integration action(service/
-          // operation/input/connectionId)から、machine-verifiableな
-          // Approval Subject v1を構築する。human-visible summary
-          // (resolvedAction.summary)と全く同じresolvedActionオブジェクト
-          // (=同じCapability呼び出しが同時に生成した値)からderiveする
-          // ため、別sourceからの再構築は発生しない(絶対条件、
-          // docs/architecture/approval-integrity.md Step5)。
-          const subjectResult = buildApprovalSubject({
-            workId: work.id,
-            taskId: workTaskId,
-            service,
-            operation,
-            input,
-            connectionId: connectionResolution.connectionId,
-            riskClassSnapshot: summary.integrationRequirement.riskClass ?? null,
-          });
+          case "require_approval": {
 
-          if (!subjectResult.ok) {
+            // Architecture Migration ARCH-P1b: Approval作成前に、この
+            // 時点で確定しているcanonical integration action(service/
+            // operation/input/connectionId)から、machine-verifiableな
+            // Approval Subject v1を構築する。human-visible summary
+            // (resolvedAction.summary)と全く同じresolvedActionオブジェクト
+            // (=同じCapability呼び出しが同時に生成した値)からderiveする
+            // ため、別sourceからの再構築は発生しない(絶対条件、
+            // docs/architecture/approval-integrity.md Step5)。
+            const subjectResult = buildApprovalSubject({
+              workId: work.id,
+              taskId: workTaskId,
+              service,
+              operation,
+              input,
+              connectionId: connectionResolution.connectionId,
+              riskClassSnapshot: summary.integrationRequirement.riskClass ?? null,
+            });
 
-            // 絶対条件(Step7、fail closed): Integrity evidenceを
-            // 生成できないprotected actionは、subject無しでApprovalを
-            // 作って続行しない——Approval自体を一切作らず(provider
-            // callはもちろん0)、Taskはpendingのまま据え置く。raw
-            // canonical payload/secretはログへ出さない(reasonという
-            // 短い分類ラベルだけを記録する、既存のconsole.warn
-            // best-effortログパターンを踏襲)。
-            console.warn(
-              "[tact-work/execution] buildApprovalSubject() failed for a protected action; " +
-              "Approvalを作らず安全に停止する(Task/Workは変更しない)。",
-              subjectResult.reason
-            );
+            if (!subjectResult.ok) {
 
-            subjectBuildFailures.push({ workTaskId });
+              // 絶対条件(Step7、fail closed): Integrity evidenceを
+              // 生成できないprotected actionは、subject無しでApprovalを
+              // 作って続行しない——Approval自体を一切作らず(provider
+              // callはもちろん0)、Taskはpendingのまま据え置く。raw
+              // canonical payload/secretはログへ出さない(reasonという
+              // 短い分類ラベルだけを記録する、既存のconsole.warn
+              // best-effortログパターンを踏襲)。
+              console.warn(
+                "[tact-work/execution] buildApprovalSubject() failed for a protected action; " +
+                "Approvalを作らず安全に停止する(Task/Workは変更しない)。",
+                subjectResult.reason
+              );
+
+              subjectBuildFailures.push({ workTaskId });
+
+              return;
+
+            }
+
+            approvalRequirements.push({
+              workTaskId,
+              capability: summary.capability,
+              requirement: {
+                reason: summary.integrationRequirement.reason ?? resolvedAction.summary,
+                action: resolvedAction,
+              },
+              subject: subjectResult.subject,
+            });
 
             return;
 
           }
 
-          approvalRequirements.push({
-            workTaskId,
-            capability: summary.capability,
-            requirement: {
-              reason: summary.integrationRequirement.reason ?? resolvedAction.summary,
+          case "allow": {
+
+            // 絶対条件(Correction2、Section9): readのためにfake Approval
+            // を作らない。Approvalとは完全に別のpath(integrationReadExecutions)
+            // へ積み、実行はrunOrchestration()の戻り値を受け取った後
+            // (下記)で行う。
+            integrationReadExecutions.push({
+              workTaskId,
+              connectionId: connectionResolution.connectionId,
               action: resolvedAction,
-            },
-            subject: subjectResult.subject,
-          });
+            });
 
-        } else {
+            return;
 
-          // 絶対条件(Correction2、Section9): readのためにfake Approval
-          // を作らない。Approvalとは完全に別のpath(integrationReadExecutions)
-          // へ積み、実行はrunOrchestration()の戻り値を受け取った後
-          // (下記)で行う。
-          integrationReadExecutions.push({
-            workTaskId,
-            connectionId: connectionResolution.connectionId,
-            action: resolvedAction,
-          });
+          }
+
+          case "require_input": {
+
+            // Fast Port P2b Step8: REQUIRE_INPUTは正式なcanonical
+            // decisionだが、P2b時点でこれを実際に生成するCapability
+            // Producerは存在しない(P3aでClarification entity/
+            // Human Interactionが実装されるまで、実際のwaiting_for_input
+            // 遷移はDEFERする——CLAUDE.md/Fast Port P2b指示の明示的な
+            // non-goal)。Provider call 0・Run 0・Approval 0を保証する
+            // ため、既存の「Connection未解決」等と同じ安全側の
+            // early-returnパターンにとどめ、Taskはpendingのまま据え
+            // 置く(既存WorkStatus.waiting_for_inputへの遷移はここでは
+            // 行わない——そのstate遷移設計自体がP3aのscope)。
+            console.warn(
+              "[tact-work/execution] policyDecision==='require_input' for a protected action; " +
+              "P2b時点ではrequire_inputのwaiting遷移をP3aへDEFERし、Taskを安全にpendingのまま据え置く。",
+              { workTaskId, service, operation }
+            );
+
+            return;
+
+          }
+
+          case "deny": {
+
+            // Fast Port P2b Step9: DENYはApprovalで突破不可
+            // (絶対条件11)。Provider call 0・Run 0・Approval 0を保証
+            // するため、既存のinvalid_action/task_not_executable等の
+            // execution boundary rejectionと同じ規約(Task statusを
+            // 変更しない、pendingのまま据え置く)にそのまま従う。
+            // 通常到達しない(Integration Capability自身が
+            // evaluatePolicyDecision()===denyの時点でsuccess:falseを
+            // 返し、integrationRequirement自体を生成しないため)が、
+            // 将来policy.ts側の登録が変更された場合に備えた防御的
+            // ハンドリング。
+            console.warn(
+              "[tact-work/execution] policyDecision==='deny' for a protected action; " +
+              "Approvalを作らず安全に停止する(Task/Workは変更しない)。",
+              { workTaskId, service, operation }
+            );
+
+            return;
+
+          }
+
+          default: {
+
+            // Fast Port P2b Step10絶対条件: PolicyDecisionはexhaustive
+            // switchで網羅する。ここに到達する値が増えた場合は
+            // コンパイルエラーになる(型レベルの網羅性保証、
+            // production helperを別途増やさない)。
+            const exhaustiveCheck: never = summary.integrationRequirement.policyDecision;
+            void exhaustiveCheck;
+
+            return;
+
+          }
 
         }
-
-        return;
 
       }
 

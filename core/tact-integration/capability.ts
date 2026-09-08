@@ -1,5 +1,5 @@
 import { extractSlackSendIntent } from "../tact-intent/ruleRouter";
-import { resolveIntegrationActionPolicy } from "./policy";
+import { evaluatePolicyDecision } from "./policy";
 import type { CapabilityInvocationRequest, CapabilityInvocationResult } from "../tact-orchestrator/types";
 
 // =========================
@@ -27,12 +27,20 @@ import type { CapabilityInvocationRequest, CapabilityInvocationResult } from "..
 // 絶対条件(Phase C2.2、Read/Write Policy): このfileはcore/tact-work/
 // approval.tsのrequestApproval()を直接呼ばず、また「承認が必要か」を
 // 自分で判断しない——core/tact-integration/policy.tsのcanonical
-// allowlistを参照し、その結果(requiresApproval)をTaskExecutionSummary.
-// integrationRequirementとしてそのまま運ぶだけにとどめる。実際に
-// Connection解決・Approval作成・(read時の)即時実行を行うのは、
-// accessTokenを実際に持つcore/tact-work/execution.ts(runWorkTurn())
-// の責務(絶対条件: 同一intentでTaskを二重作成しない、Approval作成は
-// core/tact-work側に一元化する)。
+// PolicyDecision(Fast Port P2b、evaluatePolicyDecision())を参照し、
+// その結果をTaskExecutionSummary.integrationRequirementとしてそのまま
+// 運ぶだけにとどめる。実際にConnection解決・Approval作成・(read時の)
+// 即時実行を行うのは、accessTokenを実際に持つcore/tact-work/
+// execution.ts(runWorkTurn())の責務(絶対条件: 同一intentでTaskを
+// 二重作成しない、Approval作成はcore/tact-work側に一元化する)。
+//
+// Fast Port P2b(docs/architecture/p2-p5-final-architecture.md
+// Section5-9): 旧resolveIntegrationActionPolicy()呼び出しは
+// evaluatePolicyDecision()へ置き換えた。requiresApprovalは
+// policyDecision.decision==="require_approval"からの導出field
+// として引き続き運ぶ(後方互換、値は変わらない)——live decisionの
+// source of truthはintegrationRequirement.policyDecision(新規field、
+// core/tact-orchestrator/task.tsのTaskIntegrationPolicyDecision)。
 //
 // 絶対条件(Correction2、canonical actionの単一表現): send_message
 // (write)・list_channels(read)のいずれも、canonical action
@@ -71,14 +79,18 @@ export async function runIntegrationSlackSendMessageCapability(
 
   const operation = "send_message";
 
-  // Architecture Migration Phase C2.2(絶対条件、Correction1):
-  // policy allowlistに登録されていないactionは、たとえこの関数自体が
-  // 呼ばれても実行可能扱いにしない(fail-closed)。send_messageは
-  // policy.ts上writeとして登録済みのため、通常この分岐には到達しない
-  // ——将来policy.ts側の登録が変更された場合に備えた防御的チェック。
-  const policy = resolveIntegrationActionPolicy(SLACK_SERVICE, operation);
+  // Fast Port P2b(絶対条件、Correction1を継承): policy allowlistに
+  // 登録されていないactionは、たとえこの関数自体が呼ばれても実行可能
+  // 扱いにしない(fail-closed)。send_messageはpolicy.ts上
+  // require_approval(riskClass="write")として登録済みのため、通常
+  // この分岐には到達しない——将来policy.ts側の登録が変更された場合に
+  // 備えた防御的チェック(この関数はsend_message専用であり、
+  // require_approval以外の値(allow/require_input/deny)はすべて
+  // 「現在サポートされていない」として同じ扱いにする——複数のdecision
+  // 値を個別に解釈しない、単一目的Capabilityとしての単純さを維持)。
+  const decision = evaluatePolicyDecision(SLACK_SERVICE, operation);
 
-  if (!policy) {
+  if (decision.decision !== "require_approval") {
 
     return {
       success: false,
@@ -102,7 +114,14 @@ export async function runIntegrationSlackSendMessageCapability(
     // だけで表現する(Correction2、旧approvalRequirementは使わない)。
     integrationRequirement: {
 
-      requiresApproval: policy.requiresApproval,
+      // Fast Port P2b: requiresApprovalは後方互換のための導出field
+      // (decision.decision==="require_approval"と常に同値)。
+      requiresApproval: true,
+
+      // Fast Port P2b: live decisionのsource of truth。
+      // core/tact-work/execution.tsのonTaskFinished()はこの値で
+      // exhaustive switchする。
+      policyDecision: decision.decision,
 
       reason: "外部SaaS(Slack)への投稿には承認が必要です",
 
@@ -110,7 +129,7 @@ export async function runIntegrationSlackSendMessageCapability(
       // 時点のcanonical risk classificationをそのまま運ぶ(Approval
       // Subject.riskClassSnapshotの唯一のsource、
       // docs/architecture/approval-integrity.md Step4参照)。
-      riskClass: policy.riskClass,
+      riskClass: decision.riskClass,
 
       action: {
 
@@ -150,14 +169,17 @@ export async function runIntegrationSlackListChannelsCapability(): Promise<Capab
 
   const operation = "list_channels";
 
-  const policy = resolveIntegrationActionPolicy(SLACK_SERVICE, operation);
+  const decision = evaluatePolicyDecision(SLACK_SERVICE, operation);
 
-  // Architecture Migration Phase C2.2(絶対条件、Correction1): policyが
-  // 見つからない場合はrequiresApproval=trueへ安全側fallbackしない
-  // ——「実行そのものを拒否する」。通常この分岐には到達しない
-  // (list_channelsはpolicy.ts上readとして登録済み)が、将来policy.ts
-  // 側の登録が変更された場合に備えた防御的チェック。
-  if (!policy) {
+  // Fast Port P2b(絶対条件、Correction1を継承): decisionが"allow"以外
+  // (未登録/require_approval/require_input/deny)の場合、
+  // requiresApproval=trueへ安全側fallbackせず「実行そのものを拒否
+  // する」。通常この分岐には到達しない(list_channelsはpolicy.ts上
+  // allow(riskClass="read")として登録済み)が、将来policy.ts側の
+  // 登録が変更された場合に備えた防御的チェック(この関数はread専用
+  // Capabilityであり、allow以外はすべて同じ「サポートされていない」
+  // 扱いにする)。
+  if (decision.decision !== "allow") {
 
     return {
       success: false,
@@ -174,15 +196,18 @@ export async function runIntegrationSlackListChannelsCapability(): Promise<Capab
 
     integrationRequirement: {
 
-      // policy.riskClass==="read"のため常にfalse
-      // (requiresApprovalForRiskClass()から導出済みの値をそのまま運ぶ、
+      // decision.decision==="allow"のため常にfalse
+      // (evaluatePolicyDecision()から導出済みの値をそのまま運ぶ、
       // このfile自身は「readだから承認不要」という判断を独自にしない)。
-      requiresApproval: policy.requiresApproval,
+      requiresApproval: false,
+
+      // Fast Port P2b: live decisionのsource of truth。
+      policyDecision: decision.decision,
 
       // Architecture Migration ARCH-P1b: readはApprovalを一切経由
       // しない(絶対条件Correction2)ためriskClassSnapshotが実際に
       // 使われることはないが、writeと同じ形で一貫して運んでおく。
-      riskClass: policy.riskClass,
+      riskClass: decision.riskClass,
 
       action: {
 

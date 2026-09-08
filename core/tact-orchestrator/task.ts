@@ -261,9 +261,30 @@ export interface TaskApprovalRequirement {
 // 既に使っている「値だけを再宣言する」既存パターンと同じ。
 export type TaskIntegrationRiskClassSnapshot = "read" | "write" | "destructive";
 
+// Fast Port P2b(docs/architecture/p2-p5-final-architecture.md Section5-9):
+// core/tact-integration/policy.tsのPolicyDecisionOutcomeと同じ4値。
+// 上のTaskIntegrationRiskClassSnapshotと全く同じ理由・同じパターンで
+// 「値だけを独立に再宣言する」(cross-module importはしない、
+// core/tact-workはcore/tact-integrationへ一切依存できないという既存の
+// 一方向依存を維持するため)。core/tact-work/execution.tsの
+// onTaskFinished()は、この値でexhaustive switchし、Approval作成・
+// 即時read実行・安全な停止のいずれを行うかを決める唯一の分岐材料と
+// する——requiresApprovalは後方互換のための導出fieldとして残すが、
+// live decisionのsource of truthはこちらであり、二重判断はしない
+// (Fast Port P2b指示Step3/Step11絶対条件)。
+export type TaskIntegrationPolicyDecision = "allow" | "require_approval" | "require_input" | "deny";
+
 export interface TaskIntegrationRequirement {
 
+  // Fast Port P2b時点で後方互換のため残す導出field
+  // (policyDecision==="require_approval"と常に同値、Capability自身が
+  // 独自に判断した別の値ではない——二重判断禁止)。
   requiresApproval: boolean;
+
+  // Fast Port P2b: canonical PolicyDecisionの`decision`値そのもの。
+  // core/tact-work/execution.tsのonTaskFinished()が実際に分岐する際は
+  // 必ずこちらを見る(上記requiresApprovalは表示・ログ等の付随情報)。
+  policyDecision: TaskIntegrationPolicyDecision;
 
   reason?: string;
 
@@ -271,7 +292,7 @@ export interface TaskIntegrationRequirement {
 
   // Architecture Migration ARCH-P1b: このrequirementを判定した時点の
   // canonical risk classification(core/tact-integration/policy.tsの
-  // resolveIntegrationActionPolicy()が返したriskClassをそのまま運ぶ)。
+  // evaluatePolicyDecision()が返したriskClassをそのまま運ぶ)。
   // Approval Subject(core/tact-work/approvalIntegrity.ts)の
   // riskClassSnapshotへ渡すためだけの値であり、Policy全体を
   // version-bindするものではない(execution時は引き続き既存Policyを

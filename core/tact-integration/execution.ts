@@ -11,7 +11,7 @@ import {
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "../tact-work/completion";
 import { executeIntegrationAction as defaultExecuteIntegrationAction } from "./gateway";
 import { getConnection as defaultGetConnection } from "./connection";
-import { resolveIntegrationActionPolicy } from "./policy";
+import { evaluatePolicyDecision } from "./policy";
 import {
   buildApprovalSubject,
   verifyApprovalIntegrity,
@@ -463,19 +463,30 @@ export async function executeApprovedIntegrationAction(
     return { status: "invalid_action", reason: "Approval.payloadからintegration actionを復元できません" };
   }
 
-  // 5.5. Architecture Migration Phase C2.2(絶対条件、Section11、
-  // defense-in-depth): Approvalが承認されたという事実だけでは
-  // providerへ流してよい理由にならない——policy allowlistを
-  // ここでも再検証する。未知action、またはriskClass==="read"の
-  // actionがこのApproval経由の境界へ渡ってきた場合(通常到達しない
-  // ——onTaskFinished()はrequiresApproval===trueのactionしか
+  // 5.5. Fast Port P2b(docs/architecture/p2-p5-final-architecture.md
+  // Section5-8、絶対条件Section11のdefense-in-depthを継承):
+  // Approvalが承認されたという事実だけではproviderへ流してよい理由に
+  // ならない——canonical PolicyDecision(evaluatePolicyDecision())を
+  // ここでも再評価する(live Policy recheck、絶対条件7)。
+  // "require_approval"以外(allow=read/require_input/deny=未知action)
+  // がこのApproval経由の境界へ渡ってきた場合(通常到達しない——
+  // onTaskFinished()はpolicyDecision==="require_approval"のactionしか
   // Approvalへ積まないため)は、providerへ一切流さず安全に拒否する。
-  const policy = resolveIntegrationActionPolicy(extracted.action.service, extracted.action.operation);
+  // 内部decisionの種類はreasonの文言だけで区別し(絶対条件Step10:
+  // REQUIRE_INPUTとDENYを同一status(invalid_action)へ潰しても、
+  // 内部Decisionそのものは必ず区別する)、statusは既存の
+  // invalid_actionのままAPI surfaceを拡張しない。
+  const policyDecision = evaluatePolicyDecision(extracted.action.service, extracted.action.operation);
 
-  if (!policy || policy.riskClass === "read") {
+  if (policyDecision.decision !== "require_approval") {
     return {
       status: "invalid_action",
-      reason: "この操作はApproval経由の実行対象として登録されていません",
+      reason:
+        policyDecision.decision === "allow"
+          ? "この操作はread判定のためApproval経由の実行対象ではありません"
+          : policyDecision.decision === "require_input"
+            ? "この操作はpolicy評価がrequire_inputとなったためApproval経由では実行できません"
+            : "この操作はApproval経由の実行対象として登録されていません",
     };
   }
 
@@ -524,13 +535,14 @@ export async function executeApprovedIntegrationAction(
   // 判定logicを複製しない。
   //
   // riskClassSnapshot(絶対条件Step6): 「stored」側はApproval作成時点の
-  // snapshot、「current」側は直前(5.5)で再評価済みのpolicy.riskClass
-  // そのもの(再度policyを呼び直さない、同じ結果を再利用するだけ)。
-  // Canonical action自体は同一でもriskClassが変化していれば
-  // (例: write→destructive)、古いApprovalをそのまま使わせず
-  // mismatchとして拒否する——現在のPolicyがDENY相当(このリスク
-  // クラスの操作を許可しない)であれば、この5.5の時点で既に
-  // invalid_actionへ倒れているため、Approvalが現在のPolicy DENYを
+  // snapshot、「current」側は直前(5.5)で再評価済みのpolicyDecision.
+  // riskClassそのもの(Fast Port P2b: require_approval分岐でのみ
+  // riskClassがnon-nullとして型narrowされる、再度policyを呼び直さず
+  // 同じ結果を再利用するだけ)。Canonical action自体は同一でも
+  // riskClassが変化していれば(例: write→destructive)、古いApprovalを
+  // そのまま使わせずmismatchとして拒否する——現在のPolicyがDENY相当
+  // (このリスククラスの操作を許可しない)であれば、この5.5の時点で
+  // 既にinvalid_actionへ倒れているため、Approvalが現在のPolicy DENYを
   // 上書きすることは無い。
   const currentSubjectResult = buildApprovalSubject({
     workId: work.id,
@@ -539,7 +551,7 @@ export async function executeApprovedIntegrationAction(
     operation: extracted.action.operation,
     input: extracted.action.input,
     connectionId: extracted.connectionId,
-    riskClassSnapshot: policy.riskClass,
+    riskClassSnapshot: policyDecision.riskClass,
   });
 
   if (!currentSubjectResult.ok) {
@@ -624,11 +636,16 @@ export async function executeReadIntegrationAction(
 
   const { workId, userId, accessToken, taskId, connectionId, action } = params;
 
-  // 絶対条件(Section10、最重要): callerがreadだと言ったから信用する、
-  // は禁止。policy allowlistを必ずここで再検証する。
-  const policy = resolveIntegrationActionPolicy(action.service, action.operation);
+  // Fast Port P2b(絶対条件Section10、最重要を継承): callerがreadだと
+  // 言ったから信用する、は禁止。canonical PolicyDecision
+  // (evaluatePolicyDecision())を必ずここで再評価する。旧
+  // `!policy || policy.riskClass !== "read"`と挙動は同一
+  // (登録済みかつriskClass==="read"の場合だけdecision==="allow"に
+  // なる、requiresApprovalForRiskClass()経由の既存導出をそのまま
+  // 再利用しているため)。
+  const policyDecision = evaluatePolicyDecision(action.service, action.operation);
 
-  if (!policy || policy.riskClass !== "read") {
+  if (policyDecision.decision !== "allow") {
     return {
       status: "invalid_action",
       reason: "この操作はread実行境界の対象として登録されていません",

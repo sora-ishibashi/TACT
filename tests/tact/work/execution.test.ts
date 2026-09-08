@@ -755,6 +755,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           output: "Slack「tact」チャンネルへメッセージを送信する準備ができました。承認をお願いします。",
           integrationRequirement: {
             requiresApproval: true,
+            policyDecision: "require_approval",
             reason: "外部SaaS(Slack)への投稿には承認が必要です",
             // Architecture Migration ARCH-P1b: policyがrequirement判定
             // 時点で確定したcanonical risk classificationをそのまま運ぶ
@@ -779,6 +780,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         output: "Slack「tact」チャンネルへメッセージを送信する準備ができました。承認をお願いします。",
         integrationRequirement: {
           requiresApproval: true,
+          policyDecision: "require_approval",
           reason: "外部SaaS(Slack)への投稿には承認が必要です",
           riskClass: "write",
           action: {
@@ -981,6 +983,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         output: "準備ができました。承認をお願いします。",
         integrationRequirement: {
           requiresApproval: true,
+          policyDecision: "require_approval",
           reason: "外部SaaS(Slack)への投稿には承認が必要です",
           riskClass: "write",
           action: {
@@ -1274,6 +1277,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         output: "Slackのチャンネル一覧を取得する準備ができました。",
         integrationRequirement: {
           requiresApproval: false,
+          policyDecision: "allow",
           action: {
             kind: "integration_action",
             summary: "Slackのチャンネル一覧を取得します",
@@ -1471,9 +1475,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         status: "completed",
         output: "test",
         integrationRequirement: {
-          // 絶対条件: write action(send_message)なのにrequiresApprovalが
-          // 誤って(または悪意を持って)falseに設定されているケース。
+          // 絶対条件: write action(send_message)なのにrequiresApproval/
+          // policyDecisionが誤って(または悪意を持って)
+          // false/"allow"に設定されているケース(Fast Port P2b:
+          // live decisionのsource of truthがpolicyDecisionへ移った後も、
+          // 同じforged-signal攻撃面を再現する)。
           requiresApproval: false,
+          policyDecision: "allow",
           action: {
             kind: "integration_action",
             summary: "Slack「general」チャンネルへメッセージを送信します",
@@ -1531,6 +1539,198 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           ?.metadata?.service === "slack" &&
           (calls.executeReadIntegrationActionCalls[0]?.action as { metadata?: { operation?: unknown } })?.metadata
             ?.operation === "send_message"
+      )
+    );
+  }
+
+  // ---- Fast Port P2b — canonical PolicyDecision exhaustive switch ----
+  //
+  // policyDecision==="require_input"/"deny"は、P2b時点で実際にこれらを
+  // 生成するCapability Producerが存在しない(evaluatePolicyDecision()は
+  // 登録済みaction(slack.send_message/slack.list_channels)に対して
+  // require_approval/allowしか返さない、core/tact-integration/
+  // policy.test.tsで確認済み)。したがってここではmakeSummary()に
+  // 直接合成したintegrationRequirementを渡し、onTaskFinished()の
+  // switch文自身が両ケースを安全に処理できることを確認する
+  // (production callerがこの値を生成できるかとは独立した、
+  // type-levelで到達可能な値すべてに対するhandler側の検証)。
+
+  // ---- [Case R5] policyDecision==="require_input" -> provider 0 / Run 0 / Approval 0、Taskはpendingのまま ----
+  {
+    const task = makeTask({
+      id: "task-require-input-1",
+      description: "Slack「general」チャンネルへ送信する(synthetic require_input)",
+      assignedCapability: "integration.slack.send_message",
+    });
+
+    const requireInputOrchestration = async (
+      _request: OrchestrationRequest,
+      hooks?: OrchestrationHooks
+    ): Promise<OrchestrationResult> => {
+
+      await hooks?.onTasksPlanned?.([task]);
+
+      const summary = makeSummary({
+        taskId: task.id,
+        status: "completed",
+        output: "test",
+        integrationRequirement: {
+          requiresApproval: false,
+          policyDecision: "require_input",
+          action: {
+            kind: "integration_action",
+            summary: "Slack「general」チャンネルへメッセージを送信します",
+            metadata: {
+              service: "slack",
+              operation: "send_message",
+              input: { channel: "general", text: "missing something" },
+            },
+          },
+        },
+      });
+
+      await hooks?.onTaskFinished?.(task, summary);
+
+      return {
+        answer: "test",
+        executionId: "exec-require-input-1",
+        tasks: [summary],
+        memoryUsed: [],
+        toolsUsed: [],
+        memoryWrites: [],
+        learningSignals: ["successful_execution"],
+        metadata: { executionMode: "single-execution" },
+      };
+
+    };
+
+    const { deps, calls } = makeRecordingDeps(requireInputOrchestration, {
+      resolveIntegrationConnection: async (params) => {
+        calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
+        return { status: "single", connectionId: "conn-require-input-1" };
+      },
+    });
+
+    await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case R5] policyDecision==='require_input'はApprovalを作らない(requestApprovalCalls===0)",
+        calls.requestApprovalCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R5] policyDecision==='require_input'はread実行境界へも渡さない(executeReadIntegrationActionCalls===0、REQUIRE_INPUT!==ALLOW)",
+        calls.executeReadIntegrationActionCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R5] policyDecision==='require_input'はRunを作らない(createRunCalls===0)",
+        calls.createRunCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R5] policyDecision==='require_input'はTask statusを変更しない(updateTaskStatusCalls===0、pendingのまま据え置く——P3aで実際のwaiting_for_input遷移をDEFER)",
+        calls.updateTaskStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- [Case R6] policyDecision==="deny" -> provider 0 / Run 0 / Approval 0、Taskはpendingのまま ----
+  {
+    const task = makeTask({
+      id: "task-deny-1",
+      description: "Slack「general」チャンネルへ送信する(synthetic deny)",
+      assignedCapability: "integration.slack.send_message",
+    });
+
+    const denyOrchestration = async (
+      _request: OrchestrationRequest,
+      hooks?: OrchestrationHooks
+    ): Promise<OrchestrationResult> => {
+
+      await hooks?.onTasksPlanned?.([task]);
+
+      const summary = makeSummary({
+        taskId: task.id,
+        status: "completed",
+        output: "test",
+        integrationRequirement: {
+          requiresApproval: false,
+          policyDecision: "deny",
+          action: {
+            kind: "integration_action",
+            summary: "Slack「general」チャンネルへメッセージを送信します",
+            metadata: {
+              service: "slack",
+              operation: "send_message",
+              input: { channel: "general", text: "denied" },
+            },
+          },
+        },
+      });
+
+      await hooks?.onTaskFinished?.(task, summary);
+
+      return {
+        answer: "test",
+        executionId: "exec-deny-1",
+        tasks: [summary],
+        memoryUsed: [],
+        toolsUsed: [],
+        memoryWrites: [],
+        learningSignals: ["successful_execution"],
+        metadata: { executionMode: "single-execution" },
+      };
+
+    };
+
+    const { deps, calls } = makeRecordingDeps(denyOrchestration, {
+      resolveIntegrationConnection: async (params) => {
+        calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
+        return { status: "single", connectionId: "conn-deny-1" };
+      },
+    });
+
+    await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case R6] policyDecision==='deny'はApprovalを作らない(requestApprovalCalls===0、絶対条件: DENYはApprovalで突破不可)",
+        calls.requestApprovalCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R6] policyDecision==='deny'はread実行境界へも渡さない(executeReadIntegrationActionCalls===0)",
+        calls.executeReadIntegrationActionCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R6] policyDecision==='deny'はRunを作らない(createRunCalls===0)",
+        calls.createRunCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R6] policyDecision==='deny'はTask statusを変更しない(updateTaskStatusCalls===0、pendingのまま据え置く)",
+        calls.updateTaskStatusCalls.length === 0
       )
     );
   }
