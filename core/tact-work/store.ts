@@ -11,6 +11,9 @@ import type {
   Approval,
   ApprovalStatus,
   ActorKind,
+  Clarification,
+  ClarificationStatus,
+  ClarificationReasonCode,
 } from "./types";
 
 // =========================
@@ -154,6 +157,29 @@ export interface ApprovalRow {
   subject_captured_at?: string | null;
 }
 
+// Fast Port P3a: Human Interaction Foundation。tact_approvalsとは
+// 別tableとして持つ(絶対条件: Approval table流用禁止、generic
+// HumanInteraction tableをこの時点で作るのも避ける——現在の実
+// producerはClarificationだけであり、汎用抽象化を先取りしない)。
+export interface ClarificationRow {
+  id: string;
+  work_id: string;
+  task_id: string | null;
+  requested_by_actor_kind: ActorKind;
+  requested_by_actor_id: string;
+  allowed_responder_ids: string[] | null;
+  status: ClarificationStatus;
+  reason_code: ClarificationReasonCode;
+  question: string;
+  response: string | null;
+  responded_by_actor_kind: ActorKind | null;
+  responded_by_actor_id: string | null;
+  requested_at: string;
+  responded_at: string | null;
+  expires_at: string | null;
+  created_at: string;
+}
+
 // =========================
 // DB row → domain 変換 (snake_case → camelCase、pure関数)
 // =========================
@@ -260,6 +286,29 @@ export function toApproval(row: ApprovalRow): Approval {
 
 }
 
+export function toClarification(row: ClarificationRow): Clarification {
+
+  return {
+    id: row.id,
+    workId: row.work_id,
+    taskId: row.task_id,
+    requestedByActorKind: row.requested_by_actor_kind,
+    requestedByActorId: row.requested_by_actor_id,
+    allowedResponderIds: row.allowed_responder_ids,
+    status: row.status,
+    reasonCode: row.reason_code,
+    question: row.question,
+    response: row.response,
+    respondedByActorKind: row.responded_by_actor_kind,
+    respondedByActorId: row.responded_by_actor_id,
+    requestedAt: row.requested_at,
+    respondedAt: row.responded_at,
+    expiresAt: row.expires_at,
+    createdAt: row.created_at,
+  };
+
+}
+
 const WORK_COLUMNS =
   "id, user_id, organization_id, created_by_actor_kind, created_by_actor_id, title, objective, status, primary_conversation_id, started_at, completed_at, failed_at, cancelled_at, cost_summary, metadata, created_at, updated_at";
 
@@ -273,6 +322,9 @@ const RUN_COLUMNS =
 
 const APPROVAL_COLUMNS =
   "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, requested_from_actor_kind, requested_from_actor_id, status, reason, payload, requested_at, responded_at, response, expires_at, created_at, subject_version, subject_json, subject_hash, subject_captured_at";
+
+const CLARIFICATION_COLUMNS =
+  "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, allowed_responder_ids, status, reason_code, question, response, responded_by_actor_kind, responded_by_actor_id, requested_at, responded_at, expires_at, created_at";
 
 // =========================
 // 純粋なvalidation guard(DBアクセスなし、Store layerでの
@@ -1021,5 +1073,185 @@ export async function listApprovalsForWork(
   }
 
   return (data ?? []).map((row) => toApproval(row as ApprovalRow));
+
+}
+
+// =========================
+// Clarification (Fast Port P3a: Human Interaction Foundation)
+// =========================
+//
+// tact_approvalsのCRUD群(createApproval/getApproval/
+// updateApprovalStatus/listApprovalsForWork)と全く同じ構造・
+// 同じWorkOwnershipDeps DI seam・同じRLS前提を踏襲する。このfile自体
+// はraw row-level CRUDのみを持ち、Work.status遷移(waiting_for_input
+// への遷移)・allowed responder検証は、より上位の
+// core/tact-work/clarification.tsが担う(requestApproval()/
+// approveApproval()がstore.tsのcreateApproval()/updateApprovalStatus()
+// を呼ぶのと同じ二層構造)。
+
+export interface CreateClarificationParams {
+  taskId?: string | null;
+  requestedByActorKind: ActorKind;
+  requestedByActorId: string;
+  allowedResponderIds?: string[] | null;
+  reasonCode: ClarificationReasonCode;
+  question: string;
+  expiresAt?: string | null;
+}
+
+export async function createClarification(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  params: CreateClarificationParams,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<Clarification | undefined> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return undefined;
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_clarifications")
+    .insert({
+      work_id: workId,
+      task_id: params.taskId ?? null,
+      requested_by_actor_kind: params.requestedByActorKind,
+      requested_by_actor_id: params.requestedByActorId,
+      allowed_responder_ids: params.allowedResponderIds ?? null,
+      reason_code: params.reasonCode,
+      question: params.question,
+      expires_at: params.expiresAt ?? null,
+    })
+    .select(CLARIFICATION_COLUMNS)
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return toClarification(data as ClarificationRow);
+
+}
+
+export async function getClarification(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  clarificationId: string,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<Clarification | undefined> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return undefined;
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_clarifications")
+    .select(CLARIFICATION_COLUMNS)
+    .eq("id", clarificationId)
+    .eq("work_id", workId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    return undefined;
+  }
+
+  return toClarification(data as ClarificationRow);
+
+}
+
+// respondedAtが未設定な終端status(answered/cancelled/expired)への
+// 遷移時のみ、respondedAtを設定する(tact_approvalsのupdateApprovalStatus()
+// と全く同じ規約: 既に応答済みの記録を上書きしない)。
+const CLARIFICATION_TERMINAL_STATUSES: ReadonlySet<ClarificationStatus> = new Set([
+  "answered",
+  "cancelled",
+  "expired",
+]);
+
+export interface UpdateClarificationStatusParams {
+  response?: string | null;
+  respondedByActorKind?: ActorKind | null;
+  respondedByActorId?: string | null;
+}
+
+export async function updateClarificationStatus(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  clarificationId: string,
+  status: ClarificationStatus,
+  params: UpdateClarificationStatusParams = {},
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<void> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return;
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const update: Record<string, unknown> = { status };
+
+  if (CLARIFICATION_TERMINAL_STATUSES.has(status)) {
+    update.responded_at = new Date().toISOString();
+    update.response = params.response ?? null;
+    update.responded_by_actor_kind = params.respondedByActorKind ?? null;
+    update.responded_by_actor_id = params.respondedByActorId ?? null;
+  }
+
+  const { error } = await client
+    .from("tact_clarifications")
+    .update(update)
+    .eq("id", clarificationId)
+    .eq("work_id", workId);
+
+  if (error) {
+    throw error;
+  }
+
+}
+
+export async function listClarificationsForWork(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<Clarification[]> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return [];
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_clarifications")
+    .select(CLARIFICATION_COLUMNS)
+    .eq("work_id", workId)
+    .order("requested_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((row) => toClarification(row as ClarificationRow));
 
 }

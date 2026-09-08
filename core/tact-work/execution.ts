@@ -17,6 +17,9 @@ import {
   failRun,
 } from "./store";
 import { requestApproval as defaultRequestApproval } from "./approval";
+// Fast Port P3a: Human Interaction Foundation(require_input branchの
+// wiring先)。
+import { requestClarification as defaultRequestClarification } from "./clarification";
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "./completion";
 import type { Work } from "./types";
 import { buildApprovalSubject, type ApprovalSubject } from "./approvalIntegrity";
@@ -176,6 +179,13 @@ export interface RunWorkTurnDeps {
   // Architecture Migration Phase B3(Approval Execution)。
   requestApproval: typeof defaultRequestApproval;
 
+  // Fast Port P3a(Human Interaction Foundation)。policyDecision===
+  // "require_input"のonTaskFinished()分岐から、Clarificationを作成
+  // できるようにする(Step11-B)。P3a時点でこの値を実際に生成する
+  // Capability Producerは存在しない(P2a/P2bで確認済み)ため、live
+  // productionでは通常到達しない(Step11-C、明示的に許容された状態)。
+  requestClarification: typeof defaultRequestClarification;
+
   // Architecture Migration Phase C2.1a(Work Completion Reconciliation)。
   // 以前はこのfile内にインライン実装されていたWork completion
   // judgment(anyFailed ? failed : completed)を、Integration経由の
@@ -209,6 +219,7 @@ export const defaultRunWorkTurnDeps: RunWorkTurnDeps = {
   failRun,
   runOrchestration: defaultRunOrchestration,
   requestApproval: defaultRequestApproval,
+  requestClarification: defaultRequestClarification,
   reconcileWorkCompletionStatus: defaultReconcileWorkCompletionStatus,
   resolveIntegrationConnection: defaultResolveIntegrationConnection,
   executeReadIntegrationAction: defaultExecuteReadIntegrationAction,
@@ -307,6 +318,21 @@ export async function runWorkTurn(
     workTaskId: string;
     connectionId: string;
     action: TaskApprovalAction;
+  }[] = [];
+
+  // Fast Port P3a(Human Interaction Foundation): policyDecision===
+  // "require_input"だったIntegration Taskを集める。approvalRequirements/
+  // integrationReadExecutionsと同じく「どのWorkTaskが対象か」という
+  // ポインタの集合であり、実際のrequestClarification()呼び出しは
+  // runOrchestration()の戻り値を受け取った後(下記)で行う(絶対条件13:
+  // resolveClarification()同様、この時点でもProvider/Run呼び出しは
+  // 一切発生しない)。P3a時点でこの値を実際に生成するCapability
+  // Producerは存在しないため、この配列は通常空のままである
+  // (Step11-C、明示的に許容された状態)。
+  const clarificationRequirements: {
+    workTaskId: string;
+    capability?: string;
+    question: string;
   }[] = [];
 
   const hooks: OrchestrationHooks = {
@@ -591,21 +617,27 @@ export async function runWorkTurn(
 
           case "require_input": {
 
-            // Fast Port P2b Step8: REQUIRE_INPUTは正式なcanonical
-            // decisionだが、P2b時点でこれを実際に生成するCapability
-            // Producerは存在しない(P3aでClarification entity/
-            // Human Interactionが実装されるまで、実際のwaiting_for_input
-            // 遷移はDEFERする——CLAUDE.md/Fast Port P2b指示の明示的な
-            // non-goal)。Provider call 0・Run 0・Approval 0を保証する
-            // ため、既存の「Connection未解決」等と同じ安全側の
-            // early-returnパターンにとどめ、Taskはpendingのまま据え
-            // 置く(既存WorkStatus.waiting_for_inputへの遷移はここでは
-            // 行わない——そのstate遷移設計自体がP3aのscope)。
-            console.warn(
-              "[tact-work/execution] policyDecision==='require_input' for a protected action; " +
-              "P2b時点ではrequire_inputのwaiting遷移をP3aへDEFERし、Taskを安全にpendingのまま据え置く。",
-              { workTaskId, service, operation }
-            );
+            // Fast Port P3a(Step11-A/B): P2bのno-op stubを、実際に
+            // requestClarification()を呼べる構造へ配線する。question
+            // には既存のintegrationRequirement.reason(無ければ
+            // resolvedAction.summary)をそのまま使う——このために新しい
+            // fieldをTaskIntegrationRequirementへ追加しない(絶対条件
+            // Step18: core/tact-integration/execution.tsを含む
+            // Integration Gateway側は今回変更しない、既存の開かれた
+            // 形をそのまま再利用する)。reasonCodeはP3a時点で唯一
+            // 登録済みの"missing_required_input"を使う(絶対条件Step4)。
+            //
+            // Step11-C: P3a時点でpolicyDecision==="require_input"を
+            // 実際に生成するCapability Producerは存在しない
+            // (P2a/P2bで確認済み)ため、このcase自体はlive production
+            // では通常到達しない——型としてのcanonical decisionが4値
+            // である以上、handler側は必ず実装する(実際にはこの配列は
+            // 通常空のまま、後段のdrain loopも実行されない)。
+            clarificationRequirements.push({
+              workTaskId,
+              capability: summary.capability,
+              question: summary.integrationRequirement.reason ?? resolvedAction.summary,
+            });
 
             return;
 
@@ -828,10 +860,47 @@ export async function runWorkTurn(
 
   }
 
+  // Fast Port P3a(Human Interaction Foundation): clarificationRequirements
+  // に積まれた各entryをrequestClarification()する。approvalRequirements
+  // と同じく、requestClarification()自体がWork→waiting_for_inputへの
+  // 遷移を行う(1件ごとに呼んでも冪等——同じstatusへ複数回更新するだけ、
+  // core/tact-work/store.tsのupdateWorkStatus()の既存の「タイムスタンプ
+  // 二重設定防止」ロジックに支えられる)。P3a時点でこの配列は通常空の
+  // まま(Step11-C)。
+  if (clarificationRequirements.length > 0) {
+
+    for (const { workTaskId, capability, question } of clarificationRequirements) {
+
+      await deps.requestClarification(
+        {
+          workId: work.id,
+          taskId: workTaskId,
+          // Clarificationを提案した主体はCapability自身(人間・Bot
+          // ではない)。approvalRequirements draining loopと同じ
+          // 表現規約(ARCH-R2 Section9)。
+          requestedByActor: { kind: "ai", id: capability ?? "orchestrator" },
+          reasonCode: "missing_required_input",
+          question,
+        },
+        userId,
+        accessToken
+      );
+
+    }
+
+  }
+
   if (approvalRequirements.length > 0) {
 
     // requestApproval()が既にWork→waiting_for_approvalへの遷移を
     // 行っているため、ここでは何もしない。
+
+  } else if (clarificationRequirements.length > 0) {
+
+    // Fast Port P3a: requestClarification()が既にWork→
+    // waiting_for_inputへの遷移を行っているため、ここでは何もしない
+    // (approvalRequirements分岐と対称、Approvalの方が優先度が高い
+    // ——既存コメント通り、人間の承認待ちは最優先で扱う)。
 
   } else if (result.clarification || integrationConnectionIssues.length > 0 || subjectBuildFailures.length > 0) {
 

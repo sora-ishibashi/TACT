@@ -65,6 +65,7 @@ function makeRecordingDeps(
     resolveIntegrationConnectionCalls: { service: string; userId: string }[];
     requestApprovalCalls: { workId: string; taskId?: string | null; reason: string; action?: unknown; subject?: unknown }[];
     executeReadIntegrationActionCalls: { taskId: string; connectionId: string; action: unknown }[];
+    requestClarificationCalls: { workId: string; taskId?: string | null; reasonCode: string; question: string }[];
   } = {
     workStatusUpdates: [],
     createTaskDescriptions: [],
@@ -76,6 +77,7 @@ function makeRecordingDeps(
     resolveIntegrationConnectionCalls: [],
     requestApprovalCalls: [],
     executeReadIntegrationActionCalls: [],
+    requestClarificationCalls: [],
   };
 
   let nextTaskDbId = 1;
@@ -154,6 +156,33 @@ function makeRecordingDeps(
         status: "pending",
         reason: request.reason,
         payload: {},
+        requestedAt: "2026-09-06T00:00:00.000Z",
+        createdAt: "2026-09-06T00:00:00.000Z",
+      };
+    },
+
+    // Fast Port P3a(Human Interaction Foundation): requestApprovalの
+    // fakeと対称的な最小実装。requestClarification()自体がWork→
+    // waiting_for_inputへの遷移を行う(実core/tact-work/clarification.ts
+    // と同じ挙動)。
+    requestClarification: async (request) => {
+      calls.requestClarificationCalls.push({
+        workId: request.workId,
+        taskId: request.taskId,
+        reasonCode: request.reasonCode,
+        question: request.question,
+      });
+      calls.workStatusUpdates.push("waiting_for_input");
+      return {
+        id: `clarification-db-${calls.requestClarificationCalls.length}`,
+        workId: request.workId,
+        taskId: request.taskId ?? null,
+        requestedByActorKind: request.requestedByActor.kind,
+        requestedByActorId: request.requestedByActor.id,
+        allowedResponderIds: request.allowedResponderIds ?? null,
+        status: "pending",
+        reasonCode: request.reasonCode,
+        question: request.question,
         requestedAt: "2026-09-06T00:00:00.000Z",
         createdAt: "2026-09-06T00:00:00.000Z",
       };
@@ -1555,7 +1584,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // (production callerがこの値を生成できるかとは独立した、
   // type-levelで到達可能な値すべてに対するhandler側の検証)。
 
-  // ---- [Case R5] policyDecision==="require_input" -> provider 0 / Run 0 / Approval 0、Taskはpendingのまま ----
+  // ---- [Case R5] policyDecision==="require_input" -> provider 0 / Run 0 / Approval 0、Clarificationが作成され、Workはwaiting_for_input、Taskはpendingのまま(Fast Port P3a: requestClarification()への配線を確認) ----
   {
     const task = makeTask({
       id: "task-require-input-1",
@@ -1639,8 +1668,36 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Case R5] policyDecision==='require_input'はTask statusを変更しない(updateTaskStatusCalls===0、pendingのまま据え置く——P3aで実際のwaiting_for_input遷移をDEFER)",
+        "[Case R5] policyDecision==='require_input'はTask statusを変更しない(updateTaskStatusCalls===0、pendingのまま据え置く)",
         calls.updateTaskStatusCalls.length === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R5] Fast Port P3a: requestClarification()が正確に1回呼ばれる(Step11-B配線の直接証拠)",
+        calls.requestClarificationCalls.length === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R5] requestClarification()へ渡るreasonCodeは'missing_required_input'(P3a時点で唯一登録済みのreasonCode)",
+        calls.requestClarificationCalls[0]?.reasonCode === "missing_required_input"
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R5] requestClarification()へ渡るtaskIdは対象のWorkTaskId(string)",
+        typeof calls.requestClarificationCalls[0]?.taskId === "string"
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R5] Workはwaiting_for_inputへ遷移する(requestClarification()自身が遷移を行う、resolution≠resumeパターンの前段)",
+        calls.workStatusUpdates.includes("waiting_for_input")
       )
     );
   }

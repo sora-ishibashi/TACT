@@ -356,3 +356,109 @@ export interface Approval {
   subjectCapturedAt?: string | null;
 
 }
+
+// =========================
+// Clarification (Fast Port P3a: Human Interaction Foundation)
+// =========================
+//
+// docs/architecture/p2-p5-final-architecture.md Section9-14で確定した
+// 方針をそのまま実装する: ApprovalをgenericなHumanInteraction entityへ
+// 統合しない(ARCH-P1で本番実証済みのApproval table/status/integrityは
+// 一切変更しない)。Clarificationは、Approvalと並列に扱える、別の
+// canonical entityとして独立に追加する——「HumanInteraction base +
+// Approval特殊化」ではなく「別entity、共通のfield命名規約(kind+id
+// actor pair、requestedAt/respondedAt等)を共有するだけ」という設計
+// (Approval/Clarification共通interfaceは強制しない、無理な抽象化を
+// 増やさない)。
+//
+// Prior Art(ADAPT_AND_BORROW、source codeはコピーせずpatternだけ移植):
+//   - HumanLayer ACP: async human call / AllowedResponderIDs /
+//     correlation / wait-resolve分離
+//   - AXME: human task abstractionとしてのClarification(独立
+//     interaction type)、intent/state分離、response correlation
+//   - BoundFlow: gate resolution ≠ engine resume(resolved gateは
+//     「再開可能になった」だけであり、実際の再開は別の呼び出し)
+//
+// 絶対条件(Fast Port P3a指示): approved/rejectedという語彙は不要
+// (Authorization判断ではなく、安全な実行に必要な情報が不足している
+// だけ)。Clarification resolved ≠ execution resumed——resolveされた
+// 後、Task/Workは「再開可能」になるだけで、実際の再開は次のOrchestration
+// /Execution Turnが行う(このモジュール自身は一切Providerを呼ばない、
+// 絶対条件14)。
+
+export type ClarificationStatus = "pending" | "answered" | "cancelled" | "expired";
+
+export const CLARIFICATION_STATUSES: readonly ClarificationStatus[] = [
+  "pending",
+  "answered",
+  "cancelled",
+  "expired",
+];
+
+// stable machine-readable reason(将来のARCH-P4 Audit Eventでもそのまま
+// 使える形を意識する、core/tact-integration/policy.tsのPolicyReasonCode
+// と同じ設計方針)。絶対条件(Fast Port P3a指示Step4): 現在producerが
+// 無いreasonCodeを大量に先取り登録しない——P3a時点の唯一の実用途
+// (P2bのpolicyDecision==="require_input"経路)に対応する1値のみ登録する。
+export type ClarificationReasonCode = "missing_required_input";
+
+export const CLARIFICATION_REASON_CODES: readonly ClarificationReasonCode[] = [
+  "missing_required_input",
+];
+
+export interface Clarification {
+
+  id: string;
+
+  workId: string;
+
+  taskId?: string | null;
+
+  // 質問を発した主体(通常はCapability自身、Approvalのrequested
+  // ByActorと同じ表現規約——AI/Capability中心ではなく、ActorReference
+  // という共通語彙をそのまま再利用する)。
+  requestedByActorKind: ActorKind;
+
+  requestedByActorId: string;
+
+  // HumanLayer ACPのAllowedResponderIDs pattern(ADAPT_AND_BORROW)。
+  // undefined/null = canonical owner-only(既定。Work.user_idが暗黙の
+  // 唯一のresponder候補——既存のWork-ownership check、
+  // getClarification()のWorkOwnershipDepsが既にこれを構造的に強制
+  // する)。non-empty配列 = 明示allowlist(tactUserIdのみを格納する
+  // 想定。絶対条件10: 外部Provider由来のraw actor id(Slack user id等)
+  // をこの配列へ直接書き込まない——Bot/Adapter層が既に解決済みの
+  // canonical tactUserIdだけを渡す)。
+  allowedResponderIds?: string[] | null;
+
+  status: ClarificationStatus;
+
+  reasonCode: ClarificationReasonCode;
+
+  // human-readable質問文。P3a時点ではfree-text stringのみ
+  // (structured selection等はP3c以降、絶対条件Step12: JSON-anyのような
+  // 広すぎるpayloadを今回持ち込まない)。
+  question: string;
+
+  // human-provided回答(free-text string)。LLMが生成・判定した値では
+  // ない——resolveClarification()の呼び出し元(Bot/Web等)が人間から
+  // 受け取った生のtextをそのまま渡す(絶対条件9)。
+  response?: string | null;
+
+  // 実際に応答したactor(Approvalには無い、Clarification固有の
+  // 追加trace——「誰が承認したか」を記録しないApprovalの現行schemaを
+  // 変更する代わりに、新規entityであるClarificationでは最初から
+  // 記録する設計とした)。
+  respondedByActorKind?: ActorKind | null;
+
+  respondedByActorId?: string | null;
+
+  requestedAt: string;
+
+  respondedAt?: string | null;
+
+  expiresAt?: string | null;
+
+  createdAt: string;
+
+}

@@ -51,6 +51,7 @@ import { run as runWorkStoreAuthorization } from "./work/storeAuthorization.test
 import { run as runWorkIntake } from "./work/intake.test";
 import { run as runWorkExecution } from "./work/execution.test";
 import { run as runWorkApproval } from "./work/approval.test";
+import { run as runWorkClarification } from "./work/clarification.test";
 import { run as runWorkCompletion } from "./work/completion.test";
 import { run as runWorkTaskLifecycleMonotonicity } from "./work/taskLifecycleMonotonicity.test";
 import { run as runWorkApprovalIntegrity } from "./work/approvalIntegrity.test";
@@ -166,6 +167,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/intake", run: runWorkIntake },
   { name: "work/execution", run: runWorkExecution },
   { name: "work/approval", run: runWorkApproval },
+  { name: "work/clarification", run: runWorkClarification },
   { name: "work/completion", run: runWorkCompletion },
   { name: "work/taskLifecycleMonotonicity", run: runWorkTaskLifecycleMonotonicity },
   { name: "work/approvalIntegrity", run: runWorkApprovalIntegrity },

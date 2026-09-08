@@ -23,3 +23,7 @@ export * from "./store";
 export * from "./intake";
 export * from "./execution";
 export * from "./approval";
+// Fast Port P3a: Human Interaction Foundation(Clarification)。
+// core/tact-work/approval.tsと同じ二層構造(store.tsの生CRUD +
+// このExecution Boundary)を持つため、同じbarrelから公開する。
+export * from "./clarification";
