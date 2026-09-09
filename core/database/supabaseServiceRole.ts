@@ -59,6 +59,16 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 //       canonical値)を受け取るが、Work/Task/Run/actionのcorrelationを
 //       必ず再検証してから使う(trustedConversationTurn.tsと同じ、
 //       「値を受け取ったら即信用する」のではなく都度再検証する設計)。
+//   - core/tact-runtime/reconcileOneShotIntegrationReadAsTrustedActor.ts
+//       (P5d、Trusted Bot-Owned Run Compatibility Fix。Production
+//       Slack Bot経由で解決されたTACT userが所有するambiguous Runを、
+//       そのuserのaccess tokenをユーザーに取得・表示・転送させずに
+//       reconcileするための、HTTP非公開のtrusted operator専用境界。
+//       userIdはcaller入力を一切受け取らず、tact_works.user_id列を
+//       このfile自身がservice role権限で直接読んで確定する
+//       (trustedConversationTurn.tsが「identity resolverが検証済みの
+//       tactUserId」を受け取るのと同じ精神を、identity resolverが
+//       存在しないこの文脈向けに適用したもの)。
 //
 // それ以外のCore module(core/tact-research・core/tact-orchestrator・
 // core/tact-core等)からは一切importしないこと。
