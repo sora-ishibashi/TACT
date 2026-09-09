@@ -148,6 +148,7 @@ import { run as runRuntimeEnablement } from "./runtime/enablement.test";
 import { run as runRuntimeReconciliation } from "./runtime/reconciliation.test";
 import { run as runRuntimeReconcileOneShotEntrypoint } from "./runtime/reconcileOneShotEntrypoint.test";
 import { run as runRuntimeReconcileOneShotTrustedActor } from "./runtime/reconcileOneShotIntegrationReadAsTrustedActor.test";
+import { run as runRuntimeReconcileOneShotTrustedActorCli } from "./runtime/reconcileOneShotIntegrationReadAsTrustedActorCli.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -271,6 +272,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "runtime/reconciliation", run: runRuntimeReconciliation },
   { name: "runtime/reconcileOneShotEntrypoint", run: runRuntimeReconcileOneShotEntrypoint },
   { name: "runtime/reconcileOneShotIntegrationReadAsTrustedActor", run: runRuntimeReconcileOneShotTrustedActor },
+  { name: "runtime/reconcileOneShotIntegrationReadAsTrustedActorCli", run: runRuntimeReconcileOneShotTrustedActorCli },
 ];
 
 async function main() {

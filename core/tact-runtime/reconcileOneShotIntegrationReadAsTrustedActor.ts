@@ -55,6 +55,19 @@
 // service role keyはこのファイル(core/database/supabaseServiceRole.ts
 // 経由)でのみ読み出す。呼び出し元・戻り値・Errorのいずれにも生の
 // key文字列を含めない(trustedConversationTurn.tsと同じ絶対条件)。
+//
+// P5e-1(Live Acceptanceで実際に発覚した運用上の欠陥の最小修正):
+// fetchWorkOwnerIdViaServiceRole()は元々「Work行が本当に存在しない」
+// 場合と「Supabase query自体が失敗した(invalid service role key・
+// 到達不能等)」場合を区別せず、両方を同じnullへ潰していた——結果、
+// callerからは常に`reason:"not_found"`にしか見えず、「本当にWorkが
+// 無いのか」「credentialが無効なだけなのか」を一発の実行結果からは
+// 切り分けられなかった(P5d Live Acceptance中に実際に発生・確認済み)。
+// FetchWorkOwnerIdOutcomeという3値の判別union(found/not_found/
+// store_error)へ変更し、callerがこの2つを明確に区別できるようにする。
+// Supabase error本文(message/details/hint等、内部query構造や
+// credentialの手がかりを含みうる)はどこにも一切含めない——安全な
+// 固定reasonだけを返す(絶対条件、secret/query内容の非漏洩)。
 import { createClient } from "@supabase/supabase-js";
 import {
   isServiceRoleConfigured,
@@ -75,9 +88,22 @@ export interface ReconcileOneShotIntegrationReadAsTrustedActorParams {
 
 }
 
+// P5e-1: "trusted_store_error"は、既存reconcileOneShotIntegrationRead()
+// のreason union(not_found/not_eligible/connection_unresolved/
+// runtime_unavailable)のいずれにも意味的に一致しないため新設する
+// (既存reasonの誤用・意味の上書きを避ける、最小限の1値追加)。
+// DB store層(Supabase)自体への到達・認証に失敗した、という
+// この境界に固有の状態を表す。
 export type ReconcileOneShotIntegrationReadAsTrustedActorResult =
   | ReconcileOneShotIntegrationReadResult
-  | { ok: false; reason: "trusted_execution_not_configured" | "not_found" };
+  | { ok: false; reason: "trusted_execution_not_configured" | "not_found" | "trusted_store_error" };
+
+// P5e-1: 「行が存在しない」と「queryそのものが失敗した」を型レベルで
+// 区別する判別union。
+export type FetchWorkOwnerIdOutcome =
+  | { status: "found"; userId: string }
+  | { status: "not_found" }
+  | { status: "store_error" };
 
 // tact_worksのuser_id列を、service role権限で直接1件だけ読む。
 // このfile自身の中で唯一「Run所有者をcaller入力ではなくDBから
@@ -88,31 +114,50 @@ export type ReconcileOneShotIntegrationReadAsTrustedActorResult =
 // NEXT_PUBLIC_SUPABASE_URLはbrowserへも公開される非secretな値
 // (既存core/database/supabaseServiceRole.tsのgetServiceRoleClient()
 // と同じ既存パターン)であり、ここで新たにsecret扱いにする必要は無い。
-async function fetchWorkOwnerIdViaServiceRole(workId: string): Promise<string | null> {
+async function fetchWorkOwnerIdViaServiceRole(workId: string): Promise<FetchWorkOwnerIdOutcome> {
 
   const serviceRoleKey = defaultGetServiceRoleKey();
 
   if (!serviceRoleKey) {
-    return null;
+    return { status: "store_error" };
   }
 
-  const client = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    serviceRoleKey,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
+  try {
 
-  const { data, error } = await client
-    .from("tact_works")
-    .select("user_id")
-    .eq("id", workId)
-    .maybeSingle();
+    const client = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      serviceRoleKey,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
 
-  if (error || !data) {
-    return null;
+    const { data, error } = await client
+      .from("tact_works")
+      .select("user_id")
+      .eq("id", workId)
+      .maybeSingle();
+
+    // 絶対条件(P5e-1): errorはraw messageを一切参照・転送しない
+    // (invalid API key・ネットワーク到達不能等、原因の詳細に
+    // credential/query構造の手がかりが含まれうるため)。「queryが
+    // 失敗した」という事実だけをstore_errorへ正規化する。
+    if (error) {
+      return { status: "store_error" };
+    }
+
+    if (!data) {
+      return { status: "not_found" };
+    }
+
+    return { status: "found", userId: (data as { user_id: string }).user_id };
+
+  } catch {
+
+    // createClient()自体が同期的に例外を投げるケース(不正な
+    // key/URL形式等)も同じくstore_errorへ正規化する——生のException
+    // messageをcallerへ渡さない。
+    return { status: "store_error" };
+
   }
-
-  return (data as { user_id: string }).user_id;
 
 }
 
@@ -122,7 +167,7 @@ export interface ReconcileOneShotIntegrationReadAsTrustedActorDeps {
 
   getServiceRoleKey: typeof defaultGetServiceRoleKey;
 
-  fetchWorkOwnerId: (workId: string) => Promise<string | null>;
+  fetchWorkOwnerId: (workId: string) => Promise<FetchWorkOwnerIdOutcome>;
 
   reconcileOneShotIntegrationRead: typeof defaultReconcileOneShotIntegrationRead;
 
@@ -153,10 +198,19 @@ export async function reconcileOneShotIntegrationReadAsTrustedActor(
   // 絶対条件(最重要): ownerはWork行そのものから確定する。callerは
   // workId/taskId/runId以外の何も渡せない(型定義自体がuserIdを
   // 受け取らないことで、この不変条件を構造的に保証する)。
-  const ownerUserId = await deps.fetchWorkOwnerId(params.workId);
+  //
+  // P5e-1: 「本当にWorkが存在しない」(not_found)と「DB queryそのものが
+  // 失敗した」(trusted_store_error)を、ここで明確に分岐させる
+  // (Live Acceptanceで実際に両者が同じnot_foundへ潰れて区別できな
+  // かった問題の修正)。
+  const ownerLookup = await deps.fetchWorkOwnerId(params.workId);
 
-  if (!ownerUserId) {
+  if (ownerLookup.status === "not_found") {
     return { ok: false, reason: "not_found" };
+  }
+
+  if (ownerLookup.status === "store_error") {
+    return { ok: false, reason: "trusted_store_error" };
   }
 
   // ここから先は既存の、既にtests PASS済みのreconcileOneShotIntegrationRead()
@@ -164,7 +218,7 @@ export async function reconcileOneShotIntegrationReadAsTrustedActor(
   // Connection re-resolve・runtime adapter resolutionは全てそちらの
   // 既存ロジックがそのまま再検証する、二重実装しない)。
   return deps.reconcileOneShotIntegrationRead({
-    userId: ownerUserId,
+    userId: ownerLookup.userId,
     accessToken: serviceRoleKey,
     workId: params.workId,
     taskId: params.taskId,

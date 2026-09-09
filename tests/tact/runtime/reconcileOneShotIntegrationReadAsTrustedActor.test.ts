@@ -21,6 +21,7 @@ import { join } from "node:path";
 import {
   reconcileOneShotIntegrationReadAsTrustedActor,
   type ReconcileOneShotIntegrationReadAsTrustedActorDeps,
+  type FetchWorkOwnerIdOutcome,
 } from "../../../core/tact-runtime/reconcileOneShotIntegrationReadAsTrustedActor";
 import type { ReconcileOneShotIntegrationReadResult } from "../../../core/tact-runtime/reconcileOneShotEntrypoint";
 import { check, summarize, type CheckResult } from "../lib/check";
@@ -35,7 +36,7 @@ function makeDeps(overrides: Partial<ReconcileOneShotIntegrationReadAsTrustedAct
     reconcileCalls: [] as unknown[],
   };
 
-  let ownerUserId: string | null = OWNER_USER_ID;
+  let ownerLookup: FetchWorkOwnerIdOutcome = { status: "found", userId: OWNER_USER_ID };
   let reconcileResult: ReconcileOneShotIntegrationReadResult = {
     ok: true,
     outcome: { status: "recovered", run: { id: "run-1" } as never },
@@ -49,7 +50,7 @@ function makeDeps(overrides: Partial<ReconcileOneShotIntegrationReadAsTrustedAct
 
     fetchWorkOwnerId: async (workId: string) => {
       calls.fetchWorkOwnerIdCalls.push(workId);
-      return ownerUserId;
+      return ownerLookup;
     },
 
     reconcileOneShotIntegrationRead: (async (params: unknown) => {
@@ -64,7 +65,7 @@ function makeDeps(overrides: Partial<ReconcileOneShotIntegrationReadAsTrustedAct
   return {
     deps,
     calls,
-    setOwnerUserId: (value: string | null) => { ownerUserId = value; },
+    setOwnerLookup: (value: FetchWorkOwnerIdOutcome) => { ownerLookup = value; },
     setReconcileResult: (value: ReconcileOneShotIntegrationReadResult) => { reconcileResult = value; },
   };
 
@@ -138,8 +139,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   // ---- [3] Work行が存在しない(=任意/偽装Run IDに対応するWorkが無い) -> not_found、reconcile未呼び出し(任意Run ID不可) ----
   {
-    const { deps, calls, setOwnerUserId } = makeDeps();
-    setOwnerUserId(null);
+    const { deps, calls, setOwnerLookup } = makeDeps();
+    setOwnerLookup({ status: "not_found" });
 
     const result = await reconcileOneShotIntegrationReadAsTrustedActor(BASE_PARAMS, deps);
 
@@ -147,6 +148,41 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[3] 対応するWorkが見つからない場合はnot_found、reconcileOneShotIntegrationRead呼び出し0(任意Run IDでの推測アクセス不可)",
         !result.ok && result.reason === "not_found" && calls.reconcileCalls.length === 0
+      )
+    );
+  }
+
+  // ---- [P5e-5/2] Supabase owner lookup自体がエラー(invalid service role key等)の場合、not_foundとは別の安全なreasonになる ----
+  {
+    const { deps, calls, setOwnerLookup } = makeDeps();
+    setOwnerLookup({ status: "store_error" });
+
+    const result = await reconcileOneShotIntegrationReadAsTrustedActor(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[P5e-5/2] Supabase owner lookup errorはnot_foundではなくtrusted_store_errorを返す(Live Acceptanceで実際に混同していた問題の修正、reconcileOneShotIntegrationRead呼び出し0)",
+        !result.ok && result.reason === "trusted_store_error" && calls.reconcileCalls.length === 0
+      )
+    );
+  }
+
+  // ---- [P5e-5/3] invalid service role相当のstore errorは、safeな固定reasonのみを返す(raw Supabase error本文を含まない) ----
+  // ---- [P5e-5/4] error outputにcredential/secret文字列が一切含まれない ----
+  {
+    const { deps, setOwnerLookup } = makeDeps();
+    setOwnerLookup({ status: "store_error" });
+
+    const result = await reconcileOneShotIntegrationReadAsTrustedActor(BASE_PARAMS, deps);
+    const serialized = JSON.stringify(result);
+
+    results.push(
+      check(
+        "[P5e-5/3][P5e-5/4] store errorはstable/sanitizeされたreason文字列(trusted_store_error)のみを返し、service role key値・query内容等を一切含まない",
+        serialized === JSON.stringify({ ok: false, reason: "trusted_store_error" }) &&
+          !serialized.includes(SERVICE_ROLE_KEY) &&
+          !serialized.toLowerCase().includes("supabase") &&
+          !serialized.toLowerCase().includes("error:")
       )
     );
   }
