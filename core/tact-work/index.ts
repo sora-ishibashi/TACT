@@ -30,3 +30,5 @@ export * from "./clarification";
 // Fast Port P4a: Append-Only Audit Event Foundation。同じbarrel
 // export pattern。
 export * from "./audit";
+// Fast Port P6a: Task Resume Foundation。同じbarrel export pattern。
+export * from "./resume";
