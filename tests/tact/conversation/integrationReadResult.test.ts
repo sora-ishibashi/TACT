@@ -8,7 +8,10 @@
 // OrchestrationResult.integrationReadResultをBot向けtextへ変換する
 // (絶対条件Section18: Bot-specific formattingはこの境界でのみ行う)。
 
-import { formatIntegrationReadResultAnswer } from "../../../core/tact-conversation/orchestration";
+import {
+  formatIntegrationReadResultAnswer,
+  formatIntegrationReadFailureAnswer,
+} from "../../../core/tact-conversation/orchestration";
 import type { OrchestrationResult } from "../../../core/tact-orchestrator";
 import { check, summarize, type CheckResult } from "../lib/check";
 
@@ -214,6 +217,105 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           !text.includes("composio") &&
           !text.includes("next_cursor") &&
           !text.includes("some_next_cursor")
+      )
+    );
+  }
+
+  // =========================
+  // LIVE-1A(Read Failure Surfacing): formatIntegrationReadFailureAnswer
+  // =========================
+  //
+  // Root cause(READ-ONLY AUDIT): result.integrationReadFailureが未反映
+  // だった間、Capabilityが最初に設定したplaceholder文言("Gmail で
+  // 該当するメールを検索します。"等)がread失敗時もそのまま最終回答に
+  // なっていた——DBはfailedなのにSlackは成功したふりをする非対称。
+
+  // ---- D: failureがある場合、placeholderではなくuser-facing errorになる ----
+  {
+    const failureResult = makeResult({
+      answer: "Gmail で該当するメールを検索します。",
+      integrationReadFailure: { service: "gmail", operation: "search_messages", status: "failed" },
+    });
+
+    const text = formatIntegrationReadFailureAnswer(failureResult);
+
+    results.push(
+      check(
+        "[LIVE-1A/D] integrationReadFailureがある場合、placeholder文言そのものは返さず、失敗を伝える文言を返す",
+        !!text && text !== failureResult.answer && text.includes("Gmail")
+      )
+    );
+  }
+
+  // ---- integrationReadFailureが無い場合はundefined(既存answerを壊さない) ----
+  {
+    const result = makeResult();
+
+    results.push(
+      check(
+        "[LIVE-1A/非対象] integrationReadFailureが無い場合はundefinedを返す",
+        formatIntegrationReadFailureAnswer(result) === undefined
+      )
+    );
+  }
+
+  // ---- status別に固定文言が変わる(provider-neutral、Gmail専用分岐ではない) ----
+  {
+    const connectionUnavailable = formatIntegrationReadFailureAnswer(
+      makeResult({ integrationReadFailure: { service: "gmail", operation: "search_messages", status: "connection_unavailable" } })
+    );
+    const slackFailed = formatIntegrationReadFailureAnswer(
+      makeResult({ integrationReadFailure: { service: "slack", operation: "list_channels", status: "failed" } })
+    );
+    const notFound = formatIntegrationReadFailureAnswer(
+      makeResult({ integrationReadFailure: { service: "gmail", operation: "search_messages", status: "not_found" } })
+    );
+
+    results.push(
+      check(
+        "[LIVE-1A/provider-neutral] statusごとに異なる安全な固定文言を返し、service名(Gmail/Slack)は表示してよいがGmail専用のif分岐には依存しない(Slackでも同じ関数が動く)",
+        !!connectionUnavailable && connectionUnavailable.includes("Gmail") && connectionUnavailable.includes("接続") &&
+          !!slackFailed && slackFailed.includes("Slack") &&
+          !!notFound && notFound !== connectionUnavailable
+      )
+    );
+  }
+
+  // ---- E: raw provider error/token文字列がformatterへ渡っても、
+  // 型自体がそれらを保持しないためSlack answerに露出しない ----
+  {
+    // integrationReadFailureの型(core/tact-orchestrator/types.ts)は
+    // service/operation/statusのみを持ち、raw provider error/secret/
+    // token/provider metadataを保持するfieldが存在しない——secretを
+    // 誤って渡そうとしてもTypeScriptの型がそもそも許さない、という
+    // 構造的な安全性を確認する。以下は「万一余剰fieldが紛れ込んでも
+    // formatterが読まない」ことを確認するための意図的な型拡張であり、
+    // `any`は使わず、より広いlocal typeを経由してキャストする
+    // (絶対条件: 新規コードで`any`を使わない)。
+    interface FailureWithSuspiciousExtra {
+      service: string;
+      operation: string;
+      status: string;
+      rawError: string;
+    }
+
+    const suspiciousFailure: FailureWithSuspiciousExtra = {
+      service: "gmail",
+      operation: "search_messages",
+      status: "failed",
+      rawError: "Bearer sk-secret-token-should-never-leak",
+    };
+
+    const suspicious = makeResult({
+      integrationReadFailure: suspiciousFailure as unknown as OrchestrationResult["integrationReadFailure"],
+    });
+
+    const text = formatIntegrationReadFailureAnswer(suspicious) ?? "";
+
+    results.push(
+      check(
+        "[LIVE-1A/E] integrationReadFailureへ紛れ込んだ余剰fieldがあっても、formatterはservice/operation/statusしか読まないためraw文字列がSlack answerへ一切露出しない",
+        !text.includes("Bearer") && !text.includes("sk-secret-token")
       )
     );
   }

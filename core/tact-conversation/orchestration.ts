@@ -1864,6 +1864,85 @@ export function formatIntegrationReadResultAnswer(result: OrchestrationResult): 
 }
 
 // =========================
+// formatIntegrationReadFailureAnswer (LIVE-1A: Read Failure Surfacing)
+// =========================
+//
+// Root cause(READ-ONLY AUDIT): core/tact-work/execution.tsのread
+// integration実行が"completed"以外の結果で終わった場合、
+// result.integrationReadResultが設定されず、formatIntegrationReadResultAnswer()
+// もundefinedを返すため、result.answerはCapabilityが最初に設定した
+// placeholder文言("Gmail で該当するメールを検索します。"等)のまま
+// 最終回答として返っていた——DBではTask/Runが正しくfailedとして
+// 永続化される一方、Slackへは「成功したふりをした」文言だけが届く
+// 非対称があった。この関数はその非対称を解消する。
+//
+// 絶対条件(最重要、provider-neutral): Gmail固有の分岐を作らない——
+// service/operation/statusという既にcanonicalなsafe値だけから、
+// どのIntegration read(将来Slack以外が増えても)にも共通して効く
+// 固定文言を組み立てる。raw provider error(IntegrationExecutionError.
+// message)・secret・token・provider metadata・internal reason文字列は
+// 一切参照しない(result.integrationReadFailureの型自体がそれらを
+// 持たない、core/tact-orchestrator/types.ts参照)。
+const INTEGRATION_SERVICE_LABELS: Record<string, string> = {
+  gmail: "Gmail",
+  slack: "Slack",
+};
+
+// 表示用のprovider名(未知serviceでも安全にfallbackする——固定
+// allowlistの外へ出ても例外を投げない防御的実装)。
+function integrationServiceLabel(service: string): string {
+  return INTEGRATION_SERVICE_LABELS[service] ?? service;
+}
+
+// 操作の性質を表す動詞(read operationが増えても、この小さなmapへ
+// 追記するだけでよい——未知operationは安全な既定語「処理」へ
+// fallbackする)。
+const READ_OPERATION_VERBS: Record<string, string> = {
+  search_messages: "検索",
+  list_channels: "取得",
+};
+
+function readOperationVerb(operation: string): string {
+  return READ_OPERATION_VERBS[operation] ?? "処理";
+}
+
+export function formatIntegrationReadFailureAnswer(result: OrchestrationResult): string | undefined {
+
+  const failure = result.integrationReadFailure;
+
+  if (!failure) {
+    return undefined;
+  }
+
+  const label = integrationServiceLabel(failure.service);
+  const verb = readOperationVerb(failure.operation);
+
+  switch (failure.status) {
+
+    case "connection_unavailable":
+      return `${label}との接続を確認できなかったため、${verb}できませんでした。`;
+
+    case "failed":
+      return `${label}の${verb}中にエラーが発生しました。`;
+
+    case "invalid_action":
+    case "not_found":
+    case "work_not_runnable":
+    case "task_not_executable":
+      return `${label}の${verb}を完了できませんでした。もう一度お試しください。`;
+
+    default: {
+      // core/tact-orchestrator/types.tsのintegrationReadFailure.statusは
+      // 上記6値のunionとして定義済み(exhaustive switch、絶対条件)。
+      const exhaustiveCheck: never = failure.status;
+      return exhaustiveCheck;
+    }
+
+  }
+
+}
+
+// =========================
 // executeReadIntegrationActionViaTactIntegration
 // (Architecture Migration Phase C2.2)
 // =========================
@@ -2477,7 +2556,15 @@ async function runNormalTurn(
   // 初めてBot向けtextへ整形し、result.answerへ反映する
   // (既存のintegrationConnectionIssues→result.answer上書き、
   // Phase C2.1bと同じ既存pattern)。
-  const integrationReadAnswer = formatIntegrationReadResultAnswer(result);
+  //
+  // LIVE-1A(絶対条件、最重要): 成功結果が無い場合でも、read failure
+  // (result.integrationReadFailure)があればplaceholder文言のままに
+  // せず、必ずuser-facingなfailure文言で上書きする。優先順位:
+  //   1. integrationReadResult(成功)
+  //   2. integrationReadFailure(失敗)
+  //   3. 既存answer(read integration自体が発生しなかった通常Turn)
+  const integrationReadAnswer =
+    formatIntegrationReadResultAnswer(result) ?? formatIntegrationReadFailureAnswer(result);
 
   if (integrationReadAnswer) {
     result = { ...result, answer: integrationReadAnswer };
@@ -2602,9 +2689,11 @@ async function runClarificationAnswerTurn(
     source
   );
 
-  // Architecture Migration Phase C2.2: runNormalTurn()と同じ理由
-  // (formatIntegrationReadResultAnswer()参照)。
-  const integrationReadAnswer = formatIntegrationReadResultAnswer(result);
+  // Architecture Migration Phase C2.2 / LIVE-1A: runNormalTurn()と同じ理由
+  // (formatIntegrationReadResultAnswer() / formatIntegrationReadFailureAnswer()
+  // 参照、優先順位も同じ: 成功 → 失敗 → 既存answer)。
+  const integrationReadAnswer =
+    formatIntegrationReadResultAnswer(result) ?? formatIntegrationReadFailureAnswer(result);
 
   if (integrationReadAnswer) {
     result = { ...result, answer: integrationReadAnswer };

@@ -456,6 +456,35 @@ export interface OrchestrationResult {
 
   };
 
+  // LIVE-1A(Read Failure Surfacing): 設定されている場合、このTurnで
+  // Approval不要のIntegration read actionが実行されたが、"completed"
+  // 以外の結果で終わったことを示す(integrationReadResultとは排他)。
+  // 複数のIntegration Taskがある場合は、最初に観測された非completed
+  // 結果だけを保持する(integrationReadResultの「最初の1件を代表として
+  // 設定する」既存の単純化方針と同じ、巨大なmulti-failure UIをこの
+  // Phaseで作らない)。statusはcore/tact-work/execution.tsの
+  // ExecuteReadIntegrationActionOutcome(独立再宣言、循環依存回避)と
+  // 同じ語彙のsubsetだが、"runtime_dispatched"(実行が非同期
+  // Runtimeへ正常にhandoffされただけで失敗ではない)は含まない——
+  // 呼び出し元はこのfieldの有無だけで「read失敗が発生したか」を
+  // 判定できる。raw provider error/secret/token/provider metadataは
+  // 一切含まない(絶対条件、integrationReadResultと同じsafety境界)。
+  integrationReadFailure?: {
+
+    service: string;
+
+    operation: string;
+
+    status:
+      | "failed"
+      | "connection_unavailable"
+      | "invalid_action"
+      | "not_found"
+      | "work_not_runnable"
+      | "task_not_executable";
+
+  };
+
   // Phase 5: Task結果から生成・評価・(採用された場合)実際に書き込んだ
   // Memory Candidateの一覧。書き込みに失敗しても本体のtasks[].status
   // には一切影響しない(絶対条件、commander.tsの呼び出し順序でも

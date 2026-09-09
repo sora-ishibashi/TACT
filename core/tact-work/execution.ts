@@ -903,6 +903,31 @@ export async function runWorkTurn(
           },
         };
 
+      } else if (
+        // LIVE-1A(Read Failure Surfacing、絶対条件、最重要): "completed"
+        // 以外は"runtime_dispatched"を除きすべてread failureとして扱う。
+        // "runtime_dispatched"は実行が非同期Runtimeへ正常にhandoffされた
+        // だけであり(このTurn内ではまだ結果が確定していない、既存の
+        // 「素通り」挙動そのまま——このPhaseで新しい非同期completion
+        // architectureは作らない)、failureではない。integrationReadResult
+        // と同じ「最初の1件を代表として保持する」単純化方針(複数
+        // Integration Taskがあっても、失敗表示は1件だけ)。
+        executionOutcome.status !== "completed" &&
+        executionOutcome.status !== "runtime_dispatched" &&
+        !result.integrationReadFailure
+      ) {
+
+        const metadata = action.metadata as { service?: unknown; operation?: unknown } | undefined;
+
+        result = {
+          ...result,
+          integrationReadFailure: {
+            service: typeof metadata?.service === "string" ? metadata.service : "unknown",
+            operation: typeof metadata?.operation === "string" ? metadata.operation : "unknown",
+            status: executionOutcome.status,
+          },
+        };
+
       }
 
     }

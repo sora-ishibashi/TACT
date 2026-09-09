@@ -1840,6 +1840,108 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   }
 
   // =========================
+  // LIVE-1A(Read Failure Surfacing): executeReadIntegrationAction()が
+  // "completed"以外を返した場合、result.integrationReadFailureへ
+  // provider-neutralなcanonical failureが反映される(READ-ONLY AUDITで
+  // 判明した「DBではfailedなのにSlackへは成功したふりのplaceholderが
+  // 返る」非対称の修正——ここではWork Execution Boundary側の反映だけを
+  // 確認し、Slack向け文言整形はtests/tact/conversation/
+  // integrationReadResult.test.tsで確認する)。
+  // =========================
+
+  // ---- Case R7: status:"failed" -> integrationReadFailureが設定され、
+  // integrationReadResultは設定されない ----
+  {
+    const { deps, calls } = makeRecordingDeps(makeReadIntegrationOrchestration("task-read-7"), {
+      resolveIntegrationConnection: async (params) => {
+        calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
+        return { status: "single", connectionId: "conn-read-7" };
+      },
+      executeReadIntegrationAction: async (params) => {
+        calls.executeReadIntegrationActionCalls.push({
+          taskId: params.taskId,
+          connectionId: params.connectionId,
+          action: params.action,
+        });
+        return { status: "failed" };
+      },
+    });
+
+    const result = await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case R7] executeReadIntegrationAction()がstatus:'failed'を返した場合、result.integrationReadFailureにservice/operation/status:'failed'が反映される",
+        result.integrationReadFailure?.service === "slack" &&
+          result.integrationReadFailure?.operation === "list_channels" &&
+          result.integrationReadFailure?.status === "failed"
+      )
+    );
+
+    results.push(
+      check(
+        "[Case R7] read失敗時、result.integrationReadResultは設定されない(成功/失敗を混同しない)",
+        result.integrationReadResult === undefined
+      )
+    );
+  }
+
+  // ---- Case R8: status:"connection_unavailable" -> 同様にfailureが
+  // provider-neutralな形で保持される(Gmail固有ではなく、Connection
+  // resolution成功後にexecuteReadIntegrationAction()自身が再検証で
+  // 弾いたケースを含め、read実行境界の任意のnon-completed statusで
+  // 同じ経路を通ることの確認) ----
+  {
+    const { deps, calls } = makeRecordingDeps(makeReadIntegrationOrchestration("task-read-8"), {
+      resolveIntegrationConnection: async (params) => {
+        calls.resolveIntegrationConnectionCalls.push({ service: params.service, userId: params.userId });
+        return { status: "single", connectionId: "conn-read-8" };
+      },
+      executeReadIntegrationAction: async () => {
+        return { status: "connection_unavailable" };
+      },
+    });
+
+    const result = await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case R8] executeReadIntegrationAction()がstatus:'connection_unavailable'を返した場合もintegrationReadFailureが保持される(Gmail専用分岐ではないことの直接証拠)",
+        result.integrationReadFailure?.status === "connection_unavailable"
+      )
+    );
+  }
+
+  // ---- Case R9: status:"runtime_dispatched" -> failureとして扱わない
+  // (実行が非同期Runtimeへ正常にhandoffされただけであり、既存の
+  // 「素通り」挙動を維持する、絶対条件: 新しい非同期completion
+  // architectureはこのPhaseで作らない) ----
+  {
+    const { deps } = makeRecordingDeps(makeReadIntegrationOrchestration("task-read-9"), {
+      resolveIntegrationConnection: async () => ({ status: "single", connectionId: "conn-read-9" }),
+      executeReadIntegrationAction: async () => ({ status: "runtime_dispatched" }),
+    });
+
+    const result = await runWorkTurn(
+      { work: makeWork({ status: "created" }), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(
+      check(
+        "[Case R9] status:'runtime_dispatched'はfailureとして扱わない(integrationReadFailure/integrationReadResultいずれも未設定のまま)",
+        result.integrationReadFailure === undefined && result.integrationReadResult === undefined
+      )
+    );
+  }
+
+  // =========================
   // Fast Port P4b(Resume brief Step12) — Audit failure is non-fatal
   // (work/execution.tsのonTaskFinished()境界)
   // =========================
