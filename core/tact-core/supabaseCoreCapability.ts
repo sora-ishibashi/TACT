@@ -40,7 +40,22 @@
 
 import { randomUUID } from "crypto";
 
-import { supabase } from "../database/supabase";
+// TACT SEC-P0-3(Pre-Live Remediation): tact_core_knowledge/
+// tact_core_memories/tact_core_examplesは
+// supabase/migrations/20260913000000_..._restrict_legacy_stage0_
+// tables_to_service_role.sqlでclient側policyを全てdropし、service
+// role以外はデフォルトで拒否されるようになった。clientの取得先だけを
+// service roleへ差し替える(core/database/supabaseServiceRole.tsの
+// 既存allowlistへ追加済み)。
+import { getServiceRoleClient } from "../database/supabaseServiceRole";
+
+function requireServiceRoleClient() {
+  const client = getServiceRoleClient();
+  if (!client) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured.");
+  }
+  return client;
+}
 import {
   CoreCapability,
   LoadContextParams,
@@ -282,7 +297,7 @@ async function selectKnowledgeByOwner(
   kind?: KnowledgeKind
 ): Promise<KnowledgeItem[]> {
 
-  let queryBuilder = supabase
+  let queryBuilder = requireServiceRoleClient()
     .from("tact_core_knowledge")
     .select(KNOWLEDGE_COLUMNS)
     .eq("scope", "user")
@@ -318,7 +333,7 @@ async function insertKnowledge(
 
   assertUserScopeOwner(knowledge.scope, knowledge.ownerId);
 
-  const { data, error } = await supabase
+  const { data, error } = await requireServiceRoleClient()
     .from("tact_core_knowledge")
     .insert({
       user_id: knowledge.ownerId,
@@ -398,7 +413,7 @@ async function selectMemoryByOwner(
   type?: MemoryType
 ): Promise<CoreMemory[]> {
 
-  let queryBuilder = supabase
+  let queryBuilder = requireServiceRoleClient()
     .from("tact_core_memories")
     .select(MEMORY_COLUMNS)
     .eq("scope", "user")
@@ -426,7 +441,7 @@ async function insertMemory(
 
   assertUserScopeOwner(memory.scope, memory.ownerId);
 
-  const { data, error } = await supabase
+  const { data, error } = await requireServiceRoleClient()
     .from("tact_core_memories")
     .insert({
       user_id: memory.ownerId,
@@ -507,7 +522,7 @@ async function selectExampleByOwner(
   tags?: string[]
 ): Promise<Example[]> {
 
-  const { data, error } = await supabase
+  const { data, error } = await requireServiceRoleClient()
     .from("tact_core_examples")
     .select(EXAMPLE_COLUMNS)
     .eq("scope", "user")
@@ -540,7 +555,7 @@ async function insertExample(
 
   assertUserScopeOwner(example.scope, example.ownerId);
 
-  const { data, error } = await supabase
+  const { data, error } = await requireServiceRoleClient()
     .from("tact_core_examples")
     .insert({
       user_id: example.ownerId,

@@ -28,6 +28,7 @@ import type {
   IncomingCodeTaskAttachment,
   StagedAttachments,
 } from "@/core/codeAgent/attachmentContext";
+import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
 // =========================
 // POST /api/tact/code-tasks/run (Phase112〜116)
@@ -389,6 +390,25 @@ export async function POST(
 ) {
 
   try {
+
+    // TACT SEC-P0-1(Pre-Live Remediation): 認証必須化。Pre-Live Full
+    // Repository Audit(docs/architecture/pre-live-full-audit.md)の
+    // P0 finding #1で、このrouteが認証なしで実coding agent実行
+    // (file mutation・git commit/push・GitHub PR作成まで到達可能)
+    // だったことが判明した。既存core/auth/getUserContext.tsの認証
+    // patternをそのまま再利用し、request body/multipart形式の判定・
+    // 読み取りより前に検証する(認証失敗時、Provider/git実行は
+    // 一切発生しない)。
+    const { userId } = await getCurrentUserContext(request);
+
+    if (!userId) {
+
+      return NextResponse.json(
+        { success: false, error: "authentication required" },
+        { status: 401 }
+      );
+
+    }
 
     const contentType = request.headers.get("content-type") ?? "";
     const isMultipart = contentType.toLowerCase().startsWith("multipart/form-data;");

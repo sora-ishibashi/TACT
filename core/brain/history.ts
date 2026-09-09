@@ -2,7 +2,22 @@ import {
   ExecutionRecord
 } from "../context/types";
 
-import { supabase } from "../database/supabase";
+// TACT SEC-P0-3(Pre-Live Remediation): tact_execution_historyは
+// supabase/migrations/20260913000000_..._restrict_legacy_stage0_
+// tables_to_service_role.sqlでclient側policyを全てdropし、service
+// role以外はデフォルトで拒否されるようになった。既存のuser_id明示
+// 比較ロジックは一切変えず、clientの取得先だけをservice roleへ
+// 差し替える(core/database/supabaseServiceRole.tsの既存allowlist
+// へ追加済み)。
+import { getServiceRoleClient } from "../database/supabaseServiceRole";
+
+function requireServiceRoleClient() {
+  const client = getServiceRoleClient();
+  if (!client) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured.");
+  }
+  return client;
+}
 
 
 // ==========================
@@ -49,7 +64,7 @@ export async function saveExecutionRecord(
   try {
 
     const { error } =
-      await supabase
+      await requireServiceRoleClient()
         .from("tact_execution_history")
         .insert({
           user_id: userId ?? null,
@@ -103,7 +118,7 @@ export async function getExecutionHistory(
 
   try {
 
-    let query = supabase
+    let query = requireServiceRoleClient()
       .from("tact_execution_history")
       .select("record")
       .order("created_at", { ascending: false })

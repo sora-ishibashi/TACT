@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getCodeTask, saveCodeTask } from "@/core/codeAgent/store";
 import { getGitProvider } from "@/core/codeAgent/gitProvider";
+import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
 // =========================
 // POST /api/tact/code-tasks/push (STEP144-F)
@@ -28,6 +29,18 @@ export async function POST(
 
   try {
 
+    // TACT SEC-P0-1(Pre-Live Remediation): 認証必須化 + owner-scope。
+    const { userId } = await getCurrentUserContext(request);
+
+    if (!userId) {
+
+      return NextResponse.json(
+        { success: false, error: "authentication required" },
+        { status: 401 }
+      );
+
+    }
+
     const body = await request.json();
 
     const id: string | undefined = body.id;
@@ -41,7 +54,7 @@ export async function POST(
 
     }
 
-    const task = await getCodeTask(id);
+    const task = await getCodeTask(id, userId);
 
     if (!task) {
 

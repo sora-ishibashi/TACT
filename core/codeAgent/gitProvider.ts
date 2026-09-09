@@ -428,10 +428,21 @@ export class LocalGitProvider implements GitProvider {
       await new Promise<{ available: boolean; detail: string }>(
         (resolve) => {
 
+          // TACT SEC-P0-1(Pre-Live Remediation): shell:trueを使わない。
+          // `gh`はWindows上でも(`npx`のような.cmdラッパーとは異なり)
+          // 実行可能ファイル(gh.exe)としてインストールされるため、
+          // shellを経由する理由が無い。shell:trueはNode自身が引数を
+          // escapeしない(呼び出し元の責務になる)ため、request-derived
+          // な値(このcallはリテラル引数のみだが、直後のgh pr createは
+          // params.title/params.body等request由来の値を渡す)を
+          // shell文字列へ展開する経路になり得る、command injection
+          // shapeの脆弱性だった(Pre-Live Full Repository Audit P0
+          // finding #1)。execFileへ配列引数をそのまま渡す既存の
+          // runGit()と同じ、shellを経由しない安全な形へ統一する。
           execFile(
             "gh",
             ["auth", "status"],
-            { cwd: repositoryPath, timeout: 10_000, shell: true },
+            { cwd: repositoryPath, timeout: 10_000 },
             (error, stdout, stderr) => {
 
               if (error) {
@@ -472,6 +483,13 @@ export class LocalGitProvider implements GitProvider {
       await new Promise<{ exitCode: number | null; stdout: string; stderr: string }>(
         (resolve) => {
 
+          // TACT SEC-P0-1: shell:trueを使わない(上記auth statusと同じ
+          // 理由)。params.title/params.body/params.branch/params.base
+          // はrequest body由来の値であり、shell経由で実行していた
+          // 従来の実装はcommand injection shapeの脆弱性だった
+          // (Pre-Live Full Repository Audit P0 finding #1)。execFileへ
+          // 配列引数として渡すだけであれば、各要素はshellのメタ文字
+          // 解釈を経由せずそのままgh CLIの引数として渡る。
           execFile(
             "gh",
             [
@@ -481,7 +499,7 @@ export class LocalGitProvider implements GitProvider {
               "--title", params.title,
               "--body", params.body,
             ],
-            { cwd: repositoryPath, timeout: 30_000, shell: true },
+            { cwd: repositoryPath, timeout: 30_000 },
             (error, stdout, stderr) => {
 
               const exitCode =

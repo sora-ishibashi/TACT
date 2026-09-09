@@ -13,6 +13,7 @@ import {
 import { measureWorkflowMetrics, classifyEvaluation } from "@/core/codeAgent/evaluation";
 import { CodeTask, CodeTaskStatus, CodeTaskTestResult } from "@/core/codeAgent/types";
 import { CodingAgentProviderId } from "@/core/codeAgent/adapterRegistry";
+import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
 // =========================
 // POST /api/tact/code-tasks/execute
@@ -184,6 +185,19 @@ export async function POST(
 
   try {
 
+    // TACT SEC-P0-1(Pre-Live Remediation): 認証必須化 + owner-scope。
+    // Pre-Live Full Repository Audit P0 finding #1参照。
+    const { userId } = await getCurrentUserContext(request);
+
+    if (!userId) {
+
+      return NextResponse.json(
+        { success: false, error: "authentication required" },
+        { status: 401 }
+      );
+
+    }
+
     const body = await request.json();
 
     const id: string | undefined = body.id;
@@ -197,7 +211,7 @@ export async function POST(
 
     }
 
-    let task = await getCodeTask(id);
+    let task = await getCodeTask(id, userId);
 
     if (!task) {
 

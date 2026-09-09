@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getCodeTask, saveCodeTask } from "@/core/codeAgent/store";
+import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
 // =========================
-// POST /api/tact/code-tasks/approve (STEP142-C: Human Approval Gate)
+// POST /api/tact/code-tasks/approve
+// (STEP142-C: Human Approval Gate、TACT SEC-P0-1で認証必須化)
 // =========================
 //
 // これがTACT Code全体の中で唯一「実行してよい」という状態
@@ -13,6 +15,11 @@ import { getCodeTask, saveCodeTask } from "@/core/codeAgent/store";
 // どこからも自動的には呼び出されない。人間が明示的にこのAPIを
 // 呼んだ場合にのみ実行が可能になる、という設計そのものが
 // Human Approval Gateである。
+//
+// TACT SEC-P0-1(Pre-Live Remediation): 従来はこのGate自体に認証が
+// 無く、承認者の身元を一切記録していなかった(Pre-Live Full
+// Repository Audit P0 finding #1)。認証必須化に加え、対象CodeTaskの
+// 所有者(CodeTask.userId)と一致する場合のみ承認できるようにする。
 //
 // body:
 // {
@@ -24,6 +31,17 @@ export async function POST(
 ) {
 
   try {
+
+    const { userId } = await getCurrentUserContext(request);
+
+    if (!userId) {
+
+      return NextResponse.json(
+        { success: false, error: "authentication required" },
+        { status: 401 }
+      );
+
+    }
 
     const body = await request.json();
 
@@ -38,7 +56,7 @@ export async function POST(
 
     }
 
-    const task = await getCodeTask(id);
+    const task = await getCodeTask(id, userId);
 
     if (!task) {
 

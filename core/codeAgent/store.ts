@@ -1,5 +1,5 @@
 // =========================
-// CodeTask Store(STEP142-D)
+// CodeTask Store(STEP142-D、TACT SEC-P0-1/P0-3で更新)
 // =========================
 //
 // DB設計方針: 新規テーブルは作らない。
@@ -16,9 +16,33 @@
 //
 // という理由から、CodeTaskはtact_memoryへ type: "task" として
 // 保存する。新しいMigrationは不要。
+//
+// TACT SEC-P0-3(Pre-Live Remediation): tact_memoryは
+// supabase/migrations/20260913000000_..._restrict_legacy_stage0_
+// tables_to_service_role.sqlでclient側policyを全てdropし、service
+// role以外はデフォルトで拒否されるようになった。clientの取得先だけを
+// service roleへ差し替える(core/database/supabaseServiceRole.tsの
+// 既存allowlistへ追加済み)。
+//
+// TACT SEC-P0-1(Pre-Live Remediation): CodeTaskへ`userId`列を追加し
+// (core/codeAgent/types.ts参照)、以降の全操作をこのuserIdで
+// owner-scopeする。userIdが指定された呼び出し(認証済みroute経由)は
+// 必ず`.eq("user_id", userId)`を伴い、他userのCodeTaskへは
+// (service roleでRLSがbypassされていても)アプリケーション層で
+// 到達できない。DB未接続時のfallback(codeTaskCache)も同じ
+// owner-scopeを適用する——fallback経路だけownership checkを迂回
+// できてしまう、という抜け穴を作らない。
 
-import { supabase } from "../database/supabase";
+import { getServiceRoleClient } from "../database/supabaseServiceRole";
 import { CodeTask } from "./types";
+
+function requireServiceRoleClient() {
+  const client = getServiceRoleClient();
+  if (!client) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured.");
+  }
+  return client;
+}
 
 const CODE_TASK_TYPE = "task";
 
@@ -71,6 +95,15 @@ export function selectCodeTasksFromRows(
 // 二層構成)。
 const codeTaskCache: Map<string, CodeTask> = new Map();
 
+// TACT SEC-P0-1: fallback(DB接続失敗時)がowner-scopeを迂回しない
+// ようにするための共通filter。userId省略時(内部専用の想定、通常の
+// route経由では必ず指定される)は従来どおり絞り込まない。exportする
+// のはtest容易性のため(実DB接続なしにownership判定ロジック自体を
+// 直接検証できるようにする)。
+export function isOwnedBy(task: CodeTask, userId: string | undefined): boolean {
+  return userId === undefined || task.userId === userId;
+}
+
 export async function saveCodeTask(
   task: CodeTask
 ): Promise<void> {
@@ -80,11 +113,12 @@ export async function saveCodeTask(
   try {
 
     const { error } =
-      await supabase
+      await requireServiceRoleClient()
         .from("tact_memory")
         .upsert(
           {
             id: task.id,
+            user_id: task.userId ?? null,
             type: CODE_TASK_TYPE,
             target_agent: null,
             content: task,
@@ -109,19 +143,27 @@ export async function saveCodeTask(
 
 }
 
+// TACT SEC-P0-1: userIdを指定した場合、そのuserが所有するCodeTaskの
+// みを返す(存在するが他user所有の場合もundefined——存在の有無を
+// 漏らさない既存規約、STEP145と同じ)。
 export async function getCodeTask(
-  id: string
+  id: string,
+  userId?: string
 ): Promise<CodeTask | undefined> {
 
   try {
 
-    const { data, error } =
-      await supabase
-        .from("tact_memory")
-        .select("content")
-        .eq("id", id)
-        .eq("type", CODE_TASK_TYPE)
-        .maybeSingle();
+    let query = requireServiceRoleClient()
+      .from("tact_memory")
+      .select("content")
+      .eq("id", id)
+      .eq("type", CODE_TASK_TYPE);
+
+    if (userId !== undefined) {
+      query = query.eq("user_id", userId);
+    }
+
+    const { data, error } = await query.maybeSingle();
 
     if (error) throw error;
 
@@ -139,12 +181,15 @@ export async function getCodeTask(
 
   }
 
-  return codeTaskCache.get(id);
+  const cached = codeTaskCache.get(id);
+
+  return cached && isOwnedBy(cached, userId) ? cached : undefined;
 
 }
 
 export async function listCodeTasks(
-  limit: number = 20
+  limit: number = 20,
+  userId?: string
 ): Promise<CodeTask[]> {
 
   try {
@@ -157,13 +202,18 @@ export async function listCodeTasks(
     // (新しいクエリ機構は追加せず、既存の1回のSELECTのままにする)。
     const fetchLimit = Math.max(limit * 4, 100);
 
-    const { data, error } =
-      await supabase
-        .from("tact_memory")
-        .select("content, created_at")
-        .eq("type", CODE_TASK_TYPE)
-        .order("created_at", { ascending: false })
-        .limit(fetchLimit);
+    let query = requireServiceRoleClient()
+      .from("tact_memory")
+      .select("content, created_at")
+      .eq("type", CODE_TASK_TYPE);
+
+    if (userId !== undefined) {
+      query = query.eq("user_id", userId);
+    }
+
+    const { data, error } = await query
+      .order("created_at", { ascending: false })
+      .limit(fetchLimit);
 
     if (error) throw error;
 
@@ -181,6 +231,9 @@ export async function listCodeTasks(
 
   }
 
-  return Array.from(codeTaskCache.values()).slice(-limit).reverse();
+  return Array.from(codeTaskCache.values())
+    .filter((task) => isOwnedBy(task, userId))
+    .slice(-limit)
+    .reverse();
 
 }

@@ -3,7 +3,28 @@ import {
   ImprovementProposal
 } from "./types";
 
-import { supabase } from "../database/supabase";
+// TACT SEC-P0-3(Pre-Live Remediation): tact_memoryは
+// supabase/migrations/20260913000000_..._restrict_legacy_stage0_
+// tables_to_service_role.sqlでclient側policyを全てdropし、service
+// role以外はデフォルトで拒否されるようになった。この file自身は
+// 元々per-request user access tokenを持たない共有anon client
+// (core/database/supabase.ts)しか使っていなかったため(Stage 0設計)、
+// 既存のuser_id明示比較ロジック・既存の呼び出し規約は一切変えず、
+// clientの取得先だけをservice roleへ差し替える
+// (core/database/supabaseServiceRole.tsの既存allowlistへ追加済み)。
+import { getServiceRoleClient } from "../database/supabaseServiceRole";
+
+// service role未設定の環境(例: ローカル開発でSUPABASE_SERVICE_ROLE_KEY
+// 未設定)では、既存の「DB未接続時は例外を投げず安全にfallbackする」
+// という各関数の既存catchブロックへそのまま合流させる(新しい分岐を
+// 増やさない)。
+function requireServiceRoleClient() {
+  const client = getServiceRoleClient();
+  if (!client) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured.");
+  }
+  return client;
+}
 
 // ==========================
 // Brain Memory
@@ -60,7 +81,7 @@ export async function saveBrainMemory(
   try {
 
     const { error } =
-      await supabase
+      await requireServiceRoleClient()
         .from("tact_memory")
         .insert(
           improvements.map((rule) => ({
@@ -115,7 +136,7 @@ export async function saveImprovementProposals(
   try {
 
     const { error } =
-      await supabase
+      await requireServiceRoleClient()
         .from("tact_memory")
         .insert(
           proposals.map((proposal) => ({
@@ -175,7 +196,7 @@ export async function getImprovementProposals(
 
   try {
 
-    let query = supabase
+    let query = requireServiceRoleClient()
       .from("tact_memory")
       .select("id, user_id, target_agent, content, created_at")
       .eq("type", "improvement_proposal")
@@ -242,7 +263,7 @@ export async function getImprovementProposalById(
   try {
 
     const { data, error } =
-      await supabase
+      await requireServiceRoleClient()
         .from("tact_memory")
         .select("id, user_id, target_agent, content, created_at")
         .eq("type", "improvement_proposal")
@@ -331,7 +352,7 @@ export async function recordCodeTaskOutcome(
   try {
 
     const { error } =
-      await supabase
+      await requireServiceRoleClient()
         .from("tact_memory")
         .insert({
           user_id: userId ?? null,
@@ -442,7 +463,7 @@ export async function refreshRelevantBrainMemory(
 
   try {
 
-    let query = supabase
+    let query = requireServiceRoleClient()
       .from("tact_memory")
       .select(
         "id, target_agent, content, importance, confidence, reuse_count, created_at"

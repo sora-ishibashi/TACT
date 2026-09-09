@@ -5,13 +5,25 @@ import { guessTargetFiles } from "@/core/brain/claudeCodeInstruction";
 import { buildSafeClaudeCodeInstruction } from "@/core/codeAgent/instructionSafety";
 import { saveCodeTask, listCodeTasks, getCodeTask } from "@/core/codeAgent/store";
 import { CodeTask, CodeTaskEvaluationTask } from "@/core/codeAgent/types";
+import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
 // =========================
-// POST /api/tact/code-tasks (STEP142)
+// POST /api/tact/code-tasks (STEP142、TACT SEC-P0-1で認証必須化)
 // =========================
 //
 // 既存のImprovementProposal(tact_memory.type="improvement_proposal")
 // から、Claude Code向けInstructionを取得し、CodeTaskとして保存する。
+//
+// TACT SEC-P0-1(Pre-Live Remediation): Pre-Live Full Repository
+// Audit(docs/architecture/pre-live-full-audit.md、P0 finding #1)で、
+// このrouteを含むapp/api/tact/code-tasks/**全体が認証を一切要求せず、
+// 実coding agent実行・git commit/push・GitHub PR作成まで到達できる
+// ことが判明した。既存core/auth/getUserContext.tsの認証pattern
+// (getCurrentUserContext()、Authorization: Bearer <access_token>を
+// server側で検証、caller供給のuserIdは信用しない)をそのまま再利用し、
+// 新しいadmin secretは作らない。認証されていない場合、CodeTaskの
+// 作成自体を含め、以降の一切のside effect(Provider/git実行)へ
+// 到達させない。
 //
 // body:
 // {
@@ -28,6 +40,17 @@ export async function POST(
 ) {
 
   try {
+
+    const { userId } = await getCurrentUserContext(request);
+
+    if (!userId) {
+
+      return NextResponse.json(
+        { success: false, error: "authentication required" },
+        { status: 401 }
+      );
+
+    }
 
     const body = await request.json();
 
@@ -96,6 +119,10 @@ export async function POST(
 
       id: crypto.randomUUID(),
 
+      // TACT SEC-P0-1: 以降の全操作(approve/execute/commit/push/
+      // pull-request/GET)がこのuserIdでowner-scopeされる。
+      userId,
+
       proposalId: proposal.id,
 
       status: "ready_for_approval",
@@ -143,6 +170,7 @@ export async function POST(
 
 // =========================
 // GET /api/tact/code-tasks?id=...  または  ?limit=...
+// (TACT SEC-P0-1で認証必須化・owner-scope化)
 // =========================
 
 export async function GET(
@@ -151,13 +179,24 @@ export async function GET(
 
   try {
 
+    const { userId } = await getCurrentUserContext(request);
+
+    if (!userId) {
+
+      return NextResponse.json(
+        { success: false, error: "authentication required" },
+        { status: 401 }
+      );
+
+    }
+
     const { searchParams } = new URL(request.url);
 
     const id = searchParams.get("id");
 
     if (id) {
 
-      const task = await getCodeTask(id);
+      const task = await getCodeTask(id, userId);
 
       if (!task) {
 
@@ -181,7 +220,8 @@ export async function GET(
       await listCodeTasks(
         Number.isFinite(parsedLimit) && parsedLimit > 0
           ? parsedLimit
-          : undefined
+          : undefined,
+        userId
       );
 
     return NextResponse.json({ success: true, tasks });

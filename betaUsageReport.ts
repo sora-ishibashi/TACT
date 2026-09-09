@@ -25,7 +25,22 @@
 // DBへの書き込みは一切行わない。
 
 import "dotenv/config";
-import { supabase } from "./core/database/supabase";
+// TACT SEC-P0-3(Pre-Live Remediation): conversations/
+// conversation_messages/conversation_workflow_runsは
+// supabase/migrations/20260913000000_..._restrict_legacy_stage0_
+// tables_to_service_role.sqlでclient側policyを全てdropし、service
+// role以外はデフォルトで拒否されるようになった。このscript自身は
+// operatorがローカルでservice role keyを保持している前提で実行する
+// (このscriptがネットワーク越しに公開されることは無い)。
+import { getServiceRoleClient } from "./core/database/supabaseServiceRole";
+
+function requireServiceRoleClient() {
+  const client = getServiceRoleClient();
+  if (!client) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured.");
+  }
+  return client;
+}
 import { EVIDENCE_SNAPSHOT_KEY } from "./core/conversation/collectPastEvidence";
 import { ARTIFACT_TYPE_SNAPSHOT_KEY } from "./core/conversation/reconstructTask";
 
@@ -139,7 +154,7 @@ async function main() {
 
   const since = parseSinceArg();
 
-  let query = supabase
+  let query = requireServiceRoleClient()
     .from("conversations")
     .select(
       "id, user_id, title, current_task, created_at, updated_at"
@@ -155,7 +170,7 @@ async function main() {
   if (convError) throw convError;
 
   const { data: runs, error: runsError } =
-    await supabase
+    await requireServiceRoleClient()
       .from("conversation_workflow_runs")
       .select(
         "id, conversation_id, input, outputs, status, started_at, completed_at, error"
@@ -165,7 +180,7 @@ async function main() {
   if (runsError) throw runsError;
 
   const { data: messages, error: messagesError } =
-    await supabase
+    await requireServiceRoleClient()
       .from("conversation_messages")
       .select("conversation_id, role");
 

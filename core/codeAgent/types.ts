@@ -273,6 +273,16 @@ export interface CodeTaskPullRequestResult {
 export interface CodeTask {
   id: string;
 
+  // TACT SEC-P0-1(Pre-Live Remediation): このCodeTaskを作成した
+  // authenticated TACT user(getCurrentUserContext()が検証した
+  // userId)。既存(この変更以前に作成された)CodeTaskはundefinedの
+  // まま——新規作成分は必ず設定される(app/api/tact/code-tasks/route.ts
+  // 参照)。以降の全操作(approve/execute/commit/push/pull-request/GET)
+  // は、この値と呼び出し元のauthenticated userIdが一致することを
+  // 必須とする(一致しない、またはuserId未設定の既存Taskへの
+  // アクセスは、存在の有無を漏らさないため404として扱う)。
+  userId?: string;
+
   // core/brain/memory.tsのStoredImprovementProposal.id。
   proposalId: string;
 

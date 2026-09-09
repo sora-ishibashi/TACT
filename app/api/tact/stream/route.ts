@@ -1,11 +1,28 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { runWorkflow } from "@/core/workflow";
 import { defaultWorkflow } from "@/core/workflow/defaultWorkflow";
+import { getCurrentUserContext } from "@/core/auth/getUserContext";
+
+// TACT SEC-P0-2(Pre-Live Remediation): 認証必須化。Pre-Live Full
+// Repository Audit P0 finding #2参照(app/api/tact/route.tsと同じ
+// 理由)。SSE streamを開始する前に検証し、認証失敗時はLegacy
+// workflow engineへ一切到達させない。
 
 export async function GET(
   request: NextRequest
 ) {
+
+  const { userId } = await getCurrentUserContext(request);
+
+  if (!userId) {
+
+    return NextResponse.json(
+      { success: false, error: "authentication required" },
+      { status: 401 }
+    );
+
+  }
 
   const encoder = new TextEncoder();
 

@@ -20,7 +20,21 @@
 // supabase/migrations/20260821000000...のコメント参照)のまま
 // 変更しない(既存Stage/RLS設計を尊重する、Step10絶対条件)。
 
-import { supabase } from "../database/supabase";
+// TACT SEC-P0-3(Pre-Live Remediation): tact_memoryは
+// supabase/migrations/20260913000000_..._restrict_legacy_stage0_
+// tables_to_service_role.sqlでclient側policyを全てdropし、service
+// role以外はデフォルトで拒否されるようになった。clientの取得先だけを
+// service roleへ差し替える(core/database/supabaseServiceRole.tsの
+// 既存allowlistへ追加済み)。
+import { getServiceRoleClient } from "../database/supabaseServiceRole";
+
+function requireServiceRoleClient() {
+  const client = getServiceRoleClient();
+  if (!client) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured.");
+  }
+  return client;
+}
 import {
   AgentHandoffStore,
   DevelopmentTask,
@@ -51,7 +65,7 @@ export function createSupabaseAgentHandoffStore(): AgentHandoffStore {
 
       try {
 
-        const { error } = await supabase
+        const { error } = await requireServiceRoleClient()
           .from("tact_memory")
           .upsert(
             {
@@ -84,7 +98,7 @@ export function createSupabaseAgentHandoffStore(): AgentHandoffStore {
 
       try {
 
-        const { data, error } = await supabase
+        const { data, error } = await requireServiceRoleClient()
           .from("tact_memory")
           .select("content")
           .eq("id", taskId)
@@ -116,7 +130,7 @@ export function createSupabaseAgentHandoffStore(): AgentHandoffStore {
 
       try {
 
-        const { data, error } = await supabase
+        const { data, error } = await requireServiceRoleClient()
           .from("tact_memory")
           .select("content, updated_at")
           .eq("type", MEMORY_TYPE)
@@ -154,7 +168,7 @@ export function createSupabaseAgentHandoffStore(): AgentHandoffStore {
 
       try {
 
-        const { error } = await supabase
+        const { error } = await requireServiceRoleClient()
           .from("tact_memory")
           .upsert(
             {
@@ -187,7 +201,7 @@ export function createSupabaseAgentHandoffStore(): AgentHandoffStore {
 
       try {
 
-        const { data, error } = await supabase
+        const { data, error } = await requireServiceRoleClient()
           .from("tact_memory")
           .select("content")
           .eq("id", handoffId)
@@ -219,7 +233,7 @@ export function createSupabaseAgentHandoffStore(): AgentHandoffStore {
 
       try {
 
-        const { data, error } = await supabase
+        const { data, error } = await requireServiceRoleClient()
           .from("tact_memory")
           .select("content")
           .eq("type", MEMORY_TYPE)

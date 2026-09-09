@@ -69,9 +69,34 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 //       (trustedConversationTurn.tsが「identity resolverが検証済みの
 //       tactUserId」を受け取るのと同じ精神を、identity resolverが
 //       存在しないこの文脈向けに適用したもの)。
+//   - core/brain/memory.ts・core/brain/history.ts
+//       (TACT SEC-P0-3、Pre-Live Remediation。tact_memory・
+//       tact_execution_historyは、supabase/migrations/
+//       20260913000000_restrict_legacy_stage0_tables_to_service_role.sql
+//       でclient側policyを全てdropし、service role以外は既定で
+//       アクセス不可にした——tact_external_identities等と同じ
+//       「policy 0件」pattern。これらのfile自身はper-request user
+//       access tokenを持たない共有anon clientしか元々使っていなかった
+//       ため(Stage 0設計、STEP131以前)、既存の挙動・既存の
+//       application層user_id比較ロジックを一切変えずにservice role
+//       clientへ差し替えるだけで、外部からの直接REST accessだけを
+//       閉じる)。
+//   - core/conversation/store.ts
+//       (同上、conversations/conversation_messages/
+//       conversation_workflow_runsが対象。既存のuser_id明示比較
+//       ロジック(STEP145のownership check含む)は変更しない)。
+//   - core/codeAgent/store.ts
+//       (同上、tact_memory内のCodeTask行が対象。TACT SEC-P0-1で
+//       CodeTaskへuser_id列を追加したため、この境界がowner-scoped
+//       query(`.eq("user_id", userId)`)も併せて行う)。
+//   - core/tact-agent/supabaseStore.ts
+//       (同上、tact_memory内のDevelopmentTask/HandoffState行が対象)。
+//   - core/tact-core/supabaseCoreCapability.ts
+//       (同上、tact_core_knowledge/tact_core_memories/
+//       tact_core_examplesが対象)。
 //
-// それ以外のCore module(core/tact-research・core/tact-orchestrator・
-// core/tact-core等)からは一切importしないこと。
+// それ以外のCore module(core/tact-research・core/tact-orchestrator等)
+// からは一切importしないこと。
 
 let cachedClient: SupabaseClient | null | undefined;
 

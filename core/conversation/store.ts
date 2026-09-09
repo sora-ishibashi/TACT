@@ -1,4 +1,20 @@
-import { supabase } from "../database/supabase";
+// TACT SEC-P0-3(Pre-Live Remediation): conversations/
+// conversation_messages/conversation_workflow_runsは
+// supabase/migrations/20260913000000_..._restrict_legacy_stage0_
+// tables_to_service_role.sqlでclient側policyを全てdropし、service
+// role以外はデフォルトで拒否されるようになった。既存のuser_id明示
+// 比較ロジックは一切変えず、clientの取得先だけをservice roleへ
+// 差し替える(core/database/supabaseServiceRole.tsの既存allowlist
+// へ追加済み)。
+import { getServiceRoleClient } from "../database/supabaseServiceRole";
+
+function requireServiceRoleClient() {
+  const client = getServiceRoleClient();
+  if (!client) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured.");
+  }
+  return client;
+}
 import {
   Conversation,
   ConversationMessage,
@@ -155,7 +171,7 @@ export async function getConversation(
 ): Promise<Conversation | undefined> {
 
   const { data: conversationRow, error: conversationError } =
-    await supabase
+    await requireServiceRoleClient()
       .from("conversations")
       .select(
         "id, user_id, title, current_task, current_output, created_at, updated_at, pending_clarification_message_id, pending_clarification_answered_at"
@@ -172,7 +188,7 @@ export async function getConversation(
   }
 
   const { data: messageRows, error: messagesError } =
-    await supabase
+    await requireServiceRoleClient()
       .from("conversation_messages")
       .select("id, conversation_id, role, content, created_at, message_type")
       .eq("conversation_id", id)
@@ -183,7 +199,7 @@ export async function getConversation(
   }
 
   const { data: runRows, error: runsError } =
-    await supabase
+    await requireServiceRoleClient()
       .from("conversation_workflow_runs")
       .select(
         "id, conversation_id, input, outputs, status, started_at, completed_at, error"
@@ -236,7 +252,7 @@ export async function saveConversation(
   // (Phase54で発見したFK順序問題への対応、絶対条件: 新しい
   // transaction機構は導入しない、最小限の順序変更のみ)。
 
-  const { error: conversationError } = await supabase
+  const { error: conversationError } = await requireServiceRoleClient()
     .from("conversations")
     .upsert(
       {
@@ -257,7 +273,7 @@ export async function saveConversation(
 
   if (conversation.messages.length > 0) {
 
-    const { error: messagesError } = await supabase
+    const { error: messagesError } = await requireServiceRoleClient()
       .from("conversation_messages")
       .upsert(
         conversation.messages.map((message) => ({
@@ -283,7 +299,7 @@ export async function saveConversation(
   // 必ず存在するため、安全にconversationsへ反映できる。
   // pendingが無い(undefined)場合はNULLへ明示的にクリアする
   // (Execution成功時の"cleared"遷移も、このUPDATEが担う)。
-  const { error: pendingError } = await supabase
+  const { error: pendingError } = await requireServiceRoleClient()
     .from("conversations")
     .update({
       pending_clarification_message_id:
@@ -299,7 +315,7 @@ export async function saveConversation(
 
   if (conversation.workflowRuns.length > 0) {
 
-    const { error: runsError } = await supabase
+    const { error: runsError } = await requireServiceRoleClient()
       .from("conversation_workflow_runs")
       .upsert(
         conversation.workflowRuns.map((run) => ({
@@ -345,7 +361,7 @@ export async function listConversations(
   userId?: string | null
 ): Promise<ConversationSummary[]> {
 
-  let query = supabase
+  let query = requireServiceRoleClient()
     .from("conversations")
     .select("id, title, current_task, created_at, updated_at")
     .order("updated_at", { ascending: false })

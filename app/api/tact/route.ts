@@ -2,11 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { runWorkflow } from "@/core/workflow";
 import { defaultWorkflow } from "@/core/workflow/defaultWorkflow";
+import { getCurrentUserContext } from "@/core/auth/getUserContext";
+
+// TACT SEC-P0-2(Pre-Live Remediation): 認証必須化。Pre-Live Full
+// Repository Audit(docs/architecture/pre-live-full-audit.md)の
+// P0 finding #2で、このrouteが認証なしでLegacy 9-Agent workflow
+// engineを起動でき、LLM呼び出し・DB書き込みへ到達できることが
+// 判明した。既存core/auth/getUserContext.tsの認証patternをそのまま
+// 再利用する——Legacy workflow engine自体のarchitectureは変更しない。
 
 export async function POST(
   request: NextRequest
 ) {
   try {
+
+    const { userId } = await getCurrentUserContext(request);
+
+    if (!userId) {
+
+      return NextResponse.json(
+        { success: false, error: "authentication required" },
+        { status: 401 }
+      );
+
+    }
 
     const body = await request.json();
 
