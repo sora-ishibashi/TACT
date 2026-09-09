@@ -43,6 +43,10 @@ export {
   // runConversationTurnAsTrustedActor()(Bot境界)を経由すること。
   runConversationTurn,
   runConversationTurnAsAuthenticatedUser,
+  // Fast Port P6b: Canonical Resume Execution。既存Approval/Policy/
+  // Runtime routing境界(core/tact-integration)への唯一の正式な
+  // resume execution entrypoint。
+  executePreparedTaskResume,
 } from "./orchestration";
 export type {
   ConversationTurnResult,
@@ -50,6 +54,10 @@ export type {
   // BOT-P2
   RunConversationTurnParams,
   RunConversationTurnResult,
+  // Fast Port P6b
+  ExecutePreparedTaskResumeParams,
+  ExecutePreparedTaskResumeDeps,
+  TaskResumeExecutionOutcome,
 } from "./orchestration";
 // Phase75: Artifact Mutation判定・本文構築の純粋関数群(DB/Orchestrator
 // 呼び出しなし)。core/tact-conversation/orchestration.tsへの実結線は

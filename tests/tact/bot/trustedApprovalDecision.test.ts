@@ -1,6 +1,6 @@
 // =========================
 // TACT Bot — Trusted Approval Decision Boundary Regression
-// (Architecture Migration Phase C2.1c-b / C2.1c-c)
+// (Architecture Migration Phase C2.1c-b / C2.1c-c, Fast Port P6b更新)
 // =========================
 //
 // 対象: core/tact-bot/execution/trustedApprovalDecision.tsの
@@ -14,11 +14,21 @@
 // 呼び出し、「未設定時は一切DBへアクセスせず安全にfallbackする」と
 // いう分岐だけを確認する(pure/deterministic)。
 //
-// Category B(Case1〜7、Phase C2.1c-c新規): approveApproval/
-// rejectApproval/executeApprovedIntegrationAction/getServiceRoleKeyを
-// 全てfake実装へ差し替え、live Supabase/Composio/providerへは一切
-// 到達せずにapprove後executionの起動条件・reject時の非到達・
-// unexpected exception時の安全なfallbackを検証する。
+// Category B(Case1〜7、Phase C2.1c-c新規、Fast Port P6bでrequestTaskResume/
+// executePreparedTaskResume経由へ更新): approveApproval/rejectApproval/
+// requestTaskResume/executePreparedTaskResume/getServiceRoleKeyを全て
+// fake実装へ差し替え、live Supabase/Composio/providerへは一切到達
+// せずにapprove後resumeの起動条件・reject時の非到達・unexpected
+// exception時の安全なfallbackを検証する。
+//
+// Fast Port P6b: 以前このsuiteはexecuteApprovedIntegrationAction()を
+// 直接fakeしていたが、trustedApprovalDecision.ts自身がP6bで
+// requestTaskResume()→executePreparedTaskResume()という明示的な2段階
+// (Step12: resolveApproval() ≠ executeProvider())へ変更されたため、
+// このsuiteもそれに合わせて更新する(挙動として確認したい不変条件
+// ——approve成功後にexactly 1回だけresumeへ進む、reject/非approved
+// では0回、unexpected exceptionはexecution_errorへ安全に倒す——は
+// P6b前後で変わらない)。
 
 import "dotenv/config";
 import {
@@ -28,8 +38,10 @@ import {
 } from "../../../core/tact-bot/execution/trustedApprovalDecision";
 import { isServiceRoleConfigured } from "../../../core/database/supabaseServiceRole";
 import type { ApprovalResolutionOutcome } from "../../../core/tact-work/approval";
+import type { TaskResumeRequestOutcome } from "../../../core/tact-work/resume";
 import type { Approval } from "../../../core/tact-work/types";
 import type { IntegrationActionExecutionOutcome } from "../../../core/tact-integration/execution";
+import type { TaskResumeExecutionOutcome } from "../../../core/tact-conversation/orchestration";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeApproval(overrides: Partial<Approval> = {}): Approval {
@@ -60,25 +72,39 @@ function makeParams(overrides: Partial<HandleApprovalDecisionAsTrustedActorParam
   };
 }
 
+const DEFAULT_PREPARED_RESUME: TaskResumeRequestOutcome = {
+  status: "prepared",
+  intent: { workId: "work-1", taskId: "task-1", reason: "approval_resolved", eligibleAt: "2026-09-06T00:00:00.000Z" },
+};
+
 // 絶対条件: このfakeなgetServiceRoleKeyがcallされても、実際のcredential
 // 文字列(process.env.SUPABASE_SERVICE_ROLE_KEY)は一切使わない
 // (live Supabaseへは到達しない——approveApproval/rejectApproval/
-// executeApprovedIntegrationAction自体を全てfakeへ差し替えるため)。
+// requestTaskResume/executePreparedTaskResume自体を全てfakeへ
+// 差し替えるため)。
 function makeFakeDeps(options: {
   approveResult?: ApprovalResolutionOutcome;
   rejectResult?: ApprovalResolutionOutcome;
-  executeResult?: IntegrationActionExecutionOutcome;
-  executeThrows?: unknown;
+  resumeRequestResult?: TaskResumeRequestOutcome;
+  resumeExecutionResult?: TaskResumeExecutionOutcome;
+  resumeExecutionThrows?: unknown;
 } = {}): {
   deps: HandleApprovalDecisionAsTrustedActorDeps;
   approveCalls: unknown[][];
   rejectCalls: unknown[][];
-  executeCalls: unknown[][];
+  resumeRequestCalls: unknown[][];
+  resumeExecutionCalls: unknown[][];
 } {
 
   const approveCalls: unknown[][] = [];
   const rejectCalls: unknown[][] = [];
-  const executeCalls: unknown[][] = [];
+  const resumeRequestCalls: unknown[][] = [];
+  const resumeExecutionCalls: unknown[][] = [];
+
+  const defaultWriteExecuted: TaskResumeExecutionOutcome = {
+    status: "write_executed",
+    outcome: { status: "completed", run: {} as never } as IntegrationActionExecutionOutcome,
+  };
 
   const deps: HandleApprovalDecisionAsTrustedActorDeps = {
     getServiceRoleKey: () => "fake-service-role-key-for-test-only",
@@ -95,16 +121,21 @@ function makeFakeDeps(options: {
         { status: "rejected", approval: makeApproval({ status: "rejected" }) }) as ApprovalResolutionOutcome;
     },
 
-    executeApprovedIntegrationAction: async (...args: unknown[]) => {
-      executeCalls.push(args);
-      if (options.executeThrows !== undefined) {
-        throw options.executeThrows;
+    requestTaskResume: (async (...args: unknown[]) => {
+      resumeRequestCalls.push(args);
+      return options.resumeRequestResult ?? DEFAULT_PREPARED_RESUME;
+    }) as HandleApprovalDecisionAsTrustedActorDeps["requestTaskResume"],
+
+    executePreparedTaskResume: (async (...args: unknown[]) => {
+      resumeExecutionCalls.push(args);
+      if (options.resumeExecutionThrows !== undefined) {
+        throw options.resumeExecutionThrows;
       }
-      return (options.executeResult ?? { status: "completed", run: {} as never }) as IntegrationActionExecutionOutcome;
-    },
+      return options.resumeExecutionResult ?? defaultWriteExecuted;
+    }) as HandleApprovalDecisionAsTrustedActorDeps["executePreparedTaskResume"],
   };
 
-  return { deps, approveCalls, rejectCalls, executeCalls };
+  return { deps, approveCalls, rejectCalls, resumeRequestCalls, resumeExecutionCalls };
 
 }
 
@@ -150,23 +181,23 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   );
 
   // =========================
-  // Category B(Phase C2.1c-c): approve/reject/execution起動条件
+  // Category B(Phase C2.1c-c、Fast Port P6b更新): approve/reject/resume起動条件
   // =========================
 
-  // ---- Case1: 新規approve成功 -> executeApprovedIntegrationAction exactly 1 -> completed ----
+  // ---- Case1: 新規approve成功 -> requestTaskResume→executePreparedTaskResumeが各exactly 1 -> completed ----
   {
-    const { deps, approveCalls, executeCalls } = makeFakeDeps({
+    const { deps, approveCalls, resumeRequestCalls, resumeExecutionCalls } = makeFakeDeps({
       approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
-      executeResult: { status: "completed", run: {} as never },
     });
 
     const result = await handleApprovalDecisionAsTrustedActor(makeParams({ decision: "approve" }), deps);
 
     results.push(
       check(
-        "[Case1] 新規approve成功: approveApprovalが1回、executeApprovedIntegrationActionが正確に1回呼ばれ、completed outcomeが返る",
+        "[Case1] 新規approve成功: approveApprovalが1回、requestTaskResume→executePreparedTaskResumeが各正確に1回呼ばれ、completed outcomeが返る",
         approveCalls.length === 1 &&
-          executeCalls.length === 1 &&
+          resumeRequestCalls.length === 1 &&
+          resumeExecutionCalls.length === 1 &&
           result.ok === true &&
           result.approvalOutcome.status === "approved" &&
           result.executionOutcome?.status === "completed"
@@ -175,45 +206,46 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Case1] executeApprovedIntegrationActionへ渡る引数はtrusted tactUserId(=identity解決済みの値)であり、workId/approvalIdもparamsのまま転記される(providerConnectionRef等の第五引数は無い)",
-        executeCalls[0]?.[0] === "work-1" &&
-          executeCalls[0]?.[1] === "tact-user-1" &&
-          executeCalls[0]?.[3] === "approval-1"
+        "[Case1] requestTaskResume()へ渡る引数はtrusted tactUserId(=identity解決済みの値)・approveApproval結果由来のtaskId(reason:approval_resolved)であり、userIdの詐称余地が無い",
+        (resumeRequestCalls[0]?.[0] as { workId?: string; userId?: string; taskId?: string; reason?: string })?.workId === "work-1" &&
+          (resumeRequestCalls[0]?.[0] as { userId?: string })?.userId === "tact-user-1" &&
+          (resumeRequestCalls[0]?.[0] as { taskId?: string })?.taskId === "task-1" &&
+          (resumeRequestCalls[0]?.[0] as { reason?: string })?.reason === "approval_resolved"
       )
     );
   }
 
-  // ---- Case2: provider/execution canonical failed outcome -> そのまま返す、retry 0 ----
+  // ---- Case2: canonical failed outcome -> そのまま返す、retry 0 ----
   {
-    const { executeCalls, deps } = makeFakeDeps({
+    const { resumeExecutionCalls, deps } = makeFakeDeps({
       approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
-      executeResult: { status: "failed", run: {} as never },
+      resumeExecutionResult: { status: "write_executed", outcome: { status: "failed", run: {} as never } },
     });
 
     const result = await handleApprovalDecisionAsTrustedActor(makeParams({ decision: "approve" }), deps);
 
     results.push(
       check(
-        "[Case2] executeApprovedIntegrationActionがcanonical failedを返した場合、そのままfailedとして返し、execution呼び出しは1回のまま(自動retryしない)",
-        result.ok === true && result.executionOutcome?.status === "failed" && executeCalls.length === 1
+        "[Case2] executePreparedTaskResume()がcanonical failed outcomeを返した場合、そのままfailedとして透過し、execution呼び出しは1回のまま(自動retryしない)",
+        result.ok === true && result.executionOutcome?.status === "failed" && resumeExecutionCalls.length === 1
       )
     );
   }
 
   // ---- Case3: 既にapproved(repeated decision) + already_executed execution outcome ----
   {
-    const { deps, approveCalls, executeCalls } = makeFakeDeps({
+    const { deps, approveCalls, resumeExecutionCalls } = makeFakeDeps({
       approveResult: { status: "already_resolved", approval: makeApproval({ status: "approved" }) },
-      executeResult: { status: "already_executed", run: {} as never },
+      resumeExecutionResult: { status: "write_executed", outcome: { status: "already_executed", run: {} as never } },
     });
 
     const result = await handleApprovalDecisionAsTrustedActor(makeParams({ decision: "approve" }), deps);
 
     results.push(
       check(
-        "[Case3] 既にapproved状態のApprovalへの再approve callbackは、execution boundaryへは到達するが(already_resolved+approval.status===approved)、canonical dedupによりalready_executedがそのまま維持される",
+        "[Case3] 既にapproved状態のApprovalへの再approve callbackは、resume boundaryへは到達するが(already_resolved+approval.status===approved)、canonical dedupによりalready_executedがそのまま維持される",
         approveCalls.length === 1 &&
-          executeCalls.length === 1 &&
+          resumeExecutionCalls.length === 1 &&
           result.ok === true &&
           result.approvalOutcome.status === "already_resolved" &&
           result.executionOutcome?.status === "already_executed"
@@ -221,9 +253,28 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
-  // ---- Case4: reject -> executeApprovedIntegrationAction 0 calls ----
+  // ---- Case3b(Fast Port P6b新規): requestTaskResume()自身がeligibility再確認でblocked/already_terminalを返した場合 -> Providerへ到達せず、既存invalid_actionへ安全に折り畳む ----
   {
-    const { deps, rejectCalls, executeCalls } = makeFakeDeps({
+    const { deps, resumeExecutionCalls } = makeFakeDeps({
+      approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
+      resumeRequestResult: { status: "blocked", reasonCode: "active_run_exists" },
+    });
+
+    const result = await handleApprovalDecisionAsTrustedActor(makeParams({ decision: "approve" }), deps);
+
+    results.push(
+      check(
+        "[Case3b] requestTaskResume()がblocked(例: active_run_exists)を返した場合、executePreparedTaskResumeへは進まず(Provider到達0)、既存invalid_actionへ安全に折り畳む(resolved≠resumedの構造的保証)",
+        resumeExecutionCalls.length === 0 &&
+          result.ok === true &&
+          result.executionOutcome?.status === "invalid_action"
+      )
+    );
+  }
+
+  // ---- Case4: reject -> requestTaskResume/executePreparedTaskResume 0 calls ----
+  {
+    const { deps, rejectCalls, resumeRequestCalls, resumeExecutionCalls } = makeFakeDeps({
       rejectResult: { status: "rejected", approval: makeApproval({ status: "rejected" }) },
     });
 
@@ -231,9 +282,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Case4] reject decisionではrejectApprovalのみが呼ばれ、executeApprovedIntegrationActionは0回のまま(絶対条件)",
+        "[Case4] reject decisionではrejectApprovalのみが呼ばれ、requestTaskResume/executePreparedTaskResumeは0回のまま(絶対条件)",
         rejectCalls.length === 1 &&
-          executeCalls.length === 0 &&
+          resumeRequestCalls.length === 0 &&
+          resumeExecutionCalls.length === 0 &&
           result.ok === true &&
           result.approvalOutcome.status === "rejected" &&
           result.executionOutcome === undefined
@@ -241,7 +293,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
-  // ---- Case5: approve invalid_transition / not_found / rejected済みapproval -> execution 0 calls ----
+  // ---- Case5: approve invalid_transition / not_found / rejected済みapproval -> resume 0 calls ----
   {
     const cases: { name: string; approveResult: ApprovalResolutionOutcome }[] = [
       { name: "invalid_transition", approveResult: { status: "invalid_transition", approval: makeApproval({ status: "rejected" }) } },
@@ -252,25 +304,28 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     for (const c of cases) {
 
-      const { deps, executeCalls } = makeFakeDeps({ approveResult: c.approveResult });
+      const { deps, resumeRequestCalls, resumeExecutionCalls } = makeFakeDeps({ approveResult: c.approveResult });
 
       const result = await handleApprovalDecisionAsTrustedActor(makeParams({ decision: "approve" }), deps);
 
       results.push(
         check(
-          `[Case5:${c.name}] approveApprovalがexecutionへ進んでよい状態(approved)を返さない場合、executeApprovedIntegrationActionは0回のまま`,
-          executeCalls.length === 0 && result.ok === true && result.executionOutcome === undefined
+          `[Case5:${c.name}] approveApprovalがexecutionへ進んでよい状態(approved)を返さない場合、requestTaskResume/executePreparedTaskResumeは0回のまま`,
+          resumeRequestCalls.length === 0 &&
+            resumeExecutionCalls.length === 0 &&
+            result.ok === true &&
+            result.executionOutcome === undefined
         )
       );
 
     }
   }
 
-  // ---- Case6: executeApprovedIntegrationActionがthrow -> handler自体はthrowしない、execution_error、second call 0 ----
+  // ---- Case6: executePreparedTaskResumeがthrow -> handler自体はthrowしない、execution_error、second call 0 ----
   {
-    const { deps, executeCalls } = makeFakeDeps({
+    const { deps, resumeExecutionCalls } = makeFakeDeps({
       approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
-      executeThrows: new Error("simulated internal exception (e.g. unexpected DB error mid-execution)"),
+      resumeExecutionThrows: new Error("simulated internal exception (e.g. unexpected DB error mid-execution)"),
     });
 
     let threw = false;
@@ -284,15 +339,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Case6] executeApprovedIntegrationActionがunexpected exceptionを投げても、handler自体はthrowせず安全にexecution_errorへ倒す",
+        "[Case6] executePreparedTaskResumeがunexpected exceptionを投げても、handler自体はthrowせず安全にexecution_errorへ倒す",
         threw === false && result?.ok === true && result.executionOutcome?.status === "execution_error"
       )
     );
 
     results.push(
       check(
-        "[Case6] 同一request内でexecuteApprovedIntegrationActionが2回目呼ばれることはない(自動retry禁止、1回のみ)",
-        executeCalls.length === 1
+        "[Case6] 同一request内でexecutePreparedTaskResumeが2回目呼ばれることはない(自動retry禁止、1回のみ)",
+        resumeExecutionCalls.length === 1
       )
     );
 
@@ -305,26 +360,26 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
-  // ---- Case7: trusted identity boundary(外部actor idをexecutionへ渡さない) ----
+  // ---- Case7: trusted identity boundary(外部actor idをresumeへ渡さない) ----
   {
-    const { deps, approveCalls, executeCalls } = makeFakeDeps({
+    const { deps, approveCalls, resumeRequestCalls, resumeExecutionCalls } = makeFakeDeps({
       approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
-      executeResult: { status: "completed", run: {} as never },
     });
 
     // handleApprovalDecisionAsTrustedActor()の引数にtactUserIdしか
     // 存在しないこと自体が構造的な保証(BOT-P2.5と同じ既存境界)。
-    // ここではその値がapproveApproval/executeApprovedIntegrationAction
-    // の両方へ一貫してtactUserId(resolved値)としてのみ渡ることを
-    // 直接確認する(生のexternal actor idという概念自体がこの
-    // handlerの引数に存在しない)。
+    // ここではその値がapproveApproval/requestTaskResume/
+    // executePreparedTaskResumeの全てへ一貫してtactUserId(resolved値)
+    // としてのみ渡ることを直接確認する(生のexternal actor idという
+    // 概念自体がこのhandlerの引数に存在しない)。
     await handleApprovalDecisionAsTrustedActor(makeParams({ tactUserId: "tact-user-resolved-42", decision: "approve" }), deps);
 
     results.push(
       check(
-        "[Case7] trusted tactUserIdがapproveApproval/executeApprovedIntegrationActionの両方へ一貫してuserId引数として渡る(externalUserId相当の値はこのhandlerの引数自体に存在しない)",
-          approveCalls[0]?.[1] === "tact-user-resolved-42" &&
-          executeCalls[0]?.[1] === "tact-user-resolved-42"
+        "[Case7] trusted tactUserIdがapproveApproval/requestTaskResume/executePreparedTaskResumeの全てへ一貫してuserId引数として渡る(externalUserId相当の値はこのhandlerの引数自体に存在しない)",
+        approveCalls[0]?.[1] === "tact-user-resolved-42" &&
+          (resumeRequestCalls[0]?.[0] as { userId?: string })?.userId === "tact-user-resolved-42" &&
+          (resumeExecutionCalls[0]?.[0] as { userId?: string })?.userId === "tact-user-resolved-42"
       )
     );
   }

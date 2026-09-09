@@ -7,21 +7,38 @@ import { getSimpleChatResponse } from "../tact-intent/ruleRouter";
 // この存在を一切知らない(依存方向はcore/tact-conversation →
 // core/tact-work → core/tact-orchestratorの一方向、core/tact-work/
 // index.tsのコメント参照)。
-import { resolveWork, runWorkTurn, defaultRunWorkTurnDeps, getApproval } from "../tact-work";
+import {
+  resolveWork,
+  runWorkTurn,
+  defaultRunWorkTurnDeps,
+  getApproval,
+  listApprovalsForWork,
+  listTasksForWork,
+  // Fast Port P6a: Task Resume Foundation。
+  evaluateTaskResumeEligibility,
+} from "../tact-work";
 import type {
   WorkIntakeSource,
   ActorReference,
   ResolveIntegrationConnection,
   ExecuteReadIntegrationAction,
+  ExecuteReadIntegrationActionOutcome,
   Approval,
+  // Fast Port P6a: Task Resume Foundation。
+  TaskResumeIntent,
+  TaskResumeEligibilityBlockedReasonCode,
+  TaskResumeTerminalReasonCode,
 } from "../tact-work";
 import {
   listConnectionsForUser,
   executeReadIntegrationAction,
   dispatchIntegrationReadToRuntime,
   isRuntimeEligibleIntegrationAction,
+  // Fast Port P6b: Canonical Resume Execution。
+  executeApprovedIntegrationAction,
+  evaluatePolicyDecision,
 } from "../tact-integration";
-import type { IntegrationService } from "../tact-integration";
+import type { IntegrationService, IntegrationActionExecutionOutcome } from "../tact-integration";
 // Fast Port P5c: Trigger.dev routingの有効性(feature flag + config)を
 // 決定する唯一のchokepoint。このimport経由でのみ@trigger.dev/sdkへの
 // 依存がこのfileへ間接的に伝播する(orchestration.tsはwiring層のため
@@ -2001,6 +2018,295 @@ export const executeReadIntegrationActionWithRuntimeRouting: ExecuteReadIntegrat
   }
 
 };
+
+// =========================
+// executePreparedTaskResume (Fast Port P6b: Canonical Resume Execution)
+// =========================
+//
+// P6a(core/tact-work/resume.ts)のrequestTaskResume()が返した
+// TaskResumeIntentを、TACT-owned execution boundaryとして安全に実行へ
+// 接続する。絶対条件(最重要、P6a/P6b共通): resolved ≠ resumed。この
+// 関数自身が「実行してよいか」の最終判断者ではなく、prepared intentを
+// authorization tokenとして信用せず、この呼び出し自身が毎回
+// evaluateTaskResumeEligibility()を再実行する(Step3絶対条件——prepared
+// 後にApproval追加・Task terminal化・別Run開始・completed Run発生・
+// Work cancellation等が起こり得るため)。
+//
+// caller供給禁止(Step2絶対条件): userId/accessToken以外の
+// connectionId/provider/runtime provider/resolvedAction/Approval
+// subject/credential/raw external inputはこの関数のシグネチャに
+// 一切存在しない——全てTask.assignedCapability・既存approved
+// Approval・既存Connection(唯一のactive Connection)という、canonical
+// persisted stateからこの関数自身が再解決する。
+//
+// 既存provider-neutral execution routingの再利用(Step8/9/10絶対条件):
+//   - write(policyDecision==="require_approval"): 既存
+//     executeApprovedIntegrationAction()(Policy live recheck・Approval
+//     Integrity検証・dedup・Run lifecycleを完全に内包する既存境界)へ
+//     そのまま委譲する。Approval検証ロジックはここで一切複製しない。
+//   - read(policyDecision==="allow"): このfile自身の既存
+//     executeReadIntegrationActionWithRuntimeRouting()(P5c/P5d、
+//     Runtime/Native routing決定を完全に内包)へそのまま委譲する。
+//     TriggerDevRuntimeAdapterを直接newしない・Composio等Providerを
+//     直接呼ばない(いずれも既存境界の内部に閉じたまま)。
+//
+// exactly-one NEW Run(Step5/6/7/16絶対条件、最重要): 新しいRunは常に
+// 上記の既存境界内部のprepareRunForExecution()が作る(この関数自身は
+// createRunを一切呼ばない、Retry=new Runという既存不変条件をそのまま
+// 継承する)。並行呼び出しに対するexactly-one保証は、新しいmigrationを
+// 追加せず、既存schema(supabase/migrations/20260905000000_create_
+// tact_work_tables.sqlのunique index idx_tact_runs_task_id_attempt、
+// (task_id, attempt)の一意性)をそのまま利用する——評価の結論
+// (Step16): 2つの並行呼び出しが同じ(taskId, attempt)でcreateRun()を
+// 試みた場合、一方は既存core/tact-work/store.tsのcreateRun()自身が
+// 投げる例外(isDuplicateAttempt()のapplication-level throw、または
+// DB unique constraint violation)によって必ず失敗する——この既存
+// 一意性だけで「exactly one canonical Run claim」が既に保証されており、
+// 新しいDB制約(execution lease等)を追加する必要は無い。この関数は
+// その例外を検出し、"concurrent_resume_detected"という安全なoutcome
+// へ正規化するだけにとどめる。
+
+// Step5/16: store.tsのcreateRun()が投げる「同じ(task_id, attempt)への
+// 同時挿入」エラーを検出する。createRun()自身の固定throw文言と、
+// Postgres unique_violationの標準エラーコード("23505")の2経路で
+// 判定するため、通常の予期しないエラー(接続断等)を誤って握り潰す
+// ことはない——該当しない例外は呼び出し元へそのまま再送出する。
+function isConcurrentRunClaimError(error: unknown): boolean {
+
+  if (error instanceof Error && error.message.includes("Run attempt already exists")) {
+    return true;
+  }
+
+  if (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "23505"
+  ) {
+    return true;
+  }
+
+  return false;
+
+}
+
+// WorkTask.assignedCapabilityは、core/tact-integration/execution.tsの
+// prepareRunForExecution()がRun.capabilityへ書き込む値
+// (`integration.${service}.${operation}`)と同じ形式で永続化される
+// (既存precedent、tests/tact/work/execution.test.ts参照)。この関数は
+// その形式をcaller入力を経由せず逆算するだけの純粋関数——
+// "integration."で始まらないcapability(research等、Integration
+// 以外のCapability)はP6bのscope外として安全にundefinedを返す。
+function parseIntegrationCapability(
+  assignedCapability: string
+): { service: string; operation: string } | undefined {
+
+  const parts = assignedCapability.split(".");
+
+  if (parts.length !== 3 || parts[0] !== "integration" || !parts[1] || !parts[2]) {
+    return undefined;
+  }
+
+  return { service: parts[1], operation: parts[2] };
+
+}
+
+export interface ExecutePreparedTaskResumeParams {
+
+  intent: TaskResumeIntent;
+
+  userId: string;
+
+  accessToken: string;
+
+}
+
+// テスト容易性のため(Fast Port P4a incidentの教訓、既存core/tact-work/
+// 各execution boundaryと同じDIパターン): 実Supabase/Composio/
+// Trigger.devへ到達する既存関数を、全てConstructor/Parameter
+// Injectionで差し替え可能にする。既定値は実際にwiring済みの既存関数
+// そのまま(挙動変更なし)。
+export interface ExecutePreparedTaskResumeDeps {
+
+  evaluateTaskResumeEligibility: typeof evaluateTaskResumeEligibility;
+
+  listTasksForWork: typeof listTasksForWork;
+
+  listApprovalsForWork: typeof listApprovalsForWork;
+
+  evaluatePolicyDecision: typeof evaluatePolicyDecision;
+
+  executeApprovedIntegrationAction: typeof executeApprovedIntegrationAction;
+
+  resolveIntegrationConnection: ResolveIntegrationConnection;
+
+  executeReadIntegrationAction: ExecuteReadIntegrationAction;
+
+}
+
+const defaultExecutePreparedTaskResumeDeps: ExecutePreparedTaskResumeDeps = {
+  evaluateTaskResumeEligibility,
+  listTasksForWork,
+  listApprovalsForWork,
+  evaluatePolicyDecision,
+  executeApprovedIntegrationAction,
+  resolveIntegrationConnection: resolveIntegrationConnectionViaTactIntegration,
+  executeReadIntegrationAction: executeReadIntegrationActionWithRuntimeRouting,
+};
+
+// Step5絶対条件: 新しいRun statusを追加しない——write pathは既存
+// IntegrationActionExecutionOutcome、read pathは既存
+// ExecuteReadIntegrationActionOutcomeをそのまま透過する。このunionが
+// 追加するのは「そもそも実行境界(既存Approval/Policy/Runtime
+// boundary)へ到達できなかった」という、このresume operation自身に
+// 固有の分岐だけ。
+export type TaskResumeExecutionOutcome =
+  | { status: "not_eligible"; reasonCode: TaskResumeEligibilityBlockedReasonCode }
+  | { status: "already_terminal"; reasonCode: TaskResumeTerminalReasonCode }
+  | { status: "unsupported_capability" }
+  | { status: "policy_not_executable" }
+  | { status: "approval_not_found" }
+  | { status: "connection_unresolved" }
+  | { status: "concurrent_resume_detected" }
+  | { status: "write_executed"; outcome: IntegrationActionExecutionOutcome }
+  | { status: "read_executed"; outcome: ExecuteReadIntegrationActionOutcome };
+
+export async function executePreparedTaskResume(
+  params: ExecutePreparedTaskResumeParams,
+  deps: ExecutePreparedTaskResumeDeps = defaultExecutePreparedTaskResumeDeps
+): Promise<TaskResumeExecutionOutcome> {
+
+  const { intent, userId, accessToken } = params;
+  const { workId, taskId } = intent;
+
+  // Step3絶対条件(最重要): prepared intentを信用せず、この呼び出し
+  // 自身が毎回eligibilityを再確認する。
+  const eligibility = await deps.evaluateTaskResumeEligibility({ workId, userId, accessToken, taskId });
+
+  if (eligibility.status === "blocked") {
+    return { status: "not_eligible", reasonCode: eligibility.reasonCode };
+  }
+
+  if (eligibility.status === "already_terminal") {
+    return { status: "already_terminal", reasonCode: eligibility.reasonCode };
+  }
+
+  // eligibility.status === "eligible"。Task本体(assignedCapability)を
+  // 再取得する(evaluateTaskResumeEligibility()自身はTask存在/状態
+  // だけを見て、capability文字列自体は呼び出し元へ返さないため、
+  // defense-in-depthも兼ねてここで再度Work/Task correlationごと
+  // 取得する)。
+  const tasks = await deps.listTasksForWork(workId, userId, accessToken);
+  const task = tasks.find((candidate) => candidate.id === taskId && candidate.workId === workId);
+
+  if (!task || !task.assignedCapability) {
+    return { status: "unsupported_capability" };
+  }
+
+  const parsedCapability = parseIntegrationCapability(task.assignedCapability);
+
+  if (!parsedCapability) {
+    // integration.<service>.<operation>形状ではないcapability
+    // (例: "research")は、P6bのscope(Integration execution boundary
+    // への接続)対象外——既存Capability実行経路(Orchestrator Executor)
+    // は一切変更しない。ここでは「resume executionとして対応できない」
+    // ことを安全に報告するだけ。
+    return { status: "unsupported_capability" };
+  }
+
+  const { service, operation } = parsedCapability;
+
+  // Step4絶対条件: execution開始直前にcanonical Policyを再評価する
+  // (prepared時点のPolicyを使い回さない、live recheck)。
+  const policyDecision = deps.evaluatePolicyDecision(service, operation);
+
+  if (policyDecision.decision === "require_input" || policyDecision.decision === "deny") {
+    return { status: "policy_not_executable" };
+  }
+
+  if (policyDecision.decision === "require_approval") {
+
+    // Step9絶対条件: 既存approve/reject/eligibilityで確定した
+    // Approval状態を、ここで再構築・再判定しない。eligibility自身が
+    // 既にpending/rejected/cancelled/expiredなApprovalの存在をblock
+    // しているため、ここに到達した時点でこのTaskに紐づくApprovalは
+    // "approved"だけのはず——それを見つけて既存
+    // executeApprovedIntegrationAction()(Policy live recheck・
+    // Approval Integrity検証・dedupを完全に内包する既存境界)へそのまま
+    // 委譲するだけで、Approval検証ロジックをここで複製しない。
+    const approvals = await deps.listApprovalsForWork(workId, userId, accessToken);
+    const approvedApproval = approvals.find(
+      (approval) => approval.taskId === taskId && approval.status === "approved"
+    );
+
+    if (!approvedApproval) {
+      return { status: "approval_not_found" };
+    }
+
+    try {
+
+      const outcome = await deps.executeApprovedIntegrationAction(workId, userId, accessToken, approvedApproval.id);
+
+      return { status: "write_executed", outcome };
+
+    } catch (error) {
+
+      if (isConcurrentRunClaimError(error)) {
+        return { status: "concurrent_resume_detected" };
+      }
+
+      throw error;
+
+    }
+
+  }
+
+  // policyDecision.decision === "allow"(read)。connectionIdは
+  // callerから受け取らず、既存resolveIntegrationConnectionViaTact
+  // Integration()(このfile内、Web/Bot通常turnと全く同じ既存関数)で
+  // 唯一のactive Connectionを再解決する。
+  const connectionResolution = await deps.resolveIntegrationConnection({
+    service,
+    userId,
+    accessToken,
+  });
+
+  if (connectionResolution.status !== "single") {
+    return { status: "connection_unresolved" };
+  }
+
+  try {
+
+    // 既存executeReadIntegrationActionWithRuntimeRouting()
+    // (P5c/P5d、Runtime/Native routing決定を完全に内包)へそのまま
+    // 委譲する。inputは常に空({})——resume executionはraw external
+    // inputをcallerから受け取らない(絶対条件Step2)。
+    const outcome = await deps.executeReadIntegrationAction({
+      workId,
+      userId,
+      accessToken,
+      taskId,
+      connectionId: connectionResolution.connectionId,
+      action: {
+        kind: "integration_action",
+        summary: `resume: ${service}.${operation}`,
+        metadata: { service, operation, input: {}, connectionId: connectionResolution.connectionId },
+      },
+    });
+
+    return { status: "read_executed", outcome };
+
+  } catch (error) {
+
+    if (isConcurrentRunClaimError(error)) {
+      return { status: "concurrent_resume_detected" };
+    }
+
+    throw error;
+
+  }
+
+}
 
 export async function resolveAndRunWork(
   conversation: Conversation,
