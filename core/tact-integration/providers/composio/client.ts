@@ -52,6 +52,12 @@ export function getSlackToolkitVersion(): string {
 
 }
 
+export function getGmailToolkitVersion(): string {
+
+  return process.env.COMPOSIO_GMAIL_TOOLKIT_VERSION || "latest";
+
+}
+
 export function getComposioClient(): Composio | null {
 
   if (!isComposioConfigured()) {
@@ -64,7 +70,10 @@ export function getComposioClient(): Composio | null {
 
   cachedClient = new Composio({
     apiKey: process.env.COMPOSIO_API_KEY,
-    toolkitVersions: { slack: getSlackToolkitVersion() },
+    toolkitVersions: {
+      slack: getSlackToolkitVersion(),
+      gmail: getGmailToolkitVersion(),
+    },
   });
 
   return cachedClient;

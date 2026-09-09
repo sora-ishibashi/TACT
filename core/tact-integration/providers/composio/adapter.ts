@@ -6,8 +6,17 @@ import {
   ComposioToolExecutionError,
   ComposioSharedAccessDeniedError,
 } from "@composio/core";
-import { getComposioClient, getSlackToolkitVersion, toComposioUserId } from "./client";
+import {
+  getComposioClient,
+  getGmailToolkitVersion,
+  getSlackToolkitVersion,
+  toComposioUserId,
+} from "./client";
 import { mapSlackActionToComposioTool, mapComposioListChannelsResultToCanonical } from "./mappings/slack";
+import {
+  mapComposioGmailSearchResultToCanonical,
+  mapGmailActionToComposioTool,
+} from "./mappings/gmail";
 import type {
   IntegrationExecutionRequest,
   IntegrationExecutionResult,
@@ -192,6 +201,30 @@ export function buildExecutionResultFromToolResult(
 
   }
 
+  if (action.service === "gmail" && action.operation === "search_messages") {
+
+    const canonicalized = mapComposioGmailSearchResultToCanonical(result.data);
+
+    if (!canonicalized.ok) {
+      return {
+        status: "failed",
+        error: {
+          code: "provider_execution_failed",
+          message: canonicalized.reason,
+          retryable: false,
+        },
+        providerExecutionRef: result.logId ?? null,
+      };
+    }
+
+    return {
+      status: "completed",
+      providerExecutionRef: result.logId ?? null,
+      output: canonicalized.result,
+    };
+
+  }
+
   return {
     status: "completed",
     providerExecutionRef: result.logId ?? null,
@@ -219,7 +252,7 @@ async function executeComposio(
 
   }
 
-  if (request.action.service !== "slack") {
+  if (request.action.service !== "slack" && request.action.service !== "gmail") {
 
     return {
       status: "failed",
@@ -232,7 +265,10 @@ async function executeComposio(
 
   }
 
-  const mapped = mapSlackActionToComposioTool(request.action);
+  const mapped =
+    request.action.service === "slack"
+      ? mapSlackActionToComposioTool(request.action)
+      : mapGmailActionToComposioTool(request.action);
 
   if (!mapped.ok) {
 
@@ -247,7 +283,8 @@ async function executeComposio(
 
   }
 
-  const toolkitVersion = getSlackToolkitVersion();
+  const toolkitVersion =
+    request.action.service === "slack" ? getSlackToolkitVersion() : getGmailToolkitVersion();
 
   try {
 

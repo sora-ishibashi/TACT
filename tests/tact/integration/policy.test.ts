@@ -101,11 +101,11 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       )
     );
 
-    const unknownService = resolveIntegrationActionPolicy("gmail", "send_message");
+    const unknownService = resolveIntegrationActionPolicy("notion", "send_message");
 
     results.push(
       check(
-        "[Case P3] 未登録のservice(gmail)も同様にundefinedを返す(service+operationの完全一致のみ許可)",
+        "[Case P3] 未登録のservice(notion)も同様にundefinedを返す(service+operationの完全一致のみ許可)",
         unknownService === undefined
       )
     );
@@ -229,11 +229,11 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   // ---- [Case D4] unknown service -> deny ----
   {
-    const decision = evaluatePolicyDecision("gmail", "send_message");
+    const decision = evaluatePolicyDecision("notion", "send_message");
 
     results.push(
       check(
-        "[Case D4] 未登録service(gmail)はdecision==='deny'",
+        "[Case D4] 未登録service(notion)はdecision==='deny'",
         decision.decision === "deny"
       )
     );
@@ -248,7 +248,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   // ---- [Case D5] deny does not imply approval ----
   {
-    const decision = evaluatePolicyDecision("gmail", "send_message");
+    const decision = evaluatePolicyDecision("notion", "send_message");
 
     results.push(
       check(

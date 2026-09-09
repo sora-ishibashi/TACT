@@ -24,6 +24,7 @@ import { runDesign } from "./tact-design";
 import {
   runIntegrationSlackSendMessageCapability,
   runIntegrationSlackListChannelsCapability,
+  runIntegrationGmailSearchMessagesCapability,
 } from "./tact-integration";
 
 let bootstrapped = false;
@@ -56,6 +57,8 @@ export function bootstrapTactCapabilities(): void {
 
   // Architecture Migration Phase C2.2: read capability第1号。
   registerCapability("integration.slack.list_channels", runIntegrationSlackListChannelsCapability);
+
+  registerCapability("integration.gmail.search_messages", runIntegrationGmailSearchMessagesCapability);
 
   bootstrapped = true;
 

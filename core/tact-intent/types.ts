@@ -25,7 +25,8 @@ export type TactIntent =
   | "research"
   | "core_push"
   | "integration_slack_send_message"
-  | "integration_slack_list_channels";
+  | "integration_slack_list_channels"
+  | "integration_gmail_search_messages";
 
 // STEP212のDirect Push契約(type: "knowledge"|"memory"|"example")と
 // 同じ型をここでも再利用する。Intent Routerがcore_pushと判定した際、

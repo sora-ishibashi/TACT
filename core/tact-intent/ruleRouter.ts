@@ -96,6 +96,15 @@ function looksLikeSlackListChannelsRequest(trimmed: string): boolean {
 
 }
 
+const GMAIL_TOPIC_PATTERN = /gmail|メール|mail/i;
+const GMAIL_READ_ACTION_PATTERN = /(検索|探し|確認|見せ|読み|recent|search|find|check)/i;
+
+function looksLikeGmailSearchMessagesRequest(trimmed: string): boolean {
+
+  return GMAIL_TOPIC_PATTERN.test(trimmed) && GMAIL_READ_ACTION_PATTERN.test(trimmed);
+
+}
+
 export type SlackSendExtractionResult =
   | { matched: false }
   | { matched: true; channel: string; text: string }
@@ -461,6 +470,15 @@ export function classifyIntent(input: string, previousInput?: string): IntentDec
     return {
       intent: "integration_slack_list_channels",
       reason: "matched slack list_channels pattern (Slack + チャンネル + 一覧/リスト)",
+    };
+
+  }
+
+  if (looksLikeGmailSearchMessagesRequest(trimmed)) {
+
+    return {
+      intent: "integration_gmail_search_messages",
+      reason: "matched gmail search pattern (Gmail/email + search/read action)",
     };
 
   }

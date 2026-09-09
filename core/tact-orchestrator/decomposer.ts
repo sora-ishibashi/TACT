@@ -201,6 +201,8 @@ export function decomposeTask(
         ? "integration.slack.send_message"
         : decision.intent === "integration_slack_list_channels"
           ? "integration.slack.list_channels"
+          : decision.intent === "integration_gmail_search_messages"
+            ? "integration.gmail.search_messages"
           : undefined;
 
   // =========================

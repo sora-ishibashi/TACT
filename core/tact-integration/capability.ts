@@ -2,6 +2,71 @@ import { extractSlackSendIntent } from "../tact-intent/ruleRouter";
 import { evaluatePolicyDecision } from "./policy";
 import type { CapabilityInvocationRequest, CapabilityInvocationResult } from "../tact-orchestrator/types";
 
+const GMAIL_SERVICE = "gmail";
+const GMAIL_SEARCH_MAX_QUERY_LENGTH = 200;
+const GMAIL_SEARCH_DEFAULT_MAX_RESULTS = 10;
+
+// The rule router decides that this is Gmail search.  This helper only
+// derives the provider-neutral search expression and never accepts a raw
+// provider payload.
+export function extractGmailSearchQuery(input: string): string | undefined {
+
+  const query = input
+    .replace(/gmail|メール|mail/gi, " ")
+    .replace(/(を|の|について|に関する)?(検索|探し|確認|見せ|読み)[^。、！？!?]*/gi, " ")
+    .replace(/(最近|最新|メール)/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/(?:\s|の)+$/u, "")
+    .trim();
+
+  if (!query || query.length > GMAIL_SEARCH_MAX_QUERY_LENGTH) {
+    return undefined;
+  }
+
+  return query;
+
+}
+
+export async function runIntegrationGmailSearchMessagesCapability(
+  request: CapabilityInvocationRequest
+): Promise<CapabilityInvocationResult> {
+
+  const query = extractGmailSearchQuery(request.query);
+
+  if (!query) {
+    return { success: false, errorMessage: "メール検索には空でない検索対象が必要です。" };
+  }
+
+  const operation = "search_messages";
+  const decision = evaluatePolicyDecision(GMAIL_SERVICE, operation);
+
+  if (decision.decision !== "allow") {
+    return { success: false, errorMessage: "このメール検索操作は現在実行できません。" };
+  }
+
+  return {
+    success: true,
+    output: "Gmail で該当するメールを検索します。",
+    integrationRequirement: {
+      requiresApproval: false,
+      policyDecision: decision.decision,
+      policyReasonCode: decision.reasonCode,
+      riskClass: decision.riskClass,
+      action: {
+        kind: "integration_action",
+        summary: "Gmail でメールを検索する",
+        metadata: {
+          service: GMAIL_SERVICE,
+          operation,
+          input: { query, maxResults: GMAIL_SEARCH_DEFAULT_MAX_RESULTS },
+        },
+      },
+    },
+  };
+
+}
+
 // =========================
 // TACT Integration — "integration.slack.send_message" /
 // "integration.slack.list_channels" Capabilities

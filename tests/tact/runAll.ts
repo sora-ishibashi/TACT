@@ -58,6 +58,7 @@ import { run as runWorkAudit } from "./work/audit.test";
 import { run as runWorkCompletion } from "./work/completion.test";
 import { run as runWorkTaskLifecycleMonotonicity } from "./work/taskLifecycleMonotonicity.test";
 import { run as runWorkApprovalIntegrity } from "./work/approvalIntegrity.test";
+import { run as runWorkTaskRunReconciliation } from "./work/taskRunReconciliation.test";
 import { run as runGenerateLLMAnswerRetry } from "./research/generateLLMAnswerRetry.test";
 import { run as runEvaluateTaskExecution } from "./evaluation/evaluateTaskExecution.test";
 import { run as runLearningSignalsWiring } from "./evaluation/learningSignalsWiring.test";
@@ -143,6 +144,7 @@ import { run as runIntegrationPropose } from "./integration/propose.test";
 import { run as runIntegrationExecution } from "./integration/execution.test";
 import { run as runIntegrationCapability } from "./integration/capability.test";
 import { run as runIntegrationPolicy } from "./integration/policy.test";
+import { run as runIntegrationGmail } from "./integration/gmail.test";
 import { run as runIntentSlackSendIntent } from "./intent/slackSendIntent.test";
 import { run as runIntentSlackListChannelsIntent } from "./intent/slackListChannelsIntent.test";
 import { run as runRuntimeAdapter } from "./runtime/adapter.test";
@@ -185,6 +187,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/completion", run: runWorkCompletion },
   { name: "work/taskLifecycleMonotonicity", run: runWorkTaskLifecycleMonotonicity },
   { name: "work/approvalIntegrity", run: runWorkApprovalIntegrity },
+  { name: "work/taskRunReconciliation", run: runWorkTaskRunReconciliation },
   { name: "research/generateLLMAnswerRetry", run: runGenerateLLMAnswerRetry },
   { name: "evaluation/evaluateTaskExecution", run: runEvaluateTaskExecution },
   { name: "evaluation/learningSignalsWiring", run: runLearningSignalsWiring },
@@ -270,6 +273,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "integration/execution", run: runIntegrationExecution },
   { name: "integration/capability", run: runIntegrationCapability },
   { name: "integration/policy", run: runIntegrationPolicy },
+  { name: "integration/gmail", run: runIntegrationGmail },
   { name: "intent/slackSendIntent", run: runIntentSlackSendIntent },
   { name: "intent/slackListChannelsIntent", run: runIntentSlackListChannelsIntent },
   { name: "runtime/adapter", run: runRuntimeAdapter },

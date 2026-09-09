@@ -28,7 +28,7 @@
 // =========================
 
 // Phase C1ではSlackのみ(絶対条件: 巨大なIntegrationを一度に作らない)。
-export type IntegrationService = "slack";
+export type IntegrationService = "slack" | "gmail";
 
 export interface IntegrationAction {
 
@@ -77,6 +77,24 @@ export interface SlackListChannelsResult {
 
   channels: SlackChannelSummary[];
 
+}
+
+// Gmail read results are deliberately compact and provider-neutral.  In
+// particular, no raw headers, HTML, attachments, or provider metadata cross
+// this boundary.
+export interface GmailMessageSummary {
+  messageId: string;
+  threadId?: string;
+  subject?: string;
+  from?: string;
+  to?: string;
+  date?: string;
+  snippet?: string;
+  bodyText?: string;
+}
+
+export interface GmailSearchMessagesResult {
+  messages: GmailMessageSummary[];
 }
 
 // =========================

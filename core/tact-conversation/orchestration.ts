@@ -1824,6 +1824,41 @@ export function formatIntegrationReadResultAnswer(result: OrchestrationResult): 
 
   }
 
+  if (readResult.service === "gmail" && readResult.operation === "search_messages") {
+
+    try {
+
+      const parsed = JSON.parse(readResult.output) as { messages?: unknown } | null;
+      const messages = Array.isArray(parsed?.messages) ? parsed.messages : [];
+
+      if (messages.length === 0) {
+        return "該当するメールは見つかりませんでした。";
+      }
+
+      const lines = messages.slice(0, 10).flatMap((message) => {
+        if (!message || typeof message !== "object") {
+          return [];
+        }
+
+        const item = message as Record<string, unknown>;
+        const subject = typeof item.subject === "string" ? item.subject : "(件名なし)";
+        const from = typeof item.from === "string" ? item.from : "送信者不明";
+        const date = typeof item.date === "string" ? item.date : "日付不明";
+        const snippet = typeof item.snippet === "string" ? item.snippet : "";
+
+        return [`• ${subject}\n  ${from} / ${date}${snippet ? `\n  ${snippet}` : ""}`];
+      });
+
+      return lines.length > 0
+        ? `該当メール ${messages.length} 件のうち、取得できた分です。\n${lines.join("\n")}`
+        : undefined;
+
+    } catch {
+      return undefined;
+    }
+
+  }
+
   return undefined;
 
 }
