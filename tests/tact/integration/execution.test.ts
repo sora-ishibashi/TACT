@@ -2201,6 +2201,138 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   }
 
   // =========================
+  // LIVE-1A(Composio Error Cause Observability): provider.failed audit
+  // detailsへのsanitized diagnostics反映
+  // =========================
+  //
+  // 対象: core/tact-integration/execution.tsのtoJsonSafeProviderDetails()
+  // 配線(executeIntegrationActionCore()のprovider.failed emit)。
+  // Provider実装(ここではfakeがComposio Adapterの実際の出力shapeを
+  // 模す)がIntegrationExecutionError.providerDetailsへ安全な診断値を
+  // 詰めた場合、auditイベントのdetailsへそれがJSON-safeな形で
+  // 転記されること、かつobject/array/functionのような非primitive値は
+  // 構造的に落とされることを確認する。
+
+  // ---- E: provider.failed detailsへsanitized diagnosticsのみが入る ----
+  {
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async (): Promise<IntegrationExecutionResult> => {
+        calls.executeIntegrationActionCalls += 1;
+        calls.callOrder.push("executeIntegrationAction");
+        return {
+          status: "failed",
+          error: {
+            code: "provider_execution_failed",
+            message: "Error executing the tool GMAIL_FETCH_EMAILS",
+            retryable: false,
+            providerDetails: {
+              provider: "composio",
+              errorName: "ComposioToolExecutionError",
+              providerCode: "TS-SDK::TOOL_EXECUTION_ERROR",
+              statusCode: 400,
+              causeName: "BadRequestError",
+              causeMessage: "invalid connected_account_id for this toolkit",
+              // 非primitive値(将来のProvider実装が誤って詰めた場合の
+              // 防御的ケース)——JSON-safeフィルタで落ちることを確認する。
+              rawCause: { nested: "object" },
+            },
+          },
+        };
+      },
+    });
+
+    const outcome = await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "gmail", operation: "search_messages", input: { query: "A社" } },
+      },
+      deps
+    );
+
+    const providerFailedDetails = calls.emitAuditEventCalls.find((e) => e.eventType === "provider.failed")
+      ?.details as { providerDetails?: Record<string, unknown> } | null | undefined;
+
+    results.push(
+      check(
+        "[LIVE-1A/E] provider.failedのdetails.providerDetailsへ、safeなdiagnostic(provider/errorName/providerCode/statusCode/causeName/causeMessage)が反映される",
+        outcome.status === "failed" &&
+          providerFailedDetails?.providerDetails?.provider === "composio" &&
+          providerFailedDetails?.providerDetails?.errorName === "ComposioToolExecutionError" &&
+          providerFailedDetails?.providerDetails?.providerCode === "TS-SDK::TOOL_EXECUTION_ERROR" &&
+          providerFailedDetails?.providerDetails?.statusCode === 400 &&
+          providerFailedDetails?.providerDetails?.causeName === "BadRequestError" &&
+          providerFailedDetails?.providerDetails?.causeMessage === "invalid connected_account_id for this toolkit"
+      )
+    );
+
+    results.push(
+      check(
+        "[LIVE-1A/E] 非primitiveな値(rawCause等のnested object)はJSON-safeフィルタにより構造的に落とされる",
+        !!providerFailedDetails?.providerDetails && !("rawCause" in providerFailedDetails.providerDetails)
+      )
+    );
+
+    results.push(
+      check(
+        // 絶対条件: toJsonSafeProviderDetails()がJSON-safeなkeyを
+        // 「機械的に通す」フィルタである以上、この境界(execution.ts)
+        // 自身が生のrequest相当の値(providerConnectionRef/connectionId/
+        // userId/query等)をproviderDetailsへ新たに追加しないことを
+        // 「providerDetailsのkey集合がfakeが返した6 keyちょうどと一致する」
+        // という厳密な形で確認する(部分文字列一致は、causeMessageの
+        // ような自由文, 説明文——例:「invalid connected_account_id for
+        // this toolkit」——を誤検出するため使わない、実際の値の漏洩は
+        // mapping.test.tsのLIVE-1A/Dでexact stringのredactionとして
+        // 別途確認済み)。
+        "[LIVE-1A/D] provider.failed detailsのproviderDetailsは、Provider実装(fake)が返した安全な6 key以外を一切追加しない(providerConnectionRef/connectionId/userId/query等、raw request相当の値を新設しない)",
+        !!providerFailedDetails?.providerDetails &&
+          JSON.stringify(Object.keys(providerFailedDetails.providerDetails).sort()) ===
+            JSON.stringify(["causeMessage", "causeName", "errorName", "provider", "providerCode", "statusCode"])
+      )
+    );
+  }
+
+  // ---- providerDetailsが無い(undefined)場合、detailsへproviderDetails
+  // keyそのものを追加しない(既存の{service, operation}のみのshapeを
+  // 不必要に変えない) ----
+  {
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async (): Promise<IntegrationExecutionResult> => {
+        calls.executeIntegrationActionCalls += 1;
+        return {
+          status: "failed",
+          error: { code: "provider_execution_failed", message: "simulated provider failure", retryable: false },
+        };
+      },
+    });
+
+    await executeReadIntegrationAction(
+      {
+        workId: "work-1",
+        userId: OWNER_USER_ID,
+        accessToken: "token",
+        taskId: "task-1",
+        connectionId: "conn-1",
+        action: { service: "slack", operation: "list_channels", input: {} },
+      },
+      deps
+    );
+
+    const providerFailedDetails = calls.emitAuditEventCalls.find((e) => e.eventType === "provider.failed")?.details;
+
+    results.push(
+      check(
+        "[LIVE-1A] providerDetails未設定のIntegrationExecutionErrorでは、detailsに'providerDetails'キー自体が追加されない(既存shapeを壊さない)",
+        !!providerFailedDetails && !("providerDetails" in (providerFailedDetails as Record<string, unknown>))
+      )
+    );
+  }
+
+  // =========================
   // Fast Port P5c — Runtime read slice allowlist
   // =========================
   {

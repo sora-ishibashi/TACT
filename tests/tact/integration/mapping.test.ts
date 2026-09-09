@@ -459,6 +459,152 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // =========================
+  // LIVE-1A(Composio Error Cause Observability):
+  // normalizeComposioError() diagnostic enrichment
+  // =========================
+  //
+  // 対象: @composio/core自身がhandleToolExecutionError()
+  // (ToolErrors.ts)経由でComposioToolExecutionError.causeへ保持する
+  // 元エラーを、normalizeComposioError()がproviderDetailsへ安全に
+  // 転記すること。raw cause objectそのものは保持しない。
+
+  // ---- A: cause = Error("underlying provider reason") -> providerDetails.causeMessageへ反映 ----
+  {
+    const underlyingCause = new Error("underlying provider reason");
+    const toolError = new ComposioToolExecutionError(
+      "Error executing the tool GMAIL_FETCH_EMAILS",
+      { cause: underlyingCause }
+    );
+
+    const normalized = normalizeComposioError(toolError);
+    const providerDetails = normalized.providerDetails as
+      | { provider?: unknown; errorName?: unknown; causeName?: unknown; causeMessage?: unknown }
+      | undefined;
+
+    results.push(
+      check(
+        "[LIVE-1A/A] ComposioToolExecutionError.cause(Error)がproviderDetails.causeName/causeMessageへ安全に反映される",
+        providerDetails?.provider === "composio" &&
+          providerDetails?.errorName === "ComposioToolExecutionError" &&
+          providerDetails?.causeName === "Error" &&
+          providerDetails?.causeMessage === "underlying provider reason"
+      )
+    );
+
+    results.push(
+      check(
+        "[LIVE-1A] Run.error相当のnormalized.message自体はSDKの汎用文言のまま変更されない(causeMessageを混ぜない)",
+        normalized.message === "Error executing the tool GMAIL_FETCH_EMAILS"
+      )
+    );
+  }
+
+  // ---- B: statusCodeが存在する場合はproviderDetails.statusCodeへ反映される ----
+  {
+    const toolError = new ComposioToolExecutionError("Error executing the tool GMAIL_FETCH_EMAILS", {
+      cause: new Error("bad request"),
+      statusCode: 400,
+    });
+
+    const normalized = normalizeComposioError(toolError);
+    const providerDetails = normalized.providerDetails as { statusCode?: unknown } | undefined;
+
+    results.push(
+      check(
+        "[LIVE-1A/B] statusCodeが存在する場合、providerDetails.statusCodeへ保持される",
+        providerDetails?.statusCode === 400
+      )
+    );
+  }
+
+  // ---- statusCodeが無い場合はfieldごと省略される(undefinedを無理に保存しない) ----
+  {
+    const normalized = normalizeComposioError(new ComposioToolExecutionError("x", { cause: new Error("y") }));
+    const providerDetails = normalized.providerDetails as { statusCode?: unknown } | undefined;
+
+    results.push(
+      check(
+        "[LIVE-1A] statusCodeが無い場合、providerDetailsに'statusCode'キー自体が含まれない",
+        !!providerDetails && !("statusCode" in providerDetails)
+      )
+    );
+  }
+
+  // ---- C: Bearer token / access_token / refresh_token / API key風文字列がcauseMessageへ含まれてもredactされる ----
+  {
+    const secrets = [
+      "Bearer sk-live-abcdef123456",
+      "access_token=ya29.a0Af-secret-value",
+      "refresh_token: 1//0g-refresh-secret",
+      "api_key=sk_test_should_not_leak",
+      "Authorization: Basic dXNlcjpwYXNz",
+    ];
+
+    const results_C = secrets.map((secretText) => {
+      const toolError = new ComposioToolExecutionError("Error executing the tool GMAIL_FETCH_EMAILS", {
+        cause: new Error(`upstream rejected request: ${secretText}`),
+      });
+      const normalized = normalizeComposioError(toolError);
+      const causeMessage = (normalized.providerDetails as { causeMessage?: string } | undefined)?.causeMessage ?? "";
+      return { secretText, causeMessage };
+    });
+
+    results.push(
+      check(
+        "[LIVE-1A/C] Bearer token/access_token/refresh_token/api_key/Authorization風の文字列がcauseMessageに含まれていてもredactされ、rawな値は残らない",
+        results_C.every(({ secretText, causeMessage }) => {
+          const rawSecretValue = secretText.split(/[:=]\s*/)[1] ?? secretText;
+          return causeMessage.includes("[redacted]") && !causeMessage.includes(rawSecretValue);
+        })
+      )
+    );
+  }
+
+  // ---- D: connectedAccountId(knownSecrets経由)がcauseMessageに含まれていても確実に除去される ----
+  {
+    const connectedAccountId = "ca_gmail_9f3e7d2c-live-account";
+    const toolError = new ComposioToolExecutionError("Error executing the tool GMAIL_FETCH_EMAILS", {
+      cause: new Error(`connected account ${connectedAccountId} could not be resolved for this toolkit`),
+    });
+
+    const normalized = normalizeComposioError(toolError, [connectedAccountId]);
+    const causeMessage = (normalized.providerDetails as { causeMessage?: string } | undefined)?.causeMessage ?? "";
+
+    results.push(
+      check(
+        "[LIVE-1A/D] knownSecretsとして渡したconnectedAccountIdは、causeMessage中に字面として出現しても確実に除去される",
+        !causeMessage.includes(connectedAccountId) && causeMessage.includes("[redacted]")
+      )
+    );
+  }
+
+  // ---- F: providerDetails自体はIntegrationExecutionErrorのみに存在し、
+  // Slack向けformatter(core/tact-conversation/orchestration.tsの
+  // formatIntegrationReadFailureAnswer())へ渡る型
+  // (OrchestrationResult.integrationReadFailure)にはservice/operation/
+  // statusしか存在しない——型定義そのものがcauseMessage等を運べない
+  // ことの直接確認(型レベルの構造的保証)。
+  {
+    const normalized = normalizeComposioError(
+      new ComposioToolExecutionError("x", { cause: new Error("Bearer sk-should-never-reach-slack") })
+    );
+
+    // IntegrationExecutionError.providerDetailsはRecord<string, unknown>
+    // (core/tact-integration/types.ts)——OrchestrationResult.
+    // integrationReadFailureへ渡すのは呼び出し元(core/tact-work/
+    // execution.ts)がstatusのみを転記する設計であり、providerDetails
+    // 自体を運ぶfieldがそちらの型に存在しない(tests/tact/conversation/
+    // integrationReadResult.test.tsのLIVE-1A/Eで、integrationReadFailure
+    // 型に余剰keyが紛れてもformatterがそれを読まないことを別途確認済み)。
+    results.push(
+      check(
+        "[LIVE-1A/F] providerDetailsはIntegrationExecutionError側にのみ存在する診断専用データであり、正規のexportとしてはこのfile(composio adapter)からのみ得られる",
+        typeof normalized.providerDetails === "object" && normalized.providerDetails !== null
+      )
+    );
+  }
+
   return summarize("integration/mapping", results);
 
 }

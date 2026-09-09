@@ -16,6 +16,7 @@ import {
   buildApprovalSubject,
   verifyApprovalIntegrity,
   type ApprovalIntegrityCheck,
+  type JsonValue,
 } from "../tact-work/approvalIntegrity";
 // Fast Port P4b(docs/architecture/p2-p5-final-architecture.md
 // Section15-20): Audit emission。このfileがpolicy.evaluated(live
@@ -264,6 +265,51 @@ function extractIntegrationActionFromApproval(
     },
     connectionId,
   };
+
+}
+
+// =========================
+// toJsonSafeProviderDetails (LIVE-1A: Composio Error Cause Observability)
+// =========================
+//
+// IntegrationExecutionError.providerDetails(core/tact-integration/
+// types.ts)はProvider実装(現状Composio Adapterのみ)が診断専用に
+// 自由に詰める`Record<string, unknown>`——この境界(generic core)
+// 自身はどのProviderが何を入れるか一切関知しない(絶対条件:
+// provider-neutral、Gmail/Slack固有分岐はもちろん、Composio固有の
+// field名すら知らない)。Audit Event(tact_audit_events.details、
+// jsonb)は`JsonValue`のみを安全に永続化できるため、この境界は
+// 「JSON-safeなprimitive値だけを1階層で転記する」という最小限の
+// フィルタだけを行う——object/array/functionな値は(将来どの
+// Providerが何を入れても)構造的に書き込まれない。raw cause
+// object・secret・connectedAccountId等はそもそもProvider側
+// (composio/adapter.tsのbuildComposioProviderDetails())が
+// providerDetailsへ入れる前に既に取り除いている——ここは二重の
+// 安全網(defense-in-depth)。
+function toJsonSafeProviderDetails(
+  details: Record<string, unknown> | undefined
+): Record<string, JsonValue> | undefined {
+
+  if (!details) {
+    return undefined;
+  }
+
+  const safe: Record<string, JsonValue> = {};
+
+  for (const [key, value] of Object.entries(details)) {
+
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      value === null
+    ) {
+      safe[key] = value;
+    }
+
+  }
+
+  return Object.keys(safe).length > 0 ? safe : undefined;
 
 }
 
@@ -604,14 +650,26 @@ async function executeIntegrationActionCore(
 
   externalRef.providerExecutionRef = result.providerExecutionRef ?? null;
 
-  // Fast Port P4b(Step10): provider.failedのcanonical emitter。raw
-  // provider error全文(result.error.message)はdetailsへそのまま
-  // 入れない——既存のcanonical IntegrationErrorCode(core/tact-integration/
-  // types.ts、"connection_missing"|"authentication_error"|
-  // "invalid_action"|"provider_execution_failed"|"temporary_failure"|
+  // Fast Port P4b(Step10)/LIVE-1A(Composio Error Cause Observability):
+  // provider.failedのcanonical emitter。raw provider error全文
+  // (result.error.message)はdetailsへそのまま入れない——既存の
+  // canonical IntegrationErrorCode(core/tact-integration/types.ts、
+  // "connection_missing"|"authentication_error"|"invalid_action"|
+  // "provider_execution_failed"|"temporary_failure"|
   // "authorization_denied"という既に安全なmachine-readable taxonomy)の
   // codeだけを使う——secret混入の可能性が既に排除された既存の型を
   // 再利用するだけで、新しいnormalize処理を作らない。
+  //
+  // LIVE-1A: result.error.providerDetails(Provider実装が診断専用に
+  // 詰めた、既にsanitize済みの安全な値のみ——composio/adapter.tsの
+  // buildComposioProviderDetails()参照)があれば、JSON-safeな値だけを
+  // toJsonSafeProviderDetails()で再フィルタした上でdetailsへ追加する。
+  // 目的はdeveloper diagnosis(次回LIVE実行時、なぜGMAIL_FETCH_EMAILS
+  // が失敗したかをaudit eventだけから追跡できるようにする)であり、
+  // Slack-facing answerや、OrchestrationResult.integrationReadFailure
+  // (service/operation/statusのみ)へは一切伝播しない。
+  const providerDetails = toJsonSafeProviderDetails(result.error.providerDetails);
+
   await deps.emitAuditEvent(
     {
       workId,
@@ -620,7 +678,11 @@ async function executeIntegrationActionCore(
       category: "provider",
       eventType: "provider.failed",
       reasonCode: result.error.code,
-      details: { service: action.service, operation: action.operation },
+      details: {
+        service: action.service,
+        operation: action.operation,
+        ...(providerDetails ? { providerDetails } : {}),
+      },
     },
     userId,
     accessToken
