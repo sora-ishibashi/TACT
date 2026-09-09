@@ -146,6 +146,7 @@ import { run as runRuntimeAdapter } from "./runtime/adapter.test";
 import { run as runRuntimeTriggerDev } from "./runtime/triggerDev.test";
 import { run as runRuntimeEnablement } from "./runtime/enablement.test";
 import { run as runRuntimeReconciliation } from "./runtime/reconciliation.test";
+import { run as runRuntimeReconcileOneShotEntrypoint } from "./runtime/reconcileOneShotEntrypoint.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -267,6 +268,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "runtime/triggerDev", run: runRuntimeTriggerDev },
   { name: "runtime/enablement", run: runRuntimeEnablement },
   { name: "runtime/reconciliation", run: runRuntimeReconciliation },
+  { name: "runtime/reconcileOneShotEntrypoint", run: runRuntimeReconcileOneShotEntrypoint },
 ];
 
 async function main() {
