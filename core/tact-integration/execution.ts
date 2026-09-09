@@ -388,10 +388,36 @@ async function prepareRunForExecution(
 
   const existingRuns = params.existingRunsForTask ?? (await deps.listRunsForTask(workId, userId, accessToken, taskId));
 
+  // DUR-P1(Pre-Live Audit P1「Stranded Task State Integrity」): Task.status
+  // だけをexecution lockとして信用しない。先行attemptがRun.status=
+  // "running"のまま残っている場合(下記のTask→running projection
+  // 更新が未完了/crashしたケースを含む)、Task.status自体がまだ
+  // "pending"に見えても新規attemptは開始しない——Runをexecution
+  // attemptのsource of truthとして扱う(docs/architecture/
+  // tact-runs-boundary.md)。この判定は新しいDB制約/exceptionを
+  // 追加しない、読み取りのみのdefense-in-depthであり、真にconcurrent
+  // な2呼び出しの最終的な排他は引き続き既存DB unique index
+  // (idx_tact_runs_task_id_attempt、supabase/migrations/
+  // 20260905000000_create_tact_work_tables.sql)がcore/tact-conversation/
+  // orchestration.tsのisConcurrentRunClaimError()経由で保証する
+  // (いずれも今回変更しない)。
+  if (existingRuns.some((run) => run.status === "running")) {
+    return { ok: false, outcome: { status: "task_not_executable", taskStatus: "running" } };
+  }
+
   const nextAttempt = existingRuns.reduce((max, run) => Math.max(max, run.attempt), 0) + 1;
 
-  await deps.updateTaskStatus(workId, userId, accessToken, taskId, "running");
-
+  // DUR-P1: 既存はTask→running projection更新(updateTaskStatus)を
+  // 先に行い、その後でcreateRun()(atomic claim)を行っていた。この
+  // 間でprocess crash/timeoutが起きると、Task.status="running"のまま
+  // Runが1件も存在しない「stranded」状態が生まれ得た(Pre-Live Audit
+  // P1、Task.status==="pending"を要求する既存execution gateを二度と
+  // 通れなくなる)。
+  //
+  // 順序を反転し、createRun()(DB unique index裏付けのatomic claim)を
+  // 先に行う。これによりTask.statusは「Runが実在することを確認して
+  // 初めて」runningへ遷移する——Run 0件のままTask.status="running"に
+  // なることは構造的に無くなる。
   const run = await deps.createRun(
     workId,
     userId,
@@ -424,6 +450,31 @@ async function prepareRunForExecution(
     userId,
     accessToken
   );
+
+  // DUR-P1: Task→running projection更新はRun claim成功後に行う。ここが
+  // 失敗/crashしても、Run(source of truth)は既にrunningとして正しく
+  // 記録済みのため、Task.statusとの食い違いはcore/tact-work/
+  // taskRunReconciliation.tsのreconcileStrandedTaskProjection()で
+  // 後から安全に修復できる(cron不要、on-demand)。Run claimは既に
+  // 成立しているため、projection更新の失敗を理由にexecution自体
+  // (呼び出し元executeIntegrationActionCore()のprovider dispatch)を
+  // 止める必要はない——既存reconcileAfterTaskUpdate()と同じ
+  // 「非致命的な副次処理はconsole.warnでbest-effort化する」既存
+  // パターンを踏襲する。
+  try {
+
+    await deps.updateTaskStatus(workId, userId, accessToken, taskId, "running");
+
+  } catch (error) {
+
+    console.warn(
+      "[tact-integration/execution] prepareRunForExecution(): updateTaskStatus(\"running\")が失敗した。" +
+      "Run(source of truth)は既にclaim済みのためexecutionは継続する。Task.statusとの食い違いは" +
+      "reconcileStrandedTaskProjection()で後から修復可能(DUR-P1)。",
+      error
+    );
+
+  }
 
   return { ok: true, run };
 
