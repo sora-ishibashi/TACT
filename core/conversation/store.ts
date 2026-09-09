@@ -165,9 +165,42 @@ export function toConversation(
 // 同じくundefinedを返す。route.ts側の
 // 「存在しなければ新規作成(POST) / 404(GET)」という分岐を
 // 変更せずに済ませるための互換仕様。
+//
+// SEC-R1-P0-1 remediation: callerUserIdを必須引数にし、所有者確認を
+// このstore関数自身の内部で行う(呼び出し元route側の任意チェックに
+// 委ねない)。理由: app/api/tact/conversation/stream/route.tsが、
+// sibling(app/api/tact/conversation/route.ts)にある所有者チェックを
+// コピーし忘れたことで、未認証のまま他user所有Conversationへ
+// message injection・history readができる状態になっていた
+// (SEC-R1 Enterprise Security Audit P0-1)。関数シグネチャ自体が
+// callerUserIdを要求する(TypeScriptコンパイル時に必須)ことで、
+// 今後同じ「渡し忘れ」クラスのバグが再発しにくくする。
+//
+// 所有者判定規約(既存route.ts・core/tact-conversation/store.tsの
+// getConversation()と同じ規約):
+//   - conversation.userIdが未設定(認証導入前の既存データ、または
+//     未認証フローで作られたConversation)の場合、callerUserIdの
+//     値に関わらず取得できる(既存ユーザーを壊さないための後方互換、
+//     今回のP0修正のscope外)。
+//   - conversation.userIdが設定されており、callerUserIdと一致しない
+//     場合は、存在しないConversationと区別せずundefinedを返す
+//     (存在有無を漏らさない既存の非開示規約)。この場合、messages/
+//     workflowRunsのfetchも行わない(他userのmessage本文を不必要に
+//     読み取らない)。
+
+// SEC-R1-P0-1: 純粋な所有者判定predicate。DB接続なしにunit testできる
+// ようにするため、getConversation()本体から切り出す(既存
+// core/codeAgent/store.tsのisOwnedBy()と同じ最小限の抽出パターン)。
+export function isConversationAccessibleBy(
+  ownerUserId: string | null,
+  callerUserId: string | null
+): boolean {
+  return !ownerUserId || ownerUserId === callerUserId;
+}
 
 export async function getConversation(
-  id: string
+  id: string,
+  callerUserId: string | null
 ): Promise<Conversation | undefined> {
 
   const { data: conversationRow, error: conversationError } =
@@ -184,6 +217,12 @@ export async function getConversation(
   }
 
   if (!conversationRow) {
+    return undefined;
+  }
+
+  const row = conversationRow as ConversationRow;
+
+  if (!isConversationAccessibleBy(row.user_id, callerUserId)) {
     return undefined;
   }
 
@@ -212,11 +251,11 @@ export async function getConversation(
   }
 
   return toConversation(
-    conversationRow as ConversationRow,
-    (messageRows ?? []).map((row) =>
-      toConversationMessage(row as ConversationMessageRow)
+    row,
+    (messageRows ?? []).map((messageRow) =>
+      toConversationMessage(messageRow as ConversationMessageRow)
     ),
-    (runRows ?? []).map((row) => toWorkflowRun(row as WorkflowRunRow))
+    (runRows ?? []).map((runRow) => toWorkflowRun(runRow as WorkflowRunRow))
   );
 
 }

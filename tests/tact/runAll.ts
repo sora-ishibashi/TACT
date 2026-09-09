@@ -54,6 +54,7 @@ import { run as runWorkApproval } from "./work/approval.test";
 import { run as runWorkClarification } from "./work/clarification.test";
 import { run as runWorkResume } from "./work/resume.test";
 import { run as runSecurityPreLiveSecP0 } from "./security/preLiveSecP0.test";
+import { run as runSecuritySecR1P0 } from "./security/secR1P0.test";
 import { run as runWorkAudit } from "./work/audit.test";
 import { run as runWorkCompletion } from "./work/completion.test";
 import { run as runWorkTaskLifecycleMonotonicity } from "./work/taskLifecycleMonotonicity.test";
@@ -184,6 +185,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/clarification", run: runWorkClarification },
   { name: "work/resume", run: runWorkResume },
   { name: "security/preLiveSecP0", run: runSecurityPreLiveSecP0 },
+  { name: "security/secR1P0", run: runSecuritySecR1P0 },
   { name: "work/audit", run: runWorkAudit },
   { name: "work/completion", run: runWorkCompletion },
   { name: "work/taskLifecycleMonotonicity", run: runWorkTaskLifecycleMonotonicity },

@@ -85,24 +85,26 @@ export async function POST(
         ? body.attachments
         : undefined;
 
+    // SEC-R1-P0-1 remediation: 所有者確認はgetConversation()自身が行う
+    // (2引数目のcallerUserIdが必須になった、core/conversation/store.ts
+    // 参照)。他user所有のConversationは「存在しない」と区別されずに
+    // undefinedが返る。
     let conversation =
       body.conversationId
         ? await getConversation(
-            body.conversationId
+            body.conversationId,
+            authenticatedUserId
           )
         : undefined;
 
-    // STEP145-G: 既存Conversationに対する追加Turnは、そのConversationの
-    // 所有者(user_id)と今回の認証済みuserIdが一致する場合のみ許可する。
-    // conversation.userIdが未設定(認証導入前に作られた既存データ、
-    // または未認証フローで作られたConversation)の場合は所有者が
-    // 存在しないため、従来どおり誰でも継続できる(既存ユーザーを
-    // 壊さないための後方互換)。
-    if (
-      conversation &&
-      conversation.userId &&
-      conversation.userId !== authenticatedUserId
-    ) {
+    // body.conversationIdが明示的に指定されたにもかかわらず取得できな
+    // かった場合(存在しない、または他user所有で非開示)は、下の
+    // 「新規Conversationとして作成」へフォールスルーさせず、明示的に
+    // 404を返す(既存ユーザーを壊さないための後方互換とは別の話——
+    // 「指定したconversationIdを無視して無関係な新規Conversationが
+    // 静かに作られる」という挙動を防ぐ)。conversationIdを省略した
+    // 場合(新規作成を意図した呼び出し)には一切影響しない。
+    if (body.conversationId && !conversation) {
 
       return NextResponse.json(
         {
@@ -283,34 +285,19 @@ export async function GET(
 
   }
 
-  const conversation =
-    await getConversation(conversationId);
-
-  if (!conversation) {
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: "conversation not found",
-      },
-      {
-        status: 404,
-      }
-    );
-
-  }
-
-  // STEP145-G: POST側と同じ所有者チェック。conversation.userIdが
-  // 未設定(認証導入前/未認証フローのConversation)の場合は
-  // 従来どおり誰でも取得できる(既存ユーザーを壊さないための
-  // 後方互換)。存在自体を漏らさないため404で返す(403にしない)。
+  // SEC-R1-P0-1 remediation: 所有者確認はgetConversation()自身が行う
+  // (2引数目のcallerUserIdが必須、core/conversation/store.ts参照)。
+  // conversation.userIdが未設定(認証導入前/未認証フローの
+  // Conversation)の場合は従来どおり誰でも取得できる(既存ユーザーを
+  // 壊さないための後方互換)。他user所有の場合は「存在しない」と
+  // 区別せず404を返す(存在自体を漏らさない、403にしない)。
   const { userId: authenticatedUserId } =
     await getCurrentUserContext(request);
 
-  if (
-    conversation.userId &&
-    conversation.userId !== authenticatedUserId
-  ) {
+  const conversation =
+    await getConversation(conversationId, authenticatedUserId);
+
+  if (!conversation) {
 
     return NextResponse.json(
       {

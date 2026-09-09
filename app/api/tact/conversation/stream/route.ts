@@ -113,12 +113,38 @@ export async function POST(
             ? body.attachments
             : undefined;
 
+        // SEC-R1-P0-1 remediation: 所有者確認はgetConversation()自身が
+        // 行う(2引数目のcallerUserIdが必須、core/conversation/store.ts
+        // 参照)。これまでこのstream routeはsibling
+        // (app/api/tact/conversation/route.ts)にある所有者チェックを
+        // 持たず、未認証のまま他user所有Conversationへmessage
+        // injection・history readができてしまっていた(SEC-R1
+        // Enterprise Security Audit P0-1)。
         let conversation =
           body.conversationId
             ? await getConversation(
-                body.conversationId
+                body.conversationId,
+                authenticatedUserId
               )
             : undefined;
+
+        // body.conversationIdが明示的に指定されたにもかかわらず取得
+        // できなかった場合(存在しない、または他user所有で非開示)は、
+        // 下の「新規Conversationとして作成」へフォールスルーさせず、
+        // 明示的にerrorイベントを送って終了する(sibling POST route
+        // と同じ404相当のfail closed、SSEのためHTTP statusではなく
+        // errorイベントで表現する)。conversationIdを省略した場合
+        // (新規作成を意図した呼び出し)には一切影響しない。
+        if (body.conversationId && !conversation) {
+
+          send({
+            type: "error",
+            error: "conversation not found",
+          });
+
+          return;
+
+        }
 
         if (!conversation) {
 

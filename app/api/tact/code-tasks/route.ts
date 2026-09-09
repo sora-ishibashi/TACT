@@ -65,8 +65,15 @@ export async function POST(
 
     }
 
+    // SEC-R1-P0-2 remediation: userIdを省略すると
+    // getImprovementProposalById()内部のowner filterが丸ごとskipされ
+    // (core/brain/memory.ts、userId !== undefinedの場合のみ絞り込む
+    // back-compat設計)、他user所有のImprovementProposalを取得できて
+    // しまっていた(SEC-R1 Enterprise Security Audit P0-2)。sibling
+    // app/api/tact/improvement-proposals/route.tsは既にuserIdを渡して
+    // いる——このrouteも同じ既存パターンへ揃える。
     const proposal =
-      await getImprovementProposalById(proposalId);
+      await getImprovementProposalById(proposalId, userId);
 
     if (!proposal) {
 
