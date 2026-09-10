@@ -171,11 +171,28 @@ export async function getConnection(
 // =========================
 // listConnectionsForUser
 // =========================
-
+//
+// LIVE-1A False Multiple Connection Resolution(READ-ONLY AUDIT確定済み
+// root cause): この関数はuser_id/serviceしかfilterしておらず、statusを
+// 一切見ていなかった。呼び出し元(core/tact-conversation/orchestration.ts
+// のresolveIntegrationConnectionViaTactIntegration()等)はこの結果の
+// 件数だけでsingle/multipleを判定するため、Gmail provisioningを複数回
+// 行った履歴に由来するpending/failed/revoked行までもが「複数の候補」
+// として誤って数えられ、実際にはactiveが1件しか無いにもかかわらず
+// "複数連携"という誤判定が発生していた。
+//
+// 修正方針(絶対条件、最小修正): statusは新設のoptional第4引数とし、
+// 省略時の挙動(既存呼び出し元、例: app/api/tact/connections/route.ts
+// のGET一覧・tests/tact/integration/connectionProvisioning.test.ts)は
+// 一切変更しない(全statusを返す、既存の既定動作のまま)。呼び出し元
+// (resolver)側が「activeだけを候補にする」という判断を明示的に行う
+// ——この関数自体はGmail固有の分岐を一切持たない(provider非依存・
+// service非依存のまま、絶対条件)。
 export async function listConnectionsForUser(
   userId: string,
   accessToken: string,
-  service?: IntegrationService
+  service?: IntegrationService,
+  status?: ConnectionStatus
 ): Promise<Connection[]> {
 
   const client = createRequestScopedClient(accessToken);
@@ -187,6 +204,10 @@ export async function listConnectionsForUser(
 
   if (service) {
     query = query.eq("service", service);
+  }
+
+  if (status) {
+    query = query.eq("status", status);
   }
 
   const { data, error } = await query.order("created_at", { ascending: false });

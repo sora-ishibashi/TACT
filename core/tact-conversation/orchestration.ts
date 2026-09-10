@@ -1724,27 +1724,62 @@ const defaultResolveAndRunWorkDeps: ResolveAndRunWorkDeps = {
 // 絶対条件: TACT Connectionのcredential/token/providerConnectionRef
 // はここでも一切扱わない——listConnectionsForUser()が返すCanonical
 // Connection.idだけを使う。
-const resolveIntegrationConnectionViaTactIntegration: ResolveIntegrationConnection = async (
-  params
-) => {
+//
+// LIVE-1A False Multiple Connection Resolution(READ-ONLY AUDIT確定済み
+// root cause、修正): 以前はlistConnectionsForUser()の戻り値(=その
+// user/serviceの全status行)の件数だけでsingle/multipleを判定して
+// いたため、Gmail provisioningを複数回行った履歴に由来する
+// pending/failed/revoked行までもが「複数の候補」として誤って数えられて
+// いた。resolution candidateはactive connectionだけであるべき
+// (絶対条件、Gmail固有の分岐は作らない——provider/service非依存の
+// まま、"active"というcanonical statusをlistConnectionsForUser()の
+// 第4引数へ渡すだけ)。pending/failed/revokedな行はDBに残ったままで
+// よく、この関数から見て構造的に無視される(削除・移行は一切不要)。
+//
+// テスト容易性のため、listConnectionsForUser()呼び出しをDI可能な形
+// (ResolveIntegrationConnectionViaTactIntegrationDeps)へ切り出し、
+// export する(既存core/tact-integration/execution.ts等と同じ
+// 「実I/OだけをDepsとして差し替え可能にする」既存パターン)。実DB
+// (Supabase)に一切接続せず、実際のsingle/multiple/none判定ロジックを
+// 直接検証できるようにするための、振る舞い自体は一切変えないrefactor。
+export interface ResolveIntegrationConnectionViaTactIntegrationDeps {
+  listConnectionsForUser: typeof listConnectionsForUser;
+}
 
-  const connections = await listConnectionsForUser(
+const defaultResolveIntegrationConnectionViaTactIntegrationDeps: ResolveIntegrationConnectionViaTactIntegrationDeps = {
+  listConnectionsForUser,
+};
+
+export async function resolveIntegrationConnectionViaTactIntegrationForTesting(
+  params: Parameters<ResolveIntegrationConnection>[0],
+  deps: ResolveIntegrationConnectionViaTactIntegrationDeps = defaultResolveIntegrationConnectionViaTactIntegrationDeps
+): ReturnType<ResolveIntegrationConnection> {
+
+  const activeConnections = await deps.listConnectionsForUser(
     params.userId,
     params.accessToken,
-    params.service as IntegrationService
+    params.service as IntegrationService,
+    "active"
   );
 
-  if (connections.length === 0) {
+  if (activeConnections.length === 0) {
     return { status: "none" };
   }
 
-  if (connections.length > 1) {
-    return { status: "multiple", count: connections.length };
+  if (activeConnections.length > 1) {
+    return { status: "multiple", count: activeConnections.length };
   }
 
-  return { status: "single", connectionId: connections[0].id };
+  return { status: "single", connectionId: activeConnections[0].id };
 
-};
+}
+
+// 実配線(defaultRunWorkTurnDeps等)はこのラッパーをそのまま使う——
+// 既定deps(実listConnectionsForUser)で
+// resolveIntegrationConnectionViaTactIntegrationForTesting()を呼ぶだけ、
+// 挙動は変更前と完全に同一。
+const resolveIntegrationConnectionViaTactIntegration: ResolveIntegrationConnection = (params) =>
+  resolveIntegrationConnectionViaTactIntegrationForTesting(params);
 
 // =========================
 // formatIntegrationReadResultAnswer (Architecture Migration Phase C2.2)

@@ -141,7 +141,14 @@ export async function reconcileOneShotIntegrationRead(
   // 受け取らない。Run所有者自身の既存Slack Connectionを毎回re-resolve
   // する(0件/複数件はfail closed、既存resolveIntegrationConnection
   // Via TactIntegration()と同じ判断基準)。
-  const connections = await deps.listConnectionsForUser(userId, accessToken, "slack");
+  //
+  // LIVE-1A False Multiple Connection Resolution(修正): 既存
+  // resolveIntegrationConnectionViaTactIntegration()と全く同じ理由で、
+  // resolution candidateはactive connectionだけに絞る——statusを
+  // 指定しないと、pending/failed/revokedな過去のConnection行まで
+  // 「複数件」として誤ってfail closedしてしまう(二重に異なる解決
+  // semanticsを残さない、絶対条件)。
+  const connections = await deps.listConnectionsForUser(userId, accessToken, "slack", "active");
 
   if (connections.length !== 1) {
     return { ok: false, reason: "connection_unresolved" };

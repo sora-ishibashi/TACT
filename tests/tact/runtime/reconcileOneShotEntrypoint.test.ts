@@ -129,7 +129,13 @@ function makeDeps(options: MakeDepsOptions = {}) {
 
     listRunsForTask: async () => runs,
 
-    listConnectionsForUser: async () => connections,
+    // LIVE-1A False Multiple Connection Resolution(修正): 実装
+    // (reconcileOneShotEntrypoint.ts)がstatus="active"を渡すように
+    // なったため、このfakeもその引数を無視せず実際にフィルタする
+    // ——さもないと[G]のような「activeは1件だがtotalは複数件」という
+    // regressionを、fakeが素通りさせてしまい検出できなくなる。
+    listConnectionsForUser: async (_userId, _accessToken, _service, status) =>
+      status ? connections.filter((c) => c.status === status) : connections,
 
     resolveRuntimeAdapter: () => resolution,
 
@@ -275,6 +281,32 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[8] Slack Connectionが複数件の場合はconnection_unresolved(推測で選ばない)、reconcileRuntimeExecution呼び出し0",
         !result.ok && result.reason === "connection_unresolved" && calls.reconcileCalls.length === 0
+      )
+    );
+  }
+
+  // ---- [8b] LIVE-1A False Multiple Connection Resolution(修正確認):
+  // active 1件 + 非active(pending/revoked/failed)N件 -> 正常に解決
+  // される(以前は全statusの件数で判定していたため、これも誤って
+  // connection_unresolvedになっていた) ----
+  {
+    const { deps, calls } = makeDeps({
+      connections: [
+        makeConnection({ id: "conn-active", status: "active" }),
+        makeConnection({ id: "conn-pending", status: "pending" }),
+        makeConnection({ id: "conn-revoked", status: "revoked" }),
+        makeConnection({ id: "conn-failed", status: "failed" }),
+      ],
+    });
+
+    const result = await reconcileOneShotIntegrationRead(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[8b] active 1件 + pending/revoked/failed各1件のSlack Connectionは正常に解決される(active以外は候補数に入らない)",
+        result.ok === true &&
+          calls.reconcileCalls.length === 1 &&
+          JSON.stringify(calls.reconcileCalls[0]).includes('"connectionId":"conn-active"')
       )
     );
   }

@@ -79,6 +79,7 @@ import { run as runWorkLinkRepair } from "./conversation/workLinkRepair.test";
 import { run as runIntegrationReadResult } from "./conversation/integrationReadResult.test";
 import { run as runTactConversationClarificationAnswer } from "./conversation/tactConversationClarificationAnswer.test";
 import { run as runTactConversationResearchCapability } from "./conversation/tactConversationResearchCapability.test";
+import { run as runConnectionResolutionActiveOnly } from "./conversation/connectionResolutionActiveOnly.test";
 import { run as runTaskResumeExecution } from "./conversation/taskResumeExecution.test";
 import { run as runTactArtifactMutation } from "./artifact/tactArtifactMutation.test";
 import { run as runTactArtifactBlocks } from "./artifact/tactArtifactBlocks.test";
@@ -213,6 +214,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "conversation/integrationReadResult", run: runIntegrationReadResult },
   { name: "conversation/tactConversationClarificationAnswer", run: runTactConversationClarificationAnswer },
   { name: "conversation/tactConversationResearchCapability", run: runTactConversationResearchCapability },
+  { name: "conversation/connectionResolutionActiveOnly", run: runConnectionResolutionActiveOnly },
   { name: "artifact/tactArtifactMutation", run: runTactArtifactMutation },
   { name: "artifact/tactArtifactBlocks", run: runTactArtifactBlocks },
   { name: "artifact/tactArtifactPhase77", run: runTactArtifactPhase77 },
