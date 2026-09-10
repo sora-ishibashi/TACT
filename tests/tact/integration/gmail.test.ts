@@ -6,7 +6,10 @@ import {
 } from "../../../core/tact-integration/providers/composio/mappings/gmail";
 import { buildExecutionResultFromToolResult } from "../../../core/tact-integration/providers/composio/adapter";
 import { evaluatePolicyDecision } from "../../../core/tact-integration/policy";
-import { runIntegrationGmailSearchMessagesCapability } from "../../../core/tact-integration/capability";
+import {
+  extractGmailSearchQuery,
+  runIntegrationGmailSearchMessagesCapability,
+} from "../../../core/tact-integration/capability";
 import { classifyIntent } from "../../../core/tact-intent/ruleRouter";
 import { decomposeTask } from "../../../core/tact-orchestrator/decomposer";
 import { formatIntegrationReadResultAnswer } from "../../../core/tact-conversation/orchestration";
@@ -158,6 +161,109 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       "[Gmail Slack UX] summary is readable without message IDs or provider internals; valid empty is not provider failure",
       text.includes("A社との会議") && text.includes("owner@example.com") && !text.includes("secret-id") &&
         emptyText === "該当するメールは見つかりませんでした。"
+    ));
+  }
+
+  // =========================
+  // LIVE-1A Gmail Query Extraction Fix
+  // =========================
+  //
+  // Root cause再現: 実LIVE障害("Gmailから「TACT-LIVE-1A-TEST」を検索して"
+  // がComposioへ"から「TACT-LIVE-1A-TEST」"というqueryを送っていた)を
+  // 直接再現し、修正後は引用符内の文字列だけが抽出されることを確認する。
+
+  {
+    results.push(check(
+      "[LIVE-1A] Gmailから「TACT-LIVE-1A-TEST」を検索して -> TACT-LIVE-1A-TEST(実LIVE障害の直接再現)",
+      extractGmailSearchQuery("Gmailから「TACT-LIVE-1A-TEST」を検索して") === "TACT-LIVE-1A-TEST"
+    ));
+  }
+
+  {
+    results.push(check(
+      "[LIVE-1A] Gmailで「請求書」を検索して -> 請求書",
+      extractGmailSearchQuery("Gmailで「請求書」を検索して") === "請求書"
+    ));
+  }
+
+  {
+    results.push(check(
+      "[LIVE-1A] Gmailから\"invoice\"を探して -> invoice(半角二重引用符)",
+      extractGmailSearchQuery("Gmailから\"invoice\"を探して") === "invoice"
+    ));
+  }
+
+  {
+    results.push(check(
+      "[LIVE-1A] Gmailで 'OpenAI' を検索 -> OpenAI(半角単一引用符)",
+      extractGmailSearchQuery("Gmailで 'OpenAI' を検索") === "OpenAI"
+    ));
+  }
+
+  {
+    results.push(check(
+      "[LIVE-1A] GmailでOpenAIを検索して -> OpenAI(引用無しでも会話上のnoiseを含めない)",
+      extractGmailSearchQuery("GmailでOpenAIを検索して") === "OpenAI"
+    ));
+  }
+
+  {
+    results.push(check(
+      "[LIVE-1A] GmailからTACTを検索して -> TACT(引用無し、「から」が残らない)",
+      extractGmailSearchQuery("GmailからTACTを検索して") === "TACT"
+    ));
+  }
+
+  {
+    results.push(check(
+      "[LIVE-1A] Gmailで田中さんのメールを探して -> 田中さんのメール(Gmail明示時、内容中のメールは保持する)",
+      extractGmailSearchQuery("Gmailで田中さんのメールを探して") === "田中さんのメール"
+    ));
+  }
+
+  {
+    const query = extractGmailSearchQuery("Gmailから「TACT-LIVE-1A-TEST」を検索して") ?? "";
+    results.push(check(
+      "[LIVE-1A] 引用抽出結果は「から」「Gmail」「引用符」「を検索して」のいずれも保持しない",
+      !query.includes("から") &&
+        !/gmail/i.test(query) &&
+        !/[「『」』"']/.test(query) &&
+        !query.includes("を検索して")
+    ));
+  }
+
+  {
+    results.push(check(
+      "[LIVE-1A] 複数の引用が存在し曖昧な場合はfallback抽出へ委ねる(推測で片方を選ばない)",
+      extractGmailSearchQuery("Gmailで「A社」と「B社」を検索して") !== "A社" &&
+        extractGmailSearchQuery("Gmailで「A社」と「B社」を検索して") !== "B社"
+    ));
+  }
+
+  {
+    results.push(check(
+      "[LIVE-1A] 空の引用(「」)はfail closedする(fallback抽出へ迂回しない)",
+      extractGmailSearchQuery("Gmailから「」を検索して") === undefined
+    ));
+  }
+
+  {
+    // 既存contract(引用が無く、cleanup後に空になる入力はundefined)を
+    // 維持していることの直接確認。
+    results.push(check(
+      "[LIVE-1A] 既存のfail-closed契約を維持する(「メールを検索して」は依然としてundefined)",
+      extractGmailSearchQuery("メールを検索して") === undefined
+    ));
+  }
+
+  {
+    // 既存Regression(このfileの直前のcheck、[Gmail policy/capability])と
+    // 同じ入力を、extractGmailSearchQuery()単体でも直接確認する
+    // ——"Gmail"の英語表記が無い入力では、既存通り「メール」全体を
+    // 話題語として除去する(既存挙動を壊さない)。
+    results.push(check(
+      "[LIVE-1A] 既存の日本語のみ入力(A社との最近のメールを確認して)は引き続き「メール」を含まない",
+      !((extractGmailSearchQuery("A社との最近のメールを確認して") ?? "").includes("メール"))
     ));
   }
 

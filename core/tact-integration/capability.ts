@@ -6,15 +6,101 @@ const GMAIL_SERVICE = "gmail";
 const GMAIL_SEARCH_MAX_QUERY_LENGTH = 200;
 const GMAIL_SEARCH_DEFAULT_MAX_RESULTS = 10;
 
+// LIVE-1A Gmail Query Extraction Fix: 「」『』""''のいずれかで囲まれた
+// 引用部分を、Slack send_message抽出(SLACK_QUOTED_TEXT_PATTERN、
+// core/tact-intent/ruleRouter.ts)と同じ4種類の引用符スタイルで認識する。
+// globalフラグで全出現を集める理由: 引用が0個(通常の自然文)・1個
+// (意図が明確)・2個以上(どちらを検索語とすべきか曖昧)を区別するため
+// ——2個以上の場合は推測で1つを選ばず、下のfallback抽出へ委ねる
+// (絶対条件、Accuracy > Coverage)。
+// `.*?`(0文字以上)を使う理由: 「」のような空の引用も1件の引用として
+// 検出できるようにするため(下のextractGmailSearchQuery()が「引用が
+// 明示的に1個だけ存在するが中身が空」というケースをfail closedとして
+// 扱えるようにする——0文字にマッチしない`.+?`だと「」自体が
+// マッチせず、引用0個の入力と区別が付かなくなってしまう)。
+const GMAIL_QUERY_QUOTE_PATTERNS: readonly RegExp[] = [
+  /「(.*?)」/gu,
+  /『(.*?)』/gu,
+  /"(.*?)"/gu,
+  /'(.*?)'/gu,
+];
+
+// 空文字の引用も(trimmed)そのまま含めて返す——空/非空の判定は
+// 呼び出し元(extractGmailSearchQuery())の責務とする。
+function extractQuotedPhrases(input: string): string[] {
+
+  const phrases: string[] = [];
+
+  for (const pattern of GMAIL_QUERY_QUOTE_PATTERNS) {
+
+    for (const match of input.matchAll(pattern)) {
+      phrases.push(match[1].trim());
+    }
+
+  }
+
+  return phrases;
+
+}
+
+// LIVE-1A Gmail Query Extraction Fix(root cause): 以前は`gmail|メール|mail`
+// を出現位置に関わらず無条件に全削除していたため、「Gmailから」の
+// "Gmail"だけを取り除いた後に残る格助詞「から/で」が最終的なqueryへ
+// そのまま残っていた(実LIVE障害: "Gmailから「X」を検索して" →
+// Composioへ渡ったqueryが"から「X」"になっていた)。加えて、この
+// 無条件削除は「田中さんのメール」のような、メールという語自体が
+// 検索対象の一部である正当な内容まで壊していた。
+//
+// 修正方針: 英語表記の"gmail"/"mail"が明示的に含まれる入力
+// (例: "Gmailから")では、その語(+直後に連続する「から/で」だけを
+// 1つの単位として除去し、それ以外の場所に出現する「メール」は内容の
+// 一部として残す。英語表記が無い入力(例: "A社との最近のメールを
+// 確認して")では、「メール」自体が話題を示す唯一の手がかりのため、
+// 既存通り全出現を除去する(既存Regression Testが要求する挙動を
+// 変更しない)。
+function stripGmailTriggerWord(input: string): string {
+
+  const hasExplicitEnglishTrigger = /gmail|mail/i.test(input);
+
+  if (hasExplicitEnglishTrigger) {
+    return input.replace(/(?:gmail|mail)(から|で)?/gi, " ");
+  }
+
+  return input.replace(/メール/g, " ");
+
+}
+
 // The rule router decides that this is Gmail search.  This helper only
 // derives the provider-neutral search expression and never accepts a raw
 // provider payload.
 export function extractGmailSearchQuery(input: string): string | undefined {
 
-  const query = input
-    .replace(/gmail|メール|mail/gi, " ")
-    .replace(/(を|の|について|に関する)?(検索|探し|確認|見せ|読み)[^。、！？!?]*/gi, " ")
-    .replace(/(最近|最新|メール)/gi, " ")
+  // LIVE-1A Gmail Query Extraction Fix: 引用部分が明確に1個だけ存在する
+  // 場合は、それを最優先でcanonical queryとして採用する(絶対条件:
+  // "Gmailから「X」を検索して" → "X"、から/Gmail/引用符/を検索して等の
+  // 会話上のnoiseを一切含めない)。空文字・上限超過の引用はここで
+  // fail closedする(下のfallback抽出へ迂回させない——引用符で明示的に
+  // 区切られた意図を無視して別解釈するのは、Accuracy > Coverageの
+  // 方針に反する)。
+  const quotedPhrases = extractQuotedPhrases(input);
+
+  if (quotedPhrases.length === 1) {
+
+    const quoted = quotedPhrases[0];
+
+    return quoted.length > 0 && quoted.length <= GMAIL_SEARCH_MAX_QUERY_LENGTH
+      ? quoted
+      : undefined;
+
+  }
+
+  // Fallback(引用が0個、または2個以上で曖昧な場合): 既存の
+  // 「話題語+依頼動詞の活用形を機械的に取り除く」cleanupを踏襲するが、
+  // 依頼動詞の除去は文末anchor(`$`)を追加し、文中に偶然「検索/探し」
+  // 等を含む正当な内容まで巻き込まないようにする(絶対条件、最小修正)。
+  const query = stripGmailTriggerWord(input)
+    .replace(/(を|で)?(検索|探し|確認|見せ|読み)[^。、！？!?]*$/u, " ")
+    .replace(/(最近|最新)/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/(?:\s|の)+$/u, "")
