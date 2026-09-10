@@ -200,6 +200,61 @@ export const CONNECTION_STATUSES: readonly ConnectionStatus[] = [
 // だけに隔離された変更)。
 export type ConnectionProviderKind = "composio";
 
+// =========================
+// Connection Provisioning (LIVE-1A: Generic Connection Provisioning
+// Foundation)
+// =========================
+//
+// 絶対条件(Section7と同じ理由): このfileはComposio固有の識別子
+// (connectedAccountId等)を一切知らない。providerConnectionRef/
+// providerStatusRawという、Provider非依存の名前だけを持つ
+// (providerStatusRawはComposio側の生statusをそのまま指すが、値の
+// 中身自体はopaqueな文字列として扱うだけで、この型自体はComposioの
+// status語彙を知らない)。
+export interface ProviderConnectionLinkResult {
+
+  // Provider側の接続参照(例: Composio connected account id)。
+  // credential/token本体ではない(Connection.providerConnectionRefと
+  // 同じ意味論)。
+  providerConnectionRef: string;
+
+  // OAuth等、ユーザーが実際に接続を完了するために訪れる先。schema上
+  // optional/nullable(redirect不要なauth方式の余地、
+  // SlackConnectionLinkResultと同じ既存の型設計を踏襲)。
+  redirectUrl: string | null;
+
+  // Provider側の生statusから導出済みのCanonical status(pending等)。
+  canonicalStatus: ConnectionStatus;
+
+  // Provider側の生status文字列(diagnostics/metadata格納用、Canonical
+  // layerの判断には使わない)。
+  providerStatusRaw: string;
+
+}
+
+// Provider非依存のConnection Provisioning境界。IntegrationProvider
+// (Section: Integration Execution Request/Result)と同じ設計思想
+// ——Canonical layer(core/tact-integration/provisioning.ts)は
+// このinterfaceだけを知り、実装差し替え(将来のMCP/Pipedream/Merge/
+// Native等)はこのinterfaceを満たすオブジェクトを用意するだけでよい。
+export interface ConnectionProvisioningProvider {
+
+  // 新規接続linkを作成する。Provider側が未設定(API key/auth config
+  // 欠如)の場合は例外を投げず、安全にnullを返す(既存の
+  // createSlackConnectionLink()と同じfallback契約)。
+  createConnectionLink(
+    service: IntegrationService,
+    tactUserId: string
+  ): Promise<ProviderConnectionLinkResult | null>;
+
+  // 既存接続の現在statusをProviderへ問い合わせる。未設定時はnull
+  // (既存のgetSlackConnectionStatus()と同じfallback契約)。
+  getConnectionStatus(
+    providerConnectionRef: string
+  ): Promise<{ canonicalStatus: ConnectionStatus; providerStatusRaw: string } | null>;
+
+}
+
 export interface Connection {
 
   id: string;

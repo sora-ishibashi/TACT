@@ -1,4 +1,5 @@
 import { getComposioClient, toComposioUserId } from "./client";
+import type { ConnectionProvisioningProvider, IntegrationService } from "../../types";
 
 // =========================
 // TACT Integration — Composio Connection Link
@@ -124,3 +125,133 @@ export async function getSlackConnectionStatus(
   };
 
 }
+
+// =========================
+// Generic (provider-neutral service) Connection Provisioning
+// (LIVE-1A: Generic Connection Provisioning Foundation)
+// =========================
+//
+// 上記のcreateSlackConnectionLink()/getSlackConnectionStatus()は
+// Phase C1(Slack単独)時点の命名のまま変更しない(既存呼び出し元
+// (composioClient.test.ts)への互換性を壊さない、絶対条件7「既存API
+// との互換性を壊す変更」を避けるため)。
+//
+// 以下はGmailを含む複数serviceに対応する、canonical
+// ConnectionProvisioningProvider(core/tact-integration/types.ts)の
+// Composio実装。呼び出し元(core/tact-integration/provisioning.ts)は
+// serviceごとのAuth Config IDやComposio固有のstatus語彙を一切知らず、
+// この境界だけがそれを解決する(絶対条件、Section「Composio owns:
+// OAuth transport」)。
+//
+// serviceごとのAuth Config ID解決: Slackは既存のCOMPOSIO_SLACK_
+// AUTH_CONFIG_IDをそのまま再利用する(新しい環境変数を増やさない)。
+// Gmailは新規にCOMPOSIO_GMAIL_AUTH_CONFIG_IDを追加する(値は.envへ
+// 書き込まない——LIVE instructionsとしてユーザーへVercel環境変数の
+// 設定を依頼するだけ)。
+function getComposioAuthConfigId(service: IntegrationService): string | undefined {
+
+  switch (service) {
+    case "slack":
+      return process.env.COMPOSIO_SLACK_AUTH_CONFIG_ID;
+    case "gmail":
+      return process.env.COMPOSIO_GMAIL_AUTH_CONFIG_ID;
+  }
+
+}
+
+// 呼び出し元(API route等)がuser向けに「このserviceは接続可能か」を
+// 判断するための最小限のヘルパー(isSlackAuthConfigured()と同じ
+// fallbackパターンをservice非依存へ一般化しただけ)。
+export function isComposioServiceAuthConfigured(service: IntegrationService): boolean {
+
+  return (
+    typeof getComposioAuthConfigId(service) === "string" &&
+    (getComposioAuthConfigId(service) as string).length > 0
+  );
+
+}
+
+// createSlackConnectionLink()と全く同じ実装だが、Auth Config ID解決を
+// service引数で汎化しただけ(絶対条件、識別不変条件: ここでも必ず
+// toComposioUserId(tactUserId)を使う——execution.ts/adapter.tsの
+// executeComposio()と全く同じ関数を同じ引数で呼ぶことで、provisioning
+// 時とexecution時のComposio user識別子が構造的に一致する)。
+export async function createComposioConnectionLink(
+  service: IntegrationService,
+  tactUserId: string
+): Promise<{ connectedAccountId: string; redirectUrl: string | null; rawStatus: string } | null> {
+
+  const client = getComposioClient();
+  const authConfigId = getComposioAuthConfigId(service);
+
+  if (!client || !authConfigId) {
+    return null;
+  }
+
+  const connectionRequest = await client.connectedAccounts.link(
+    toComposioUserId(tactUserId),
+    authConfigId
+  );
+
+  return {
+    connectedAccountId: connectionRequest.id,
+    redirectUrl: connectionRequest.redirectUrl ?? null,
+    // SDK自身の既定(createConnectionRequest()、@composio/core/src/models/
+    // ConnectionRequest.ts確認済み)と同じfallbackを使う——link()直後の
+    // ConnectionRequest.statusはoptional型だが、SDK内部では常に
+    // "INITIATED"が既定値として設定される。
+    rawStatus: connectionRequest.status ?? "INITIATED",
+  };
+
+}
+
+// getSlackConnectionStatus()と全く同じ実装(そもそもSlack固有の分岐を
+// 元々含んでいなかった)を、service非依存の名前でも公開する——
+// 呼び出し元(core/tact-integration/provisioning.ts)がSlack由来の
+// 名前をimportしなくて済むようにするためだけの別名。
+export async function getComposioConnectionStatus(
+  providerConnectionRef: string
+): Promise<{ canonicalStatus: "pending" | "active" | "failed" | "revoked"; rawStatus: string } | null> {
+
+  return getSlackConnectionStatus(providerConnectionRef);
+
+}
+
+// core/tact-integration/types.tsのConnectionProvisioningProviderを
+// 満たす、Composio実装(唯一の実装、Phase C1と同じ理由)。Canonical
+// layer(provisioning.ts)はこのオブジェクトだけを既定実装として使う。
+export const composioConnectionProvisioningProvider: ConnectionProvisioningProvider = {
+
+  async createConnectionLink(service, tactUserId) {
+
+    const result = await createComposioConnectionLink(service, tactUserId);
+
+    if (!result) {
+      return null;
+    }
+
+    return {
+      providerConnectionRef: result.connectedAccountId,
+      redirectUrl: result.redirectUrl,
+      canonicalStatus: toCanonicalConnectionStatus(result.rawStatus),
+      providerStatusRaw: result.rawStatus,
+    };
+
+  },
+
+  async getConnectionStatus(providerConnectionRef) {
+
+    const result = await getComposioConnectionStatus(providerConnectionRef);
+
+    if (!result) {
+      return null;
+    }
+
+    return {
+      canonicalStatus: result.canonicalStatus,
+      providerStatusRaw: result.rawStatus,
+    };
+
+  },
+
+};

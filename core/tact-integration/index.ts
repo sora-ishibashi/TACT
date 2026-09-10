@@ -36,3 +36,8 @@ export * from "./policy";
 // capability本体。core/tact-bootstrap.tsだけがこのexportを使う想定
 // (research/designと同じ配線パターン)。
 export * from "./capability";
+// LIVE-1A: Generic Connection Provisioning Foundation。canonical
+// createIntegrationConnectionLink()/refreshIntegrationConnectionStatus()
+// 本体。app/api/tact/connections/配下のAPI Routeだけがこのexportを
+// 使う想定(既存executeApprovedIntegrationAction()等と同じ配線パターン)。
+export * from "./provisioning";
