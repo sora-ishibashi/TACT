@@ -369,6 +369,18 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   );
   const adapterSource = readRepoFile("core/tact-integration/providers/composio/adapter.ts");
   const provisioningSource = readRepoFile("core/tact-integration/provisioning.ts");
+  const createComposioLinkSource = connectionLinkSource.slice(
+    connectionLinkSource.indexOf("export async function createComposioConnectionLink"),
+    connectionLinkSource.indexOf("export async function getComposioConnectionStatus")
+  );
+
+  results.push(
+    check(
+      "[PRODUCT-P1] Composio replacement links pass allowMultiple:true in link()'s third options argument",
+      createComposioLinkSource.includes("client.connectedAccounts.link(") &&
+        /allowMultiple:\s*true/.test(createComposioLinkSource)
+    )
+  );
 
   results.push(
     check(

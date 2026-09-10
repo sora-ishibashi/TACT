@@ -166,6 +166,50 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // =========================
 
   {
+    // Provider-level replacement creation does not change the existing
+    // canonical active connection; the new TACT row remains pending for OAuth.
+    const oldConnection = makeConnection({ id: "conn-old", status: "active" });
+    let linkCreated = false;
+
+    const deps: CreateIntegrationConnectionLinkDeps = {
+      providerKind: "composio",
+      provider: makeFakeProvider({
+        createConnectionLink: async () => {
+          linkCreated = true;
+          return {
+            providerConnectionRef: "ca_gmail_replacement",
+            redirectUrl: "https://backend.composio.dev/oauth/replacement",
+            canonicalStatus: "pending",
+            providerStatusRaw: "INITIATED",
+          };
+        },
+      }),
+      generateConnectionId: () => "conn-replacement",
+      createConnection: async (_userId, _accessToken, params) =>
+        makeConnection({
+          id: params.id ?? "conn-replacement",
+          status: params.status ?? "pending",
+          providerConnectionRef: params.providerConnectionRef,
+        }),
+    };
+
+    const outcome = await createIntegrationConnectionLink(
+      { userId: OWNER_USER_ID, accessToken: OWNER_ACCESS_TOKEN, service: "gmail" },
+      deps
+    );
+
+    results.push(
+      check(
+        "[PRODUCT-P1] existing canonical active -> replacement link is pending; old active remains active during OAuth",
+        linkCreated &&
+          outcome.status === "created" &&
+          outcome.connection.status === "pending" &&
+          oldConnection.status === "active"
+      )
+    );
+  }
+
+  {
     const revokeCalls: { connectionId: string; status: string }[] = [];
 
     const deps: FinalizeConnectionReplacementDeps = {

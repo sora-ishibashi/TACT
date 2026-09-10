@@ -198,7 +198,11 @@ export async function createComposioConnectionLink(
   const connectionRequest = await client.connectedAccounts.link(
     toComposioUserId(tactUserId),
     authConfigId,
-    callbackUrl ? { callbackUrl } : undefined
+    // @composio/core@0.18.1: `allowMultiple?: boolean` belongs to
+    // CreateConnectedAccountLinkOptions (the third argument). It opts out of
+    // link()'s ACTIVE-account creation preflight only; TACT still maintains
+    // exactly one canonical active connection through its cutover lifecycle.
+    { ...(callbackUrl ? { callbackUrl } : {}), allowMultiple: true }
   );
 
   return {
@@ -231,6 +235,10 @@ export async function getComposioConnectionStatus(
 // 呼ぶだけ——delete()のような不可逆な操作ではない)。best-effortの
 // ため例外を一切外へ投げない(呼び出し元のcanonical revoke判断は
 // この結果に依存しない、絶対条件)。
+// SDK finding: disable() calls updateStatus(id, { enabled: false }) and is not
+// deletion. link() performs its own preflight against ACTIVE accounts; the
+// allowMultiple option above also permits reconnect when provider history is
+// retained or represented as ACTIVE by the provider.
 export async function disableComposioConnection(
   providerConnectionRef: string
 ): Promise<boolean> {
