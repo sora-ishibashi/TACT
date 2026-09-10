@@ -38,7 +38,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
-export type TactSection = "research" | "core" | "code";
+export type TactSection = "research" | "core" | "code" | "settings";
 
 type NavItem = {
   id: TactSection | string;
@@ -53,6 +53,8 @@ const NAV_ITEMS: NavItem[] = [
   { id: "research", label: "Research", enabled: true },
   { id: "core", label: "Core", enabled: true },
   { id: "code", label: "Code", enabled: true },
+  // PRODUCT-P1: Connection UX(Gmail/Slack管理)。
+  { id: "settings", label: "設定", enabled: true },
   { id: "meeting", label: "Meeting", enabled: false },
   { id: "bot", label: "Bot", enabled: false },
   { id: "design", label: "Design", enabled: false },

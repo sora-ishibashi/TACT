@@ -93,6 +93,18 @@ const CONNECTION_COLUMNS =
 
 export interface CreateConnectionParams {
 
+  // PRODUCT-P1(Connection UX、OAuth Return Flow): optionalな
+  // pre-generated id。省略時は既存通りDB側のdefault
+  // gen_random_uuid()に任せる(既存呼び出し元の挙動は一切変わらない、
+  // 絶対条件)。呼び出し元(provisioning.ts)がOAuth完了後の
+  // callbackUrlへこのidを埋め込みたい場合、Providerへlinkを要求する
+  // 前(=このrow自体がまだ存在しない時点)にidを確定させる必要が
+  // あるため、crypto.randomUUID()で生成した値をここで指定できるように
+  // する。値の生成元は常にTACT server側であり、呼び出し元がbodyの
+  // clientから受け取った値をそのまま渡すことは無い(絶対条件、
+  // providerConnectionRef同様に「callerが注入できるfield」にしない)。
+  id?: string;
+
   service: IntegrationService;
 
   provider: ConnectionProviderKind;
@@ -116,6 +128,7 @@ export async function createConnection(
   const { data, error } = await client
     .from("tact_connections")
     .insert({
+      ...(params.id ? { id: params.id } : {}),
       user_id: userId,
       service: params.service,
       provider: params.provider,

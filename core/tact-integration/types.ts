@@ -242,9 +242,17 @@ export interface ConnectionProvisioningProvider {
   // 新規接続linkを作成する。Provider側が未設定(API key/auth config
   // 欠如)の場合は例外を投げず、安全にnullを返す(既存の
   // createSlackConnectionLink()と同じfallback契約)。
+  //
+  // PRODUCT-P1(Connection UX): callbackUrlはoptional。指定された
+  // 場合、OAuth完了後にProviderがブラウザを差し戻す先として使われる
+  // (例: TACT Settings画面のURL)。この値はHTTP層(API route)が
+  // 組み立てた不透明な文字列として扱うだけで、この境界・実装
+  // (Composio adapter)のいずれもURLの中身(query paramの意味等)を
+  // 解釈しない。
   createConnectionLink(
     service: IntegrationService,
-    tactUserId: string
+    tactUserId: string,
+    callbackUrl?: string
   ): Promise<ProviderConnectionLinkResult | null>;
 
   // 既存接続の現在statusをProviderへ問い合わせる。未設定時はnull
@@ -252,6 +260,17 @@ export interface ConnectionProvisioningProvider {
   getConnectionStatus(
     providerConnectionRef: string
   ): Promise<{ canonicalStatus: ConnectionStatus; providerStatusRaw: string } | null>;
+
+  // PRODUCT-P1(Disconnect、SEC-R1 P1「OAuth revoke/disconnectが無い」
+  // への対応): Provider側のConnected Accountを非破壊的に無効化する
+  // (Composio実装ではconnectedAccounts.disable()、削除ではなく
+  // enabled:falseへの更新)。あくまでbest-effort——このメソッドの
+  // 成功/失敗は、呼び出し元がTACT canonical statusを"revoked"へ
+  // 進めるかどうかの判断材料にしない(TACT owns canonical connection
+  // state、Provider側の状態はdiagnostics目的の付随情報に過ぎない、
+  // 絶対条件)。例外を投げず、常にboolean(true=成功、false=失敗/
+  // 未設定)を返す。
+  disableConnection(providerConnectionRef: string): Promise<boolean>;
 
 }
 

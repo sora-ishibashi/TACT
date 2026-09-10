@@ -173,6 +173,16 @@ export async function POST(
 
     }
 
+    // PRODUCT-P1(Connection UX、OAuth Return Flow): origin解決は
+    // このHTTP層の責務(core/tact-integration/provisioning.tsはHTTP
+    // requestを一切知らない、絶対条件)。OAuth完了後、ProviderはTACT
+    // Settings画面(?section=settingsでConnections UIを自動選択させる、
+    // components/tact/ProductLauncher.tsxのTactSection="settings")へ
+    // ブラウザを差し戻す。connectionId query paramはこのURLへ
+    // createIntegrationConnectionLink()自身が追加する(呼び出し元
+    // であるこのfileはconnectionIdをまだ知らないため)。
+    const callbackUrl = `${request.nextUrl.origin}/?section=settings`;
+
     // 絶対条件(IDENTITY INVARIANT): userIdはgetCurrentUserContext()が
     // 解決したauthenticatedUserIdのみを渡す(bodyのuserIdは既に
     // parseCreateConnectionLinkRequestBody()の戻り値に存在しない
@@ -181,6 +191,7 @@ export async function POST(
       userId: authenticatedUserId,
       accessToken,
       service: parsed.service,
+      callbackUrl,
     });
 
     if (outcome.status === "unsupported_service") {

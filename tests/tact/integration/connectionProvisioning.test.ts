@@ -71,6 +71,21 @@ function makeLinkResult(overrides: Partial<ProviderConnectionLinkResult> = {}): 
   };
 }
 
+// PRODUCT-P1でConnectionProvisioningProviderにdisableConnection()が
+// 追加されたため、既存の各fakeで毎回書かずに済むよう最小限のdefaultを
+// 提供する(既存test caseの意図はcreateConnectionLink/getConnectionStatus
+// の差し替えだけであり、disableConnectionは今回の対象ではない)。
+function makeFakeProvider(
+  overrides: Partial<ConnectionProvisioningProvider> = {}
+): ConnectionProvisioningProvider {
+  return {
+    createConnectionLink: async () => null,
+    getConnectionStatus: async () => null,
+    disableConnection: async () => false,
+    ...overrides,
+  };
+}
+
 export async function run(): Promise<{ pass: number; fail: number }> {
 
   const results: CheckResult[] = [];
@@ -82,14 +97,14 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     let capturedCreateConnectionArgs: unknown[] | undefined;
 
-    const fakeProvider: ConnectionProvisioningProvider = {
+    const fakeProvider = makeFakeProvider({
       createConnectionLink: async () => makeLinkResult(),
-      getConnectionStatus: async () => null,
-    };
+    });
 
     const deps: CreateIntegrationConnectionLinkDeps = {
       providerKind: "composio",
       provider: fakeProvider,
+      generateConnectionId: () => "generated-id",
       createConnection: async (userId, accessToken, params) => {
         capturedCreateConnectionArgs = [userId, accessToken, params];
         return makeConnection({
@@ -145,17 +160,17 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     let providerCalled = false;
 
-    const fakeProvider: ConnectionProvisioningProvider = {
+    const fakeProvider = makeFakeProvider({
       createConnectionLink: async () => {
         providerCalled = true;
         return makeLinkResult();
       },
-      getConnectionStatus: async () => null,
-    };
+    });
 
     const deps: CreateIntegrationConnectionLinkDeps = {
       providerKind: "composio",
       provider: fakeProvider,
+      generateConnectionId: () => "generated-id",
       createConnection: async () => makeConnection(),
     };
 
@@ -176,14 +191,12 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     let createConnectionCalled = false;
 
-    const fakeProvider: ConnectionProvisioningProvider = {
-      createConnectionLink: async () => null,
-      getConnectionStatus: async () => null,
-    };
+    const fakeProvider = makeFakeProvider();
 
     const deps: CreateIntegrationConnectionLinkDeps = {
       providerKind: "composio",
       provider: fakeProvider,
+      generateConnectionId: () => "generated-id",
       createConnection: async () => {
         createConnectionCalled = true;
         return makeConnection();
@@ -206,15 +219,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // Slackも全く同じ関数(分岐なし)を通ることを確認(既存Slack挙動の
   // 非regression)。
   {
-    const fakeProvider: ConnectionProvisioningProvider = {
+    const fakeProvider = makeFakeProvider({
       createConnectionLink: async (service) =>
         makeLinkResult({ providerConnectionRef: `ca_${service}_1` }),
-      getConnectionStatus: async () => null,
-    };
+    });
 
     const deps: CreateIntegrationConnectionLinkDeps = {
       providerKind: "composio",
       provider: fakeProvider,
+      generateConnectionId: () => "generated-id",
       createConnection: async (userId, accessToken, params) =>
         makeConnection({ service: params.service, providerConnectionRef: params.providerConnectionRef }),
     };
@@ -240,7 +253,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const deps: RefreshIntegrationConnectionStatusDeps = {
       getConnection: async () => undefined,
       updateConnectionStatus: async () => {},
-      provider: { createConnectionLink: async () => null, getConnectionStatus: async () => null },
+      provider: makeFakeProvider(),
+      finalizeConnectionReplacement: async () => ({ revokedConnectionIds: [] }),
     };
 
     const outcome = await refreshIntegrationConnectionStatus(
@@ -258,15 +272,19 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   {
     let updateCalled = false;
+    let finalizeCalledWith: unknown;
 
     const deps: RefreshIntegrationConnectionStatusDeps = {
       getConnection: async () => makeConnection({ status: "pending" }),
       updateConnectionStatus: async () => {
         updateCalled = true;
       },
-      provider: {
-        createConnectionLink: async () => null,
+      provider: makeFakeProvider({
         getConnectionStatus: async () => ({ canonicalStatus: "active", providerStatusRaw: "ACTIVE" }),
+      }),
+      finalizeConnectionReplacement: async (params) => {
+        finalizeCalledWith = params;
+        return { revokedConnectionIds: [] };
       },
     };
 
@@ -291,20 +309,34 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         outcome.status === "synced" && outcome.connection.status === "active" && updateCalled
       )
     );
+
+    results.push(
+      check(
+        "[PRODUCT-P1] pending -> active遷移の直後にfinalizeConnectionReplacement()がこのconnectionをkeepConnectionIdとして正確に1回呼ばれる(Reconnect cutoverの起点)",
+        typeof finalizeCalledWith === "object" &&
+          finalizeCalledWith !== null &&
+          (finalizeCalledWith as { keepConnectionId?: string }).keepConnectionId === "conn-1" &&
+          (finalizeCalledWith as { service?: string }).service === "gmail"
+      )
+    );
   }
 
   {
     let providerCalled = false;
+    let finalizeCalled = false;
 
     const deps: RefreshIntegrationConnectionStatusDeps = {
       getConnection: async () => makeConnection({ status: "active" }),
       updateConnectionStatus: async () => {},
-      provider: {
-        createConnectionLink: async () => null,
+      provider: makeFakeProvider({
         getConnectionStatus: async () => {
           providerCalled = true;
           return { canonicalStatus: "active", providerStatusRaw: "ACTIVE" };
         },
+      }),
+      finalizeConnectionReplacement: async () => {
+        finalizeCalled = true;
+        return { revokedConnectionIds: [] };
       },
     };
 
@@ -317,6 +349,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[LIVE-1A] 既にactiveなConnectionはProviderへ再問い合わせしない(不要な呼び出しを増やさない)",
         outcome.status === "synced" && !providerCalled
+      )
+    );
+
+    results.push(
+      check(
+        "[PRODUCT-P1] 既にactiveで状態遷移が無い場合、finalizeConnectionReplacement()も呼ばれない(不要なcutover処理を増やさない)",
+        !finalizeCalled
       )
     );
   }

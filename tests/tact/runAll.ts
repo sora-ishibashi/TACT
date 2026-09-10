@@ -150,6 +150,8 @@ import { run as runIntegrationConnectionSchema } from "./integration/connectionS
 import { run as runIntegrationGmail } from "./integration/gmail.test";
 import { run as runIntegrationConnectionProvisioning } from "./integration/connectionProvisioning.test";
 import { run as runIntegrationConnectionsApi } from "./integration/connectionsApi.test";
+import { run as runIntegrationConnectionLifecycle } from "./integration/connectionLifecycle.test";
+import { run as runUiConnectionsPanel } from "./ui/connectionsPanel.test";
 import { run as runIntentSlackSendIntent } from "./intent/slackSendIntent.test";
 import { run as runIntentSlackListChannelsIntent } from "./intent/slackListChannelsIntent.test";
 import { run as runRuntimeAdapter } from "./runtime/adapter.test";
@@ -284,6 +286,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "integration/gmail", run: runIntegrationGmail },
   { name: "integration/connectionProvisioning", run: runIntegrationConnectionProvisioning },
   { name: "integration/connectionsApi", run: runIntegrationConnectionsApi },
+  { name: "integration/connectionLifecycle", run: runIntegrationConnectionLifecycle },
+  { name: "ui/connectionsPanel", run: runUiConnectionsPanel },
   { name: "intent/slackSendIntent", run: runIntentSlackSendIntent },
   { name: "intent/slackListChannelsIntent", run: runIntentSlackListChannelsIntent },
   { name: "runtime/adapter", run: runRuntimeAdapter },

@@ -176,9 +176,16 @@ export function isComposioServiceAuthConfigured(service: IntegrationService): bo
 // toComposioUserId(tactUserId)を使う——execution.ts/adapter.tsの
 // executeComposio()と全く同じ関数を同じ引数で呼ぶことで、provisioning
 // 時とexecution時のComposio user識別子が構造的に一致する)。
+// PRODUCT-P1(Connection UX、OAuth Return Flow): callbackUrlは
+// CreateConnectedAccountLinkOptions.callbackUrl(@composio/core確認済み、
+// LinkCreateParams.callback_url)へそのまま渡す。Composioは、Provider
+// (Google/Slack等)とのOAuthが完了した後、ブラウザをこのURLへ差し戻す
+// 契約(SDK/API docs確認済み)——TACTがCallback/Webhookを自前で
+// ホストしなくても、既存のTACT Settings画面へブラウザを戻せる。
 export async function createComposioConnectionLink(
   service: IntegrationService,
-  tactUserId: string
+  tactUserId: string,
+  callbackUrl?: string
 ): Promise<{ connectedAccountId: string; redirectUrl: string | null; rawStatus: string } | null> {
 
   const client = getComposioClient();
@@ -190,7 +197,8 @@ export async function createComposioConnectionLink(
 
   const connectionRequest = await client.connectedAccounts.link(
     toComposioUserId(tactUserId),
-    authConfigId
+    authConfigId,
+    callbackUrl ? { callbackUrl } : undefined
   );
 
   return {
@@ -217,14 +225,49 @@ export async function getComposioConnectionStatus(
 
 }
 
+// PRODUCT-P1(Disconnect): Connected Accountの非破壊的な無効化。
+// installed @composio/core SDK確認済み(ConnectedAccounts.ts、
+// disable()メソッド、内部的にupdateStatus(nanoid, {enabled:false})を
+// 呼ぶだけ——delete()のような不可逆な操作ではない)。best-effortの
+// ため例外を一切外へ投げない(呼び出し元のcanonical revoke判断は
+// この結果に依存しない、絶対条件)。
+export async function disableComposioConnection(
+  providerConnectionRef: string
+): Promise<boolean> {
+
+  const client = getComposioClient();
+
+  if (!client) {
+    return false;
+  }
+
+  try {
+
+    await client.connectedAccounts.disable(providerConnectionRef);
+    return true;
+
+  } catch (error) {
+
+    console.warn(
+      "[tact-integration/composio] disableComposioConnection() best-effort disable failed " +
+      "(canonical status still becomes 'revoked' regardless — TACT owns canonical connection state)",
+      error instanceof Error ? error.message : String(error)
+    );
+
+    return false;
+
+  }
+
+}
+
 // core/tact-integration/types.tsのConnectionProvisioningProviderを
 // 満たす、Composio実装(唯一の実装、Phase C1と同じ理由)。Canonical
 // layer(provisioning.ts)はこのオブジェクトだけを既定実装として使う。
 export const composioConnectionProvisioningProvider: ConnectionProvisioningProvider = {
 
-  async createConnectionLink(service, tactUserId) {
+  async createConnectionLink(service, tactUserId, callbackUrl) {
 
-    const result = await createComposioConnectionLink(service, tactUserId);
+    const result = await createComposioConnectionLink(service, tactUserId, callbackUrl);
 
     if (!result) {
       return null;
@@ -251,6 +294,12 @@ export const composioConnectionProvisioningProvider: ConnectionProvisioningProvi
       canonicalStatus: result.canonicalStatus,
       providerStatusRaw: result.rawStatus,
     };
+
+  },
+
+  async disableConnection(providerConnectionRef) {
+
+    return disableComposioConnection(providerConnectionRef);
 
   },
 

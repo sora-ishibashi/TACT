@@ -2,6 +2,7 @@ import { composioConnectionProvisioningProvider } from "./providers/composio/con
 import {
   createConnection as defaultCreateConnection,
   getConnection as defaultGetConnection,
+  listConnectionsForUser as defaultListConnectionsForUser,
   updateConnectionStatus as defaultUpdateConnectionStatus,
 } from "./connection";
 import type {
@@ -64,6 +65,14 @@ export interface CreateIntegrationConnectionLinkParams {
   // (HTTP bodyから来る未検証値をこのfile自身がここで検証する)。
   service: string;
 
+  // PRODUCT-P1(Connection UX、OAuth Return Flow): OAuth完了後に
+  // ブラウザを差し戻す先(TACT Settings画面のURL)。HTTP層(API route)
+  // がrequestのoriginから組み立てた、絶対URLの文字列。省略時は
+  // Providerの既定動作(callbackUrlを指定しない場合の挙動)のまま
+  // (絶対条件: このfile自身はHTTPを知らないため、origin解決は
+  // 呼び出し元の責務のまま維持する)。
+  callbackUrl?: string;
+
 }
 
 export interface CreateIntegrationConnectionLinkDeps {
@@ -78,13 +87,45 @@ export interface CreateIntegrationConnectionLinkDeps {
 
   createConnection: typeof defaultCreateConnection;
 
+  // PRODUCT-P1: テスト容易性・決定論性のため、connectionId生成を
+  // DI可能にする(既定はNode/ブラウザ双方に存在するグローバル
+  // crypto.randomUUID())。呼び出し元がbodyから渡す値ではない
+  // ——常にserver側で新規生成する(絶対条件、providerConnectionRef
+  // 同様「callerが注入できないfield」)。
+  generateConnectionId: () => string;
+
 }
 
 const defaultProvisioningDeps: CreateIntegrationConnectionLinkDeps = {
   providerKind: "composio",
   provider: composioConnectionProvisioningProvider,
   createConnection: defaultCreateConnection,
+  generateConnectionId: () => crypto.randomUUID(),
 };
+
+// PRODUCT-P1: callbackUrlへTACT canonical connectionIdをquery paramとして
+// 埋め込む。OAuth完了後にProviderがこのURLへブラウザを差し戻した際、
+// ブラウザ側(Settings画面)がどのConnectionをconfirmすべきかを知るため
+// だけに使う——この値はTACT自身が生成したopaqueなUUIDであり、それ単体
+// では何の権限も持たない(confirm APIは呼び出し元ごとに所有者を
+// 再検証する、既存/api/tact/connections/[connectionId]/confirmの
+// 既存契約のまま)。URLとして不正な場合は安全側でcallbackUrlをそのまま
+// 返す(例外を投げない)。
+function appendConnectionIdToCallbackUrl(callbackUrl: string, connectionId: string): string {
+
+  try {
+
+    const url = new URL(callbackUrl);
+    url.searchParams.set("connectionId", connectionId);
+    return url.toString();
+
+  } catch {
+
+    return callbackUrl;
+
+  }
+
+}
 
 // Phase C1のIntegrationService("slack"|"gmail")と同じcanonical
 // serviceだけをサポートする——unsupported serviceはfail closedする
@@ -107,16 +148,29 @@ export async function createIntegrationConnectionLink(
   deps: CreateIntegrationConnectionLinkDeps = defaultProvisioningDeps
 ): Promise<CreateIntegrationConnectionLinkOutcome> {
 
-  const { userId, accessToken, service } = params;
+  const { userId, accessToken, service, callbackUrl } = params;
 
   if (!isSupportedIntegrationService(service)) {
     return { status: "unsupported_service" };
   }
 
+  // PRODUCT-P1: callbackUrlが指定された場合、Providerへlinkを要求する
+  // 前にTACT canonical connectionIdを確定させる(このrow自体はまだ
+  // 存在しないため、DB defaultのgen_random_uuid()を待たず、ここで
+  // 生成したUUIDをそのままprimary keyとして使う——createConnection()
+  // 呼び出し時にparams.idとして渡す)。callbackUrl未指定時は従来通り
+  // DB側のdefaultへ任せる(既存挙動を変更しない)。
+  const preGeneratedConnectionId = callbackUrl ? deps.generateConnectionId() : undefined;
+
+  const resolvedCallbackUrl =
+    callbackUrl && preGeneratedConnectionId
+      ? appendConnectionIdToCallbackUrl(callbackUrl, preGeneratedConnectionId)
+      : undefined;
+
   // Composio owns: OAuth transport / Connected Account。このfileは
   // 戻り値のproviderConnectionRef(=Composio connected account id)を
   // ただの不透明な参照文字列として受け取るだけで、中身を解釈しない。
-  const linkResult = await deps.provider.createConnectionLink(service, userId);
+  const linkResult = await deps.provider.createConnectionLink(service, userId, resolvedCallbackUrl);
 
   if (!linkResult) {
     return { status: "provider_not_configured" };
@@ -128,6 +182,7 @@ export async function createIntegrationConnectionLink(
   // ——linkResult.canonicalStatusは通常pending、既存
   // toCanonicalConnectionStatus()の導出結果をそのまま使う)。
   const connection = await deps.createConnection(userId, accessToken, {
+    id: preGeneratedConnectionId,
     service,
     provider: deps.providerKind,
     providerConnectionRef: linkResult.providerConnectionRef,
@@ -136,6 +191,94 @@ export async function createIntegrationConnectionLink(
   });
 
   return { status: "created", connection, redirectUrl: linkResult.redirectUrl };
+
+}
+
+// =========================
+// finalizeConnectionReplacement
+// =========================
+//
+// PRODUCT-P1(Reconnect Lifecycle): 再接続(および初回接続)の両方が
+// 通る、唯一のcutover操作。「新しいConnectionがactiveになったことを
+// 確認できてから、初めて古いactiveなConnectionを片付ける」という順序
+// (絶対条件、最重要: old connectionを先にrevokeしない)をserver-side
+// canonical operationとして表現する——browserだけのbest-effortには
+// しない(呼び出し元はrefreshIntegrationConnectionStatus()、confirm
+// APIが実際にactiveへ遷移した直後にこれを呼ぶ)。
+//
+// Provider-neutral: このfile自身はComposio固有の識別子を一切扱わない
+// (listConnectionsForUser()が返すCanonical Connection.idだけを使う)。
+// 将来複数Providerが混在しても、このロジックはuserId/service単位で
+// 完結するため変更不要。
+//
+// 初回接続時(既存activeが無い)も同じ関数を安全に呼べる——
+// revokeConnectionIds()が空配列を返すだけの副作用ゼロな呼び出しになる
+// (絶対条件: Gmail初回接続とreconnectで別ロジックを持たない)。
+
+export interface FinalizeConnectionReplacementParams {
+
+  userId: string;
+
+  accessToken: string;
+
+  service: IntegrationService;
+
+  // 新しくactiveになったConnection(このidだけは絶対に revoke しない)。
+  keepConnectionId: string;
+
+}
+
+export interface FinalizeConnectionReplacementDeps {
+
+  listConnectionsForUser: typeof defaultListConnectionsForUser;
+
+  updateConnectionStatus: typeof defaultUpdateConnectionStatus;
+
+}
+
+const defaultFinalizeDeps: FinalizeConnectionReplacementDeps = {
+  listConnectionsForUser: defaultListConnectionsForUser,
+  updateConnectionStatus: defaultUpdateConnectionStatus,
+};
+
+export interface FinalizeConnectionReplacementOutcome {
+
+  revokedConnectionIds: string[];
+
+}
+
+export async function finalizeConnectionReplacement(
+  params: FinalizeConnectionReplacementParams,
+  deps: FinalizeConnectionReplacementDeps = defaultFinalizeDeps
+): Promise<FinalizeConnectionReplacementOutcome> {
+
+  const { userId, accessToken, service, keepConnectionId } = params;
+
+  // Active Uniqueness(絶対条件6): このuser/serviceの現在active行
+  // だけを見る——pending/failed/revokedな過去の行には一切触れない
+  // (LIVE-1A False Multiple Connection Resolutionの修正と同じ
+  // active-only filterをそのまま再利用する)。
+  const activeConnections = await deps.listConnectionsForUser(userId, accessToken, service, "active");
+
+  const toRevoke = activeConnections.filter((connection) => connection.id !== keepConnectionId);
+
+  const revokedConnectionIds: string[] = [];
+
+  for (const connection of toRevoke) {
+
+    await deps.updateConnectionStatus(connection.id, userId, accessToken, "revoked", {
+      ...(connection.metadata ?? {}),
+      // diagnostics専用(Composio固有の識別子ではない、TACT canonical
+      // idのみ)。監査時に「なぜこの行がrevokedになったか」を追える
+      // ようにするためだけの非機密メタデータ。
+      supersededByConnectionId: keepConnectionId,
+    });
+
+    revokedConnectionIds.push(connection.id);
+
+  }
+
+  return { revokedConnectionIds };
 
 }
 
@@ -175,12 +318,18 @@ export interface RefreshIntegrationConnectionStatusDeps {
 
   provider: ConnectionProvisioningProvider;
 
+  // PRODUCT-P1(Reconnect Lifecycle): pending -> activeへ実際に遷移した
+  // 直後だけ呼ぶ(既存activeな兄弟Connectionのcutover、絶対条件:
+  // 新しい接続が成功してから古いものを片付ける)。
+  finalizeConnectionReplacement: typeof finalizeConnectionReplacement;
+
 }
 
 const defaultRefreshDeps: RefreshIntegrationConnectionStatusDeps = {
   getConnection: defaultGetConnection,
   updateConnectionStatus: defaultUpdateConnectionStatus,
   provider: composioConnectionProvisioningProvider,
+  finalizeConnectionReplacement,
 };
 
 export type RefreshIntegrationConnectionStatusOutcome =
@@ -237,8 +386,142 @@ export async function refreshIntegrationConnectionStatus(
     { ...(connection.metadata ?? {}), providerStatusRaw: statusResult.providerStatusRaw }
   );
 
+  // PRODUCT-P1(Reconnect Lifecycle、絶対条件、最重要): 新しい接続が
+  // 実際にactiveへ遷移したことを確認できた、この瞬間だけcutoverを行う
+  // ——old connectionを先にrevokeしない・新しい接続が失敗した場合は
+  // 何も片付けない(reconnect failure時にold activeがそのまま残る、
+  // 絶対条件Jと同じ結論)。finalize自体の失敗はこのrefreshの成功結果
+  // (新しいConnectionは既にactiveへ確定済み)を変更しない——既存
+  // reconcileAfterTaskUpdate()等と同じ「非致命的な副次処理はconsole.warn
+  // でbest-effort化する」既存パターンを踏襲する。
+  if (statusResult.canonicalStatus === "active") {
+
+    try {
+
+      await deps.finalizeConnectionReplacement({
+        userId,
+        accessToken,
+        service: connection.service,
+        keepConnectionId: connection.id,
+      });
+
+    } catch (error) {
+
+      console.warn(
+        "[tact-integration/provisioning] finalizeConnectionReplacement() failed after a connection " +
+        "became active; the newly active connection's status is already committed and unaffected. " +
+        "Stale sibling active connections (if any) may remain until the next successful reconnect/disconnect.",
+        error instanceof Error ? error.message : String(error)
+      );
+
+    }
+
+  }
+
   const refreshed = await deps.getConnection(connectionId, userId, accessToken);
 
   return { status: "synced", connection: refreshed ?? { ...connection, status: statusResult.canonicalStatus } };
+
+}
+
+// =========================
+// disconnectIntegrationConnection
+// =========================
+//
+// PRODUCT-P1(Disconnect、SEC-R1 P1「OAuth revoke/disconnectが無い」への
+// 対応): serviceで指定された、このuserの現在activeなConnectionを全て
+// revokeする(通常は0または1件だが、error state——複数activeが誤って
+// 存在する場合——でも同じ操作で自己修復できるよう、対象は「serviceの
+// 現在activeな全行」とする、絶対条件6 Active Uniquenessの回復経路)。
+//
+// Provider側のConnected Account無効化はbest-effort(絶対条件、設計
+// 理由を明示): TACT owns canonical connection state——実行可否は
+// core/tact-integration/execution.tsのvalidateConnectionForExecution()
+// が「TACT側のstatus==="active"」だけを見て判断するため、Provider側の
+// 一時的なネットワーク障害等でdisableConnection()が失敗しても、
+// ユーザー自身の解除操作そのものを失敗させない(fail-openにする方が
+// 実害が小さい——TACT側のstatusを"revoked"にできなければ、ユーザーは
+// 「解除したはずなのに実行できてしまう」というより深刻な状態に陥る。
+// 逆にProvider側だけ無効化に失敗しても、TACT側のresolverが既にその
+// Connectionを候補から外すため、実害は無い)。
+
+export interface DisconnectIntegrationConnectionParams {
+
+  userId: string;
+
+  accessToken: string;
+
+  service: string;
+
+}
+
+export interface DisconnectIntegrationConnectionDeps {
+
+  provider: ConnectionProvisioningProvider;
+
+  listConnectionsForUser: typeof defaultListConnectionsForUser;
+
+  updateConnectionStatus: typeof defaultUpdateConnectionStatus;
+
+}
+
+const defaultDisconnectDeps: DisconnectIntegrationConnectionDeps = {
+  provider: composioConnectionProvisioningProvider,
+  listConnectionsForUser: defaultListConnectionsForUser,
+  updateConnectionStatus: defaultUpdateConnectionStatus,
+};
+
+export type DisconnectIntegrationConnectionOutcome =
+  | { status: "unsupported_service" }
+  // 既にactiveなConnectionが無い(既に解除済み、または未接続)。
+  // 冪等性のため、これもエラーではなく成功として扱う——同じ結果
+  // (「activeなConnectionが無い」)へ収束していることが重要
+  // (絶対条件: 二重クリックで例外にしない)。
+  | { status: "not_connected" }
+  | { status: "disconnected"; revokedConnectionIds: string[] };
+
+export async function disconnectIntegrationConnection(
+  params: DisconnectIntegrationConnectionParams,
+  deps: DisconnectIntegrationConnectionDeps = defaultDisconnectDeps
+): Promise<DisconnectIntegrationConnectionOutcome> {
+
+  const { userId, accessToken, service } = params;
+
+  if (!isSupportedIntegrationService(service)) {
+    return { status: "unsupported_service" };
+  }
+
+  const activeConnections = await deps.listConnectionsForUser(userId, accessToken, service, "active");
+
+  if (activeConnections.length === 0) {
+    return { status: "not_connected" };
+  }
+
+  const revokedConnectionIds: string[] = [];
+
+  for (const connection of activeConnections) {
+
+    try {
+
+      await deps.provider.disableConnection(connection.providerConnectionRef);
+
+    } catch (error) {
+
+      // best-effort、設計理由は上部コメント参照。TACT canonical revoke
+      // (下記)は常に実行する。
+      console.warn(
+        "[tact-integration/provisioning] disableConnection() (provider-side best-effort) threw; " +
+        "proceeding with the canonical TACT-side revoke regardless.",
+        error instanceof Error ? error.message : String(error)
+      );
+
+    }
+
+    await deps.updateConnectionStatus(connection.id, userId, accessToken, "revoked");
+    revokedConnectionIds.push(connection.id);
+
+  }
+
+  return { status: "disconnected", revokedConnectionIds };
 
 }

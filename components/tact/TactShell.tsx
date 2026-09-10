@@ -41,12 +41,13 @@
 // 削除していない(認証・エラー処理・メッセージ表示ロジックは
 // ResearchWorkspace.tsxへ移植・再利用済み)。
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import ProductLauncher, { TactSection } from "./ProductLauncher";
 import ResearchWorkspace from "@/components/research/ResearchWorkspace";
 import CoreSection from "./CoreSection";
 import CodeSection from "./CodeSection";
+import SettingsSection from "./SettingsSection";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 export default function TactShell() {
@@ -54,6 +55,34 @@ export default function TactShell() {
   const [section, setSection] = useState<TactSection>("research");
 
   const { user, signOut } = useAuth();
+
+  // PRODUCT-P1(Connection UX、OAuth Return Flow): Connection
+  // Provisioning API(app/api/tact/connections/route.ts)がOAuth完了後の
+  // callbackUrlとして"?section=settings"を指定する(core/tact-integration/
+  // provisioning.tsが実際のconnectionId query paramを追加する)。
+  // ここではsection切り替えの判断材料としてsection paramだけを読む
+  // ——connectionId自体の読み取り・confirm実行はComponentsPanel.tsx
+  // (ConnectionsPanel.tsx)自身の責務のまま(絶対条件: このfileへ
+  // Connection業務ロジックを持ち込まない)。
+  useEffect(() => {
+
+    function applySectionFromReturnUrl() {
+
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      const params = new URLSearchParams(window.location.search);
+
+      if (params.get("section") === "settings") {
+        setSection("settings");
+      }
+
+    }
+
+    applySectionFromReturnUrl();
+
+  }, []);
 
   return (
 
@@ -119,6 +148,7 @@ export default function TactShell() {
         )}
         {section === "core" && <CoreSection />}
         {section === "code" && <CodeSection />}
+        {section === "settings" && <SettingsSection />}
 
       </div>
 

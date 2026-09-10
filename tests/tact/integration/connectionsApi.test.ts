@@ -19,6 +19,10 @@ import {
   parseCreateConnectionLinkRequestBody,
 } from "../../../app/api/tact/connections/route";
 import { POST as confirmConnectionRoute } from "../../../app/api/tact/connections/[connectionId]/confirm/route";
+import {
+  POST as disconnectConnectionRoute,
+  parseDisconnectRequestBody,
+} from "../../../app/api/tact/connections/disconnect/route";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeRequest(method: string, url: string, body?: unknown): NextRequest {
@@ -85,6 +89,37 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     )
   );
 
+  // PRODUCT-P1: 新規disconnect routeも同じtrust boundaryを満たす([L])。
+  const disconnect = await disconnectConnectionRoute(
+    makeRequest("POST", "http://localhost/api/tact/connections/disconnect", { service: "gmail" })
+  );
+  results.push(
+    check(
+      "[PRODUCT-P1][L] POST /api/tact/connections/disconnect (未認証) -> 401",
+      disconnect.status === 401,
+      `status=${disconnect.status}`
+    )
+  );
+
+  // PRODUCT-P1([M]): 未認証requestがconnectionId/providerConnectionRefを
+  // 詐称しても401のまま(disconnect routeはそもそもそのようなfieldを
+  // 受け取る設計になっていない、下のparseDisconnectRequestBody()の
+  // 直接確認と合わせて二重に検証する)。
+  const disconnectWithForgedFields = await disconnectConnectionRoute(
+    makeRequest("POST", "http://localhost/api/tact/connections/disconnect", {
+      service: "gmail",
+      userId: "victim-user-id",
+      connectionId: "victim-connection-id",
+      providerConnectionRef: "ca_forged_123",
+    })
+  );
+  results.push(
+    check(
+      "[PRODUCT-P1][M] 未認証requestがuserId/connectionId/providerConnectionRefを詐称しても401のまま",
+      disconnectWithForgedFields.status === 401
+    )
+  );
+
   const createBody = await create.json();
   results.push(
     check(
@@ -133,6 +168,43 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     check(
       "[LIVE-1A] JSON objectでないbodyはok:falseを返す",
       parseCreateConnectionLinkRequestBody(null).ok === false
+    )
+  );
+
+  // =========================
+  // parseDisconnectRequestBody(): 純粋関数、認証不要 ([M])
+  // =========================
+
+  results.push(
+    check(
+      "[PRODUCT-P1][M] disconnect bodyもservice以外のfield(userId/connectionId/providerConnectionRef等)を構造的に無視する",
+      (() => {
+        const parsed = parseDisconnectRequestBody({
+          service: "gmail",
+          userId: "victim-user-id",
+          connectionId: "victim-connection-id",
+          providerConnectionRef: "ca_forged_123",
+        });
+        return (
+          parsed.ok === true &&
+          parsed.service === "gmail" &&
+          Object.keys(parsed).sort().join(",") === "ok,service"
+        );
+      })()
+    )
+  );
+
+  results.push(
+    check(
+      "[PRODUCT-P1] disconnect: serviceが欠如したbodyはok:falseを返す",
+      parseDisconnectRequestBody({}).ok === false
+    )
+  );
+
+  results.push(
+    check(
+      "[PRODUCT-P1] disconnect: 未対応serviceのbody自体はparse段階では通す(unsupported_service判定はdisconnectIntegrationConnection()側の責務、parseはform validationのみ)",
+      parseDisconnectRequestBody({ service: "notion" }).ok === true
     )
   );
 
