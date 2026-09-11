@@ -131,7 +131,7 @@ function appendConnectionIdToCallbackUrl(callbackUrl: string, connectionId: stri
 // serviceだけをサポートする——unsupported serviceはfail closedする
 // (絶対条件、TRUST BOUNDARY「fail closed for unsupported service」)。
 function isSupportedIntegrationService(service: string): service is IntegrationService {
-  return service === "slack" || service === "gmail";
+  return service === "slack" || service === "gmail" || service === "notion";
 }
 
 export type CreateIntegrationConnectionLinkOutcome =

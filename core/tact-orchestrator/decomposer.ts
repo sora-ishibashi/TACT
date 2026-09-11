@@ -203,6 +203,10 @@ export function decomposeTask(
           ? "integration.slack.list_channels"
           : decision.intent === "integration_gmail_search_messages"
             ? "integration.gmail.search_messages"
+            : decision.intent === "integration_notion_search"
+              ? "integration.notion.search"
+              : decision.intent === "integration_notion_read_page"
+                ? "integration.notion.read_page"
           : undefined;
 
   // =========================

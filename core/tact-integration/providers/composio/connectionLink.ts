@@ -155,6 +155,8 @@ function getComposioAuthConfigId(service: IntegrationService): string | undefine
       return process.env.COMPOSIO_SLACK_AUTH_CONFIG_ID;
     case "gmail":
       return process.env.COMPOSIO_GMAIL_AUTH_CONFIG_ID;
+    case "notion":
+      return process.env.COMPOSIO_NOTION_AUTH_CONFIG_ID;
   }
 
 }

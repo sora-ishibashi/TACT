@@ -4,7 +4,7 @@ import type { IntegrationService } from "../../../core/tact-integration/types";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..");
-const MIGRATION_PATH = "supabase/migrations/20260915000000_allow_gmail_tact_connections.sql";
+const MIGRATION_PATH = "supabase/migrations/20260916000000_allow_notion_tact_connections.sql";
 
 function readRepoFile(relativePath: string): string {
   return readFileSync(join(REPO_ROOT, relativePath), "utf-8");
@@ -26,6 +26,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   const allowedServices = extractAllowedServices(migration);
   const gmail: IntegrationService = "gmail";
   const slack: IntegrationService = "slack";
+  const notion: IntegrationService = "notion";
 
   results.push(check(
     "[Connection schema] prior tact_connections constraint allowed exactly slack",
@@ -33,26 +34,27 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   ));
 
   results.push(check(
-    "[Connection schema] migration replaces the named service constraint with slack and canonical gmail",
+    "[Connection schema] migration replaces the named service constraint with slack, gmail, and canonical notion",
     /drop\s+constraint\s+tact_connections_service_check/i.test(migration) &&
       /add\s+constraint\s+tact_connections_service_check/i.test(migration) &&
-      allowedServices.length === 2 &&
+      allowedServices.length === 3 &&
       allowedServices.includes("slack") &&
-      allowedServices.includes("gmail")
+      allowedServices.includes("gmail") &&
+      allowedServices.includes("notion")
   ));
 
   results.push(check(
     "[Connection schema] unsupported services remain outside the database allowlist",
-    !allowedServices.includes("notion") &&
-      !allowedServices.includes("google_drive") &&
+    !allowedServices.includes("google_drive") &&
       !allowedServices.includes("random_service")
   ));
 
   results.push(check(
     "[Connection schema] TypeScript and migration canonical service lists stay aligned",
-    gmail === "gmail" &&
+      gmail === "gmail" &&
       slack === "slack" &&
-      /export type IntegrationService = "slack" \| "gmail";/.test(canonicalTypes)
+      notion === "notion" &&
+      /export type IntegrationService = "slack" \| "gmail" \| "notion";/.test(canonicalTypes)
   ));
 
   results.push(check(

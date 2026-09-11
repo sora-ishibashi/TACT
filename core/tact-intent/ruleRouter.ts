@@ -98,11 +98,22 @@ function looksLikeSlackListChannelsRequest(trimmed: string): boolean {
 
 const GMAIL_TOPIC_PATTERN = /gmail|メール|mail/i;
 const GMAIL_READ_ACTION_PATTERN = /(検索|探し|確認|見せ|読み|recent|search|find|check)/i;
+const NOTION_TOPIC_PATTERN = /notion|ノーション/i;
+const NOTION_READ_PAGE_ACTION_PATTERN = /(読ん|読み|読んで|確認)/i;
+const NOTION_SEARCH_ACTION_PATTERN = /(検索|探し|探して|find|search)/i;
 
 function looksLikeGmailSearchMessagesRequest(trimmed: string): boolean {
 
   return GMAIL_TOPIC_PATTERN.test(trimmed) && GMAIL_READ_ACTION_PATTERN.test(trimmed);
 
+}
+
+function looksLikeNotionReadPageRequest(trimmed: string): boolean {
+  return NOTION_TOPIC_PATTERN.test(trimmed) && NOTION_READ_PAGE_ACTION_PATTERN.test(trimmed);
+}
+
+function looksLikeNotionSearchRequest(trimmed: string): boolean {
+  return NOTION_TOPIC_PATTERN.test(trimmed) && NOTION_SEARCH_ACTION_PATTERN.test(trimmed);
 }
 
 export type SlackSendExtractionResult =
@@ -479,6 +490,24 @@ export function classifyIntent(input: string, previousInput?: string): IntentDec
     return {
       intent: "integration_gmail_search_messages",
       reason: "matched gmail search pattern (Gmail/email + search/read action)",
+    };
+
+  }
+
+  if (looksLikeNotionReadPageRequest(trimmed)) {
+
+    return {
+      intent: "integration_notion_read_page",
+      reason: "matched Notion page read pattern",
+    };
+
+  }
+
+  if (looksLikeNotionSearchRequest(trimmed)) {
+
+    return {
+      intent: "integration_notion_search",
+      reason: "matched Notion search pattern",
     };
 
   }

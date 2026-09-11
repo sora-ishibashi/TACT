@@ -25,6 +25,8 @@ import {
   runIntegrationSlackSendMessageCapability,
   runIntegrationSlackListChannelsCapability,
   runIntegrationGmailSearchMessagesCapability,
+  runIntegrationNotionSearchCapability,
+  runIntegrationNotionReadPageCapability,
 } from "./tact-integration";
 
 let bootstrapped = false;
@@ -59,6 +61,9 @@ export function bootstrapTactCapabilities(): void {
   registerCapability("integration.slack.list_channels", runIntegrationSlackListChannelsCapability);
 
   registerCapability("integration.gmail.search_messages", runIntegrationGmailSearchMessagesCapability);
+
+  registerCapability("integration.notion.search", runIntegrationNotionSearchCapability);
+  registerCapability("integration.notion.read_page", runIntegrationNotionReadPageCapability);
 
   bootstrapped = true;
 

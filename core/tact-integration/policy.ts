@@ -74,6 +74,8 @@ const POLICY_ALLOWLIST: readonly IntegrationActionPolicy[] = [
   { service: "slack", operation: "send_message", riskClass: "write" },
   { service: "slack", operation: "list_channels", riskClass: "read" },
   { service: "gmail", operation: "search_messages", riskClass: "read" },
+  { service: "notion", operation: "search", riskClass: "read" },
+  { service: "notion", operation: "read_page", riskClass: "read" },
 ];
 
 // service+operationの組み合わせで完全一致するpolicyだけを返す。

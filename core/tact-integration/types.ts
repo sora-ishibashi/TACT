@@ -28,7 +28,7 @@
 // =========================
 
 // Phase C1ではSlackのみ(絶対条件: 巨大なIntegrationを一度に作らない)。
-export type IntegrationService = "slack" | "gmail";
+export type IntegrationService = "slack" | "gmail" | "notion";
 
 export interface IntegrationAction {
 
@@ -95,6 +95,27 @@ export interface GmailMessageSummary {
 
 export interface GmailSearchMessagesResult {
   messages: GmailMessageSummary[];
+}
+
+export interface NotionSearchResultItem {
+  objectType: "page" | "database" | "unknown";
+  id: string;
+  title: string;
+  url?: string;
+  lastEditedTime?: string;
+  parentHint?: string;
+}
+
+export interface NotionSearchResult {
+  results: NotionSearchResultItem[];
+}
+
+export interface NotionReadPageResult {
+  pageId: string;
+  title?: string;
+  url?: string;
+  text: string;
+  lastEditedTime?: string;
 }
 
 // =========================

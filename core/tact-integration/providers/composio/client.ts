@@ -58,6 +58,12 @@ export function getGmailToolkitVersion(): string {
 
 }
 
+export function getNotionToolkitVersion(): string {
+
+  return process.env.COMPOSIO_NOTION_TOOLKIT_VERSION || "latest";
+
+}
+
 export function getComposioClient(): Composio | null {
 
   if (!isComposioConfigured()) {
@@ -73,6 +79,7 @@ export function getComposioClient(): Composio | null {
     toolkitVersions: {
       slack: getSlackToolkitVersion(),
       gmail: getGmailToolkitVersion(),
+      notion: getNotionToolkitVersion(),
     },
   });
 

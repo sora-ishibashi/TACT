@@ -5,6 +5,8 @@ import type { CapabilityInvocationRequest, CapabilityInvocationResult } from "..
 const GMAIL_SERVICE = "gmail";
 const GMAIL_SEARCH_MAX_QUERY_LENGTH = 200;
 const GMAIL_SEARCH_DEFAULT_MAX_RESULTS = 10;
+const NOTION_SERVICE = "notion";
+const NOTION_SEARCH_DEFAULT_MAX_RESULTS = 10;
 
 // LIVE-1A Gmail Query Extraction Fix: 「」『』""''のいずれかで囲まれた
 // 引用部分を、Slack send_message抽出(SLACK_QUOTED_TEXT_PATTERN、
@@ -151,6 +153,111 @@ export async function runIntegrationGmailSearchMessagesCapability(
     },
   };
 
+}
+
+function extractNotionQuotedPhrase(input: string): string | undefined {
+  const patterns = [/(?:\u300c)(.*?)(?:\u300d)/gu, /"(.*?)"/gu, /'(.*?)'/gu];
+  const phrases = patterns.flatMap((pattern) =>
+    [...input.matchAll(pattern)].map((match) => match[1].trim()).filter(Boolean)
+  );
+
+  return phrases.length === 1 && phrases[0].length <= GMAIL_SEARCH_MAX_QUERY_LENGTH
+    ? phrases[0]
+    : undefined;
+}
+
+function extractNotionPhrase(input: string): string | undefined {
+  const quoted = extractNotionQuotedPhrase(input);
+
+  if (quoted) {
+    return quoted;
+  }
+
+  const phrase = input
+    .replace(/notion|\u30ce\u30fc\u30b7\u30e7\u30f3/giu, " ")
+    .replace(/(?:\u304b\u3089|\u3067|\u306e)?(?:\u63a2\u3057\u3066|\u691c\u7d22(?:\u3057\u3066)?|\u8aad\u3093\u3067|\u78ba\u8a8d\u3057\u3066)[^\s]*$/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+
+  return phrase && phrase.length <= GMAIL_SEARCH_MAX_QUERY_LENGTH ? phrase : undefined;
+}
+
+export function extractNotionSearchQuery(input: string): string | undefined {
+  return extractNotionPhrase(input);
+}
+
+export function extractNotionReadPageReference(input: string): string | undefined {
+  return extractNotionPhrase(input);
+}
+
+function readOnlyIntegrationCapability(
+  service: string,
+  operation: string,
+  input: Record<string, unknown>,
+  summary: string,
+  output: string
+): CapabilityInvocationResult {
+  const decision = evaluatePolicyDecision(service, operation);
+
+  if (decision.decision !== "allow") {
+    return { success: false, errorMessage: "この参照操作は現在利用できません。" };
+  }
+
+  return {
+    success: true,
+    output,
+    integrationRequirement: {
+      requiresApproval: false,
+      policyDecision: decision.decision,
+      policyReasonCode: decision.reasonCode,
+      riskClass: decision.riskClass,
+      action: {
+        kind: "integration_action",
+        summary,
+        metadata: { service, operation, input },
+      },
+    },
+  };
+}
+
+export async function runIntegrationNotionSearchCapability(
+  request: CapabilityInvocationRequest
+): Promise<CapabilityInvocationResult> {
+  const query = extractNotionSearchQuery(request.query);
+
+  if (!query) {
+    return { success: false, errorMessage: "Notion検索には対象の語句が必要です。" };
+  }
+
+  return readOnlyIntegrationCapability(
+    NOTION_SERVICE,
+    "search",
+    { query, maxResults: NOTION_SEARCH_DEFAULT_MAX_RESULTS },
+    "Notionを検索する",
+    "Notion を検索します。"
+  );
+}
+
+export async function runIntegrationNotionReadPageCapability(
+  request: CapabilityInvocationRequest
+): Promise<CapabilityInvocationResult> {
+  const pageId = extractNotionReadPageReference(request.query);
+
+  if (!pageId) {
+    return { success: false, errorMessage: "Notionページを読むには対象のページ名が必要です。" };
+  }
+
+  // The deterministic Slack syntax supplies a title-like page reference.
+  // The Composio adapter resolves it only when it is a unique match, then
+  // still performs the canonical bounded page read. Callers never supply
+  // provider account IDs, connection IDs, or provider parameters.
+  return readOnlyIntegrationCapability(
+    NOTION_SERVICE,
+    "read_page",
+    { pageId },
+    "Notionページを読む",
+    "Notionページを確認します。"
+  );
 }
 
 // =========================

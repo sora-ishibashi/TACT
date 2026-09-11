@@ -123,10 +123,11 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   results.push(
     check(
-      "[O] integrationCatalogは現時点でGmail/Slackのちょうど2 entryのみを持つ(Notion/Drive/Calendar等へは今回拡張しない)",
-      INTEGRATION_CATALOG.length === 2 &&
+      "[O] integrationCatalogはGmail/Slack/Notionのちょうど3 entryのみを持つ",
+      INTEGRATION_CATALOG.length === 3 &&
         INTEGRATION_CATALOG.some((e) => e.service === "gmail") &&
-        INTEGRATION_CATALOG.some((e) => e.service === "slack")
+        INTEGRATION_CATALOG.some((e) => e.service === "slack") &&
+        INTEGRATION_CATALOG.some((e) => e.service === "notion")
     )
   );
 

@@ -270,7 +270,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     const mapped = mapSlackActionToComposioTool({
       // @ts-expect-error -- 意図的に未対応serviceを渡す防御的テスト
-      service: "notion",
+      service: "notion" as "google_drive",
       operation: "send_message",
       input: {},
     });

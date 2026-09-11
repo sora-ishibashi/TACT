@@ -229,11 +229,11 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   // ---- [Case D4] unknown service -> deny ----
   {
-    const decision = evaluatePolicyDecision("notion", "send_message");
+    const decision = evaluatePolicyDecision("google_drive", "send_message");
 
     results.push(
       check(
-        "[Case D4] 未登録service(notion)はdecision==='deny'",
+        "[Case D4] 未登録service(google_drive)はdecision==='deny'",
         decision.decision === "deny"
       )
     );

@@ -1894,6 +1894,56 @@ export function formatIntegrationReadResultAnswer(result: OrchestrationResult): 
 
   }
 
+  if (readResult.service === "notion" && readResult.operation === "search") {
+
+    try {
+      const parsed = JSON.parse(readResult.output) as { results?: unknown } | null;
+      const items = Array.isArray(parsed?.results) ? parsed.results : [];
+
+      if (items.length === 0) {
+        return "Notionで一致するページは見つかりませんでした。";
+      }
+
+      const lines = items.slice(0, 5).flatMap((item) => {
+        if (!item || typeof item !== "object") {
+          return [];
+        }
+
+        const title = typeof (item as { title?: unknown }).title === "string"
+          ? (item as { title: string }).title
+          : "無題";
+        const lastEditedTime = typeof (item as { lastEditedTime?: unknown }).lastEditedTime === "string"
+          ? (item as { lastEditedTime: string }).lastEditedTime
+          : undefined;
+
+        return [`• ${title}${lastEditedTime ? `\n  最終更新: ${lastEditedTime.slice(0, 10)}` : ""}`];
+      });
+
+      return lines.length > 0
+        ? `Notionで ${items.length} 件見つかりました。\n${lines.join("\n")}`
+        : undefined;
+    } catch {
+      return undefined;
+    }
+
+  }
+
+  if (readResult.service === "notion" && readResult.operation === "read_page") {
+
+    try {
+      const parsed = JSON.parse(readResult.output) as { title?: unknown; text?: unknown } | null;
+      const title = typeof parsed?.title === "string" ? parsed.title : "Notionページ";
+      const text = typeof parsed?.text === "string" ? parsed.text.trim() : "";
+
+      return text
+        ? `「${title}」を確認しました。\n\n${text.slice(0, 2_000)}`
+        : `「${title}」を確認しました。本文から読み取れるテキストはありませんでした。`;
+    } catch {
+      return undefined;
+    }
+
+  }
+
   return undefined;
 
 }
@@ -1921,6 +1971,7 @@ export function formatIntegrationReadResultAnswer(result: OrchestrationResult): 
 const INTEGRATION_SERVICE_LABELS: Record<string, string> = {
   gmail: "Gmail",
   slack: "Slack",
+  notion: "Notion",
 };
 
 // 表示用のprovider名(未知serviceでも安全にfallbackする——固定
@@ -1935,6 +1986,8 @@ function integrationServiceLabel(service: string): string {
 const READ_OPERATION_VERBS: Record<string, string> = {
   search_messages: "検索",
   list_channels: "取得",
+  search: "検索",
+  read_page: "読み取り",
 };
 
 function readOperationVerb(operation: string): string {

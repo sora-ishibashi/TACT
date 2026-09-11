@@ -431,7 +431,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   {
     const outcome = await disconnectIntegrationConnection(
-      { userId: OWNER_USER_ID, accessToken: OWNER_ACCESS_TOKEN, service: "notion" },
+      { userId: OWNER_USER_ID, accessToken: OWNER_ACCESS_TOKEN, service: "google_drive" as never },
       { provider: makeFakeProvider(), listConnectionsForUser: async () => [], updateConnectionStatus: async () => {} }
     );
 

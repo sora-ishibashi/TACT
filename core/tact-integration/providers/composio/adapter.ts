@@ -9,6 +9,7 @@ import {
 import {
   getComposioClient,
   getGmailToolkitVersion,
+  getNotionToolkitVersion,
   getSlackToolkitVersion,
   toComposioUserId,
 } from "./client";
@@ -17,6 +18,15 @@ import {
   mapComposioGmailSearchResultToCanonical,
   mapGmailActionToComposioTool,
 } from "./mappings/gmail";
+import {
+  mapComposioNotionReadPageResultToCanonical,
+  mapComposioNotionSearchResultToCanonical,
+  mapNotionActionToComposioTool,
+  NOTION_FETCH_ALL_BLOCK_CONTENTS_TOOL_SLUG,
+  NOTION_READ_MAX_BLOCKS,
+  NOTION_READ_MAX_DEPTH,
+  NOTION_RETRIEVE_PAGE_TOOL_SLUG,
+} from "./mappings/notion";
 import type {
   IntegrationExecutionRequest,
   IntegrationExecutionResult,
@@ -380,6 +390,30 @@ export function buildExecutionResultFromToolResult(
 
   }
 
+  if (action.service === "notion" && action.operation === "search") {
+
+    const canonicalized = mapComposioNotionSearchResultToCanonical(result.data);
+
+    if (!canonicalized.ok) {
+      return {
+        status: "failed",
+        error: {
+          code: "provider_execution_failed",
+          message: canonicalized.reason,
+          retryable: false,
+        },
+        providerExecutionRef: result.logId ?? null,
+      };
+    }
+
+    return {
+      status: "completed",
+      providerExecutionRef: result.logId ?? null,
+      output: canonicalized.result,
+    };
+
+  }
+
   return {
     status: "completed",
     providerExecutionRef: result.logId ?? null,
@@ -407,7 +441,11 @@ async function executeComposio(
 
   }
 
-  if (request.action.service !== "slack" && request.action.service !== "gmail") {
+  if (
+    request.action.service !== "slack" &&
+    request.action.service !== "gmail" &&
+    request.action.service !== "notion"
+  ) {
 
     return {
       status: "failed",
@@ -420,28 +458,147 @@ async function executeComposio(
 
   }
 
-  const mapped =
-    request.action.service === "slack"
+  const toolkitVersion = request.action.service === "slack"
+    ? getSlackToolkitVersion()
+    : request.action.service === "gmail"
+      ? getGmailToolkitVersion()
+      : getNotionToolkitVersion();
+
+  try {
+
+    if (request.action.service === "notion") {
+      const mapped = mapNotionActionToComposioTool(request.action);
+
+      if (!mapped.ok) {
+        return {
+          status: "failed",
+          error: { code: "invalid_action", message: mapped.reason, retryable: false },
+        };
+      }
+
+      const executeNotionTool = (invocation: { slug: string; arguments: Record<string, unknown> }) =>
+        client.tools.execute(invocation.slug, {
+          userId: toComposioUserId(request.userId),
+          connectedAccountId: request.providerConnectionRef,
+          arguments: invocation.arguments,
+          version: toolkitVersion,
+          dangerouslySkipVersionCheck: toolkitVersion === "latest",
+        });
+
+      if (mapped.kind === "search") {
+        const result = await executeNotionTool(mapped.invocation);
+        return buildExecutionResultFromToolResult(request.action, result);
+      }
+
+      let pageInvocation = mapped.kind === "read_page" ? mapped.pageInvocation : undefined;
+      let blocksInvocation = mapped.kind === "read_page" ? mapped.blocksInvocation : undefined;
+
+      if (mapped.kind === "read_page_by_title") {
+        const searchResult = await executeNotionTool(mapped.searchInvocation);
+
+        if (!searchResult.successful) {
+          return buildExecutionResultFromToolResult(request.action, searchResult);
+        }
+
+        const canonicalizedSearch = mapComposioNotionSearchResultToCanonical(searchResult.data);
+
+        if (!canonicalizedSearch.ok) {
+          return {
+            status: "failed",
+            error: {
+              code: "provider_execution_failed",
+              message: canonicalizedSearch.reason,
+              retryable: false,
+            },
+            providerExecutionRef: searchResult.logId ?? null,
+          };
+        }
+
+        const requestedTitle = mapped.searchInvocation.arguments.query as string;
+        const matches = canonicalizedSearch.result.results.filter(
+          (item) => item.objectType === "page" && item.title === requestedTitle
+        );
+
+        if (matches.length !== 1) {
+          return {
+            status: "failed",
+            error: {
+              code: "provider_execution_failed",
+              message: matches.length === 0
+                ? "No matching Notion page was found"
+                : "More than one Notion page matched the requested title",
+              retryable: false,
+            },
+            providerExecutionRef: searchResult.logId ?? null,
+          };
+        }
+
+        pageInvocation = {
+          slug: NOTION_RETRIEVE_PAGE_TOOL_SLUG,
+          arguments: { page_id: matches[0].id },
+        };
+        blocksInvocation = {
+          slug: NOTION_FETCH_ALL_BLOCK_CONTENTS_TOOL_SLUG,
+          arguments: {
+            block_id: matches[0].id,
+            recursive: true,
+            max_depth: NOTION_READ_MAX_DEPTH,
+            page_size: 100,
+            max_blocks: NOTION_READ_MAX_BLOCKS,
+          },
+        };
+      }
+
+      // A page read is one canonical TACT operation. The provider-specific
+      // metadata and block calls are intentionally contained in this adapter.
+      const pageResult = await executeNotionTool(pageInvocation!);
+
+      if (!pageResult.successful) {
+        return buildExecutionResultFromToolResult(request.action, pageResult);
+      }
+
+      const blocksResult = await executeNotionTool(blocksInvocation!);
+
+      if (!blocksResult.successful) {
+        return buildExecutionResultFromToolResult(request.action, blocksResult);
+      }
+
+      const pageId = pageInvocation!.arguments.page_id as string;
+      const canonicalized = mapComposioNotionReadPageResultToCanonical(
+        pageId,
+        pageResult.data,
+        blocksResult.data
+      );
+
+      if (!canonicalized.ok) {
+        return {
+          status: "failed",
+          error: {
+            code: "provider_execution_failed",
+            message: canonicalized.reason,
+            retryable: false,
+          },
+          providerExecutionRef: blocksResult.logId ?? pageResult.logId ?? null,
+        };
+      }
+
+      return {
+        status: "completed",
+        providerExecutionRef: blocksResult.logId ?? pageResult.logId ?? null,
+        output: canonicalized.result,
+      };
+    }
+
+    const mapped = request.action.service === "slack"
       ? mapSlackActionToComposioTool(request.action)
       : mapGmailActionToComposioTool(request.action);
 
-  if (!mapped.ok) {
-
-    return {
-      status: "failed",
-      error: {
-        code: "invalid_action",
-        message: mapped.reason,
-        retryable: false,
-      },
-    };
-
-  }
-
-  const toolkitVersion =
-    request.action.service === "slack" ? getSlackToolkitVersion() : getGmailToolkitVersion();
-
-  try {
+    if (!mapped.ok) {
+      return {
+        status: "failed",
+        error: { code: "invalid_action", message: mapped.reason, retryable: false },
+      };
+    }
 
     // 絶対条件(Section20): 1回だけ呼ぶ。このtry/catchブロックの中で
     // 自ら再試行することは無い。

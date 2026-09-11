@@ -21,7 +21,7 @@
 // いることを確認してからentryを追加すること(このcatalogはUI表示
 // 専用であり、server側のサポート状況を保証するものではない)。
 
-export type CanonicalIntegrationService = "gmail" | "slack";
+export type CanonicalIntegrationService = "gmail" | "slack" | "notion";
 
 export interface IntegrationCatalogEntry {
 
@@ -52,6 +52,12 @@ export const INTEGRATION_CATALOG: readonly IntegrationCatalogEntry[] = [
     service: "slack",
     name: "Slack",
     description: "TACTへの指示・通知に使用",
+    enabled: true,
+  },
+  {
+    service: "notion",
+    name: "Notion",
+    description: "社内情報やドキュメントの参照に使用",
     enabled: true,
   },
 ];
