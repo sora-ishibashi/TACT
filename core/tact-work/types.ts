@@ -561,7 +561,12 @@ export type AuditEventType =
   | "provider.failed"
   | "context.requested"
   | "context.retrieved"
-  | "context.failed";
+  | "context.failed"
+  | "context.resolution.planned"
+  | "context.source.requested"
+  | "context.source.completed"
+  | "context.source.failed"
+  | "context.pack.built";
 
 export const AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
   "work.created",
@@ -581,6 +586,11 @@ export const AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
   "context.requested",
   "context.retrieved",
   "context.failed",
+  "context.resolution.planned",
+  "context.source.requested",
+  "context.source.completed",
+  "context.source.failed",
+  "context.pack.built",
 ];
 
 export interface AuditEvent {

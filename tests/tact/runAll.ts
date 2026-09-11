@@ -77,6 +77,7 @@ import { run as runTactConversationApi } from "./conversation/tactConversationAp
 import { run as runTactConversationOrchestration } from "./conversation/tactConversationOrchestration.test";
 import { run as runWorkLinkRepair } from "./conversation/workLinkRepair.test";
 import { run as runIntegrationReadResult } from "./conversation/integrationReadResult.test";
+import { run as runContextResolution } from "./context/contextResolution.test";
 import { run as runTactConversationClarificationAnswer } from "./conversation/tactConversationClarificationAnswer.test";
 import { run as runTactConversationResearchCapability } from "./conversation/tactConversationResearchCapability.test";
 import { run as runConnectionResolutionActiveOnly } from "./conversation/connectionResolutionActiveOnly.test";
@@ -217,6 +218,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "conversation/taskResumeExecution", run: runTaskResumeExecution },
   { name: "conversation/workLinkRepair", run: runWorkLinkRepair },
   { name: "conversation/integrationReadResult", run: runIntegrationReadResult },
+  { name: "context/contextResolution", run: runContextResolution },
   { name: "conversation/tactConversationClarificationAnswer", run: runTactConversationClarificationAnswer },
   { name: "conversation/tactConversationResearchCapability", run: runTactConversationResearchCapability },
   { name: "conversation/connectionResolutionActiveOnly", run: runConnectionResolutionActiveOnly },

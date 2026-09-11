@@ -115,7 +115,10 @@ import type { AttachmentEvidence } from "../tact-attachment/types";
 // LW-P3: attachmentEvidenceと並行するLocal Workspace Evidence。
 import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
 import type { ConversationEvidence } from "./conversationEvidence";
-import { formatConversationEvidenceAcknowledgement } from "./conversationEvidence";
+import {
+  formatContextResolutionAnswer,
+  planContextResolution,
+} from "../tact-context-resolution";
 import type { ResearchPresentation } from "../tact-analysis/presentation/types";
 import { mergeResearchPresentationBlocks } from "../tact-analysis/presentation/artifactIntegration";
 import type { ResearchFrameworkArtifact } from "../tact-analysis/framework/types";
@@ -2632,6 +2635,8 @@ async function runNormalTurn(
   // OrchestrationRequestの中身自体は既存(Phase1〜90)と完全に同じ
   // ——resolveAndRunWork()はWork解決/Task・Run永続化を行うだけで、
   // Orchestratorへ渡すrequestを一切変更しない。
+  const contextResolutionPlan = planContextResolution(orchestrationInput, conversationEvidence);
+
   let result = await resolveAndRunWork(
     conversation,
     accessToken,
@@ -2643,6 +2648,7 @@ async function runNormalTurn(
       attachmentEvidence,
       workspaceEvidence,
       conversationEvidence,
+      ...(contextResolutionPlan?.kind === "ready" ? { contextResolutionPlan } : {}),
     },
     orchestrationInput,
     source
@@ -2667,11 +2673,13 @@ async function runNormalTurn(
     result = { ...result, answer: integrationReadAnswer };
   }
 
-  const contextAcknowledgement = conversationEvidence
-    ? formatConversationEvidenceAcknowledgement(orchestrationInput, conversationEvidence)
-    : undefined;
-  if (contextAcknowledgement) {
-    result = { ...result, answer: contextAcknowledgement };
+  if (contextResolutionPlan?.kind === "ambiguous") {
+    result = {
+      ...result,
+      answer: contextResolutionPlan.clarification ?? "対象を特定できませんでした。もう少し情報を教えてください。",
+    };
+  } else if (result.contextResolution) {
+    result = { ...result, answer: formatContextResolutionAnswer(result.contextResolution) };
   }
 
   const plan = planConversationTurn(result);

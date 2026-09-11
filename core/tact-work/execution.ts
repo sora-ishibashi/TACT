@@ -28,6 +28,10 @@ import { buildApprovalSubject, type ApprovalSubject } from "./approvalIntegrity"
 // emitterである(Step1: 「evaluatePolicyDecision()を呼んだだけでは
 // なく、live callerがそのDecisionを受理した地点」)。
 import { emitAuditSafely as defaultEmitAuditSafely } from "./audit";
+import {
+  buildContextResolutionResult,
+  type ContextReadOutcome,
+} from "../tact-context-resolution";
 
 // =========================
 // TACT Work — Work Execution Boundary (Architecture Migration Phase B2)
@@ -340,6 +344,25 @@ export async function runWorkTurn(
     action: TaskApprovalAction;
   }[] = [];
 
+  // CONTEXT-P2 records only normalized action outcomes in memory for the
+  // current turn. The provider output is never copied to audit metadata.
+  const contextReadOutcomes: ContextReadOutcome[] = [];
+  const contextPlan = orchestrationRequest.contextResolutionPlan;
+
+  if (contextPlan) {
+    await deps.emitAuditEvent(
+      {
+        workId: work.id,
+        category: "context",
+        eventType: "context.resolution.planned",
+        actor: { kind: "system", id: "context-resolution" },
+        details: { sourceCount: Object.keys(contextPlan.sources).length },
+      },
+      userId,
+      accessToken
+    );
+  }
+
   // Fast Port P3a(Human Interaction Foundation): policyDecision===
   // "require_input"だったIntegration Taskを集める。approvalRequirements/
   // integrationReadExecutionsと同じく「どのWorkTaskが対象か」という
@@ -517,6 +540,21 @@ export async function runWorkTurn(
 
         }
 
+        if (contextPlan && (service === "notion" || service === "gmail")) {
+          await deps.emitAuditEvent(
+            {
+              workId: work.id,
+              taskId: workTaskId,
+              category: "context",
+              eventType: "context.source.requested",
+              actor: { kind: "system", id: "context-resolution" },
+              details: { sourceType: service, operation },
+            },
+            userId,
+            accessToken
+          );
+        }
+
         const connectionResolution = await deps.resolveIntegrationConnection({
           service,
           userId,
@@ -524,6 +562,33 @@ export async function runWorkTurn(
         });
 
         if (connectionResolution.status !== "single") {
+
+          if (contextPlan && (service === "notion" || service === "gmail")) {
+            const contextOperation = operation === "search" || operation === "read_page" || operation === "search_messages"
+              ? operation
+              : undefined;
+            if (contextOperation) {
+              contextReadOutcomes.push({
+                service,
+                operation: contextOperation,
+                status: "unavailable",
+              });
+              await deps.emitAuditEvent(
+                {
+                  workId: work.id,
+                  taskId: workTaskId,
+                  category: "context",
+                  eventType: "context.source.failed",
+                  actor: { kind: "system", id: "context-resolution" },
+                  details: { sourceType: service, operation: contextOperation, status: "unavailable" },
+                },
+                userId,
+                accessToken
+              );
+              await deps.updateTaskStatus(work.id, userId, accessToken, workTaskId, "cancelled");
+              return;
+            }
+          }
 
           // Connection未解決。Approvalも作らず、read実行もキューしない
           // (integrationConnectionIssuesへpushするだけ)。Taskは
@@ -882,6 +947,42 @@ export async function runWorkTurn(
         action,
       });
 
+      const metadata = action.metadata as { service?: unknown; operation?: unknown } | undefined;
+      const contextService = metadata?.service === "notion" || metadata?.service === "gmail"
+        ? metadata.service
+        : undefined;
+      const contextOperation = metadata?.operation === "search" || metadata?.operation === "read_page" || metadata?.operation === "search_messages"
+        ? metadata.operation
+        : undefined;
+      if (contextPlan && contextService && contextOperation) {
+        contextReadOutcomes.push({
+          service: contextService,
+          operation: contextOperation,
+          status: executionOutcome.status === "completed" ? "completed" : "failed",
+          ...(executionOutcome.status === "completed" && executionOutcome.resultOutput
+            ? { output: executionOutcome.resultOutput }
+            : {}),
+        });
+        await deps.emitAuditEvent(
+          {
+            workId: work.id,
+            taskId: workTaskId,
+            category: "context",
+            eventType: executionOutcome.status === "completed"
+              ? "context.source.completed"
+              : "context.source.failed",
+            actor: { kind: "system", id: "context-resolution" },
+            details: {
+              sourceType: contextService,
+              operation: contextOperation,
+              status: executionOutcome.status === "completed" ? "available" : "failed",
+            },
+          },
+          userId,
+          accessToken
+        );
+      }
+
       // Architecture Migration Phase C2.2: 呼び出し元(Bot/Web両方が
       // 経由するConversation層)が、read結果を観測できるようにする
       // (result.pendingApprovalと同じ既存pattern)。複数件ある場合は
@@ -891,8 +992,6 @@ export async function runWorkTurn(
       // (core/tact-integration/execution.tsのgeneric core)が既に
       // 確定させている——ここではOrchestrationResultへの反映だけを行う。
       if (executionOutcome.status === "completed" && !result.integrationReadResult) {
-
-        const metadata = action.metadata as { service?: unknown; operation?: unknown } | undefined;
 
         result = {
           ...result,
@@ -917,8 +1016,6 @@ export async function runWorkTurn(
         !result.integrationReadFailure
       ) {
 
-        const metadata = action.metadata as { service?: unknown; operation?: unknown } | undefined;
-
         result = {
           ...result,
           integrationReadFailure: {
@@ -932,6 +1029,34 @@ export async function runWorkTurn(
 
     }
 
+  }
+
+  if (contextPlan) {
+    const contextResolution = buildContextResolutionResult(
+      contextPlan,
+      orchestrationRequest.conversationEvidence,
+      contextReadOutcomes
+    );
+    result = {
+      ...result,
+      contextResolution,
+    };
+    await deps.emitAuditEvent(
+      {
+        workId: work.id,
+        category: "context",
+        eventType: "context.pack.built",
+        actor: { kind: "system", id: "context-resolution" },
+        details: {
+          evidenceCount: contextResolution.pack.metrics.evidenceCount,
+          normalizedCharCount: contextResolution.pack.metrics.totalChars,
+          truncated: contextResolution.pack.metrics.truncated,
+          sourceCount: Object.keys(contextResolution.sources).length,
+        },
+      },
+      userId,
+      accessToken
+    );
   }
 
   // Fast Port P3a(Human Interaction Foundation): clarificationRequirements

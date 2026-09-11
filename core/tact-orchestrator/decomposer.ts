@@ -106,6 +106,28 @@ export function decomposeTask(
   request: OrchestrationRequest
 ): Task[] {
 
+  const contextPlan = request.contextResolutionPlan;
+  if (contextPlan?.kind === "ready") {
+    const tasks: Task[] = [];
+
+    if (contextPlan.sources.notion) {
+      const query = contextPlan.sources.notion.query;
+      tasks.push(makeTask(`Notionで「${query}」を検索して`, "integration.notion.search"));
+      // The adapter resolves title references only when unique before the
+      // bounded page read; ambiguous search results are never selected here.
+      tasks.push(makeTask(`Notionの「${query}」を読んで`, "integration.notion.read_page"));
+    }
+
+    if (contextPlan.sources.gmail) {
+      tasks.push(makeTask(
+        `Gmailから「${contextPlan.sources.gmail.query}」を検索して`,
+        "integration.gmail.search_messages"
+      ));
+    }
+
+    return tasks;
+  }
+
   const input = request.input.trim();
 
   const compareMatch = input.match(COMPARE_PATTERN);

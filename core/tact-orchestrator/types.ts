@@ -34,6 +34,7 @@ import type { Provider } from "../agent/types";
 import type { LLMUsage, LLMCost } from "../llm/types";
 import type { AttachmentEvidence } from "../tact-attachment/types";
 import type { ConversationEvidence } from "../tact-conversation/conversationEvidence";
+import type { ContextResolutionPlan, ContextResolutionResult } from "../tact-context-resolution";
 // LW-P3: attachmentEvidenceと並行する、Local Workspace由来の
 // Evidence(type-onlyのimportのため、Browser固有実装への依存は生じない)。
 import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
@@ -166,6 +167,10 @@ export interface OrchestrationRequest {
   // Untrusted conversational evidence. The current authenticated request remains
   // the only actionable instruction.
   conversationEvidence?: ConversationEvidence;
+
+  // CONTEXT-P2: server-derived, read-only evidence plan. It contains neither
+  // a connection identity nor provider-specific parameters.
+  contextResolutionPlan?: ContextResolutionPlan;
 
   // Phase86: 直前Turnのuser発言(存在する場合のみ)。decomposeTask()が
   // classifyIntent()へ渡し、「具体例を5件追加で確認してください」の
@@ -495,6 +500,10 @@ export interface OrchestrationResult {
   // には一切影響しない(絶対条件、commander.tsの呼び出し順序でも
   // 構造的に保証している)。Candidateが1件も生成されなかった場合は
   // 空配列(undefinedにはしない、「何も対象が無かった」ことを明示する)。
+  // CONTEXT-P2: normalized and bounded evidence only. No raw provider
+  // response, provider account identity, or credential crosses this boundary.
+  contextResolution?: ContextResolutionResult;
+
   memoryWrites: MemoryWriteOutcome[];
 
   // Phase 28: Phase27のevaluateTaskExecution()(evaluation.ts)を
