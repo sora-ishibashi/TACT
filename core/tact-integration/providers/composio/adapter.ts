@@ -22,6 +22,9 @@ import {
   mapComposioNotionReadPageResultToCanonical,
   mapComposioNotionSearchResultToCanonical,
   mapNotionActionToComposioTool,
+  createNotionSearchIndexFallbackInvocation,
+  filterNotionSearchIndexFallbackResults,
+  hasExactNormalizedNotionTitleMatch,
   NOTION_FETCH_ALL_BLOCK_CONTENTS_TOOL_SLUG,
   NOTION_READ_MAX_BLOCKS,
   NOTION_READ_MAX_DEPTH,
@@ -298,7 +301,7 @@ export function normalizeComposioError(
 // Composio公式SDKのtools.execute()戻り値のうち、このAdapterが実際に
 // 使うfieldだけの最小型(SDK側の完全な型をここへ再エクスポートしない、
 // 既存方針を踏襲)。
-interface ComposioToolExecuteResult {
+export interface ComposioToolExecuteResult {
 
   successful: boolean;
 
@@ -308,6 +311,80 @@ interface ComposioToolExecuteResult {
 
   logId?: string | null;
 
+}
+
+type ExecuteNotionTool = (invocation: { slug: string; arguments: Record<string, unknown> }) =>
+  Promise<ComposioToolExecuteResult>;
+
+function failedNotionSearchResult(
+  reason: string,
+  providerExecutionRef: string | null | undefined
+): IntegrationExecutionResult {
+  return {
+    status: "failed",
+    error: { code: "provider_execution_failed", message: reason, retryable: false },
+    providerExecutionRef: providerExecutionRef ?? null,
+  };
+}
+
+// Notion's title index is eventually consistent for newly shared pages. Keep
+// this provider-specific recovery at the Composio boundary: canonical callers
+// still must supply a non-empty query and receive the same normalized shape.
+export async function executeNotionSearchWithIndexFallback(
+  action: IntegrationExecutionRequest["action"],
+  invocation: { slug: string; arguments: Record<string, unknown> },
+  executeNotionTool: ExecuteNotionTool
+): Promise<IntegrationExecutionResult> {
+  const primaryResult = await executeNotionTool(invocation);
+
+  if (!primaryResult.successful) {
+    return buildExecutionResultFromToolResult(action, primaryResult);
+  }
+
+  const primaryCanonicalized = mapComposioNotionSearchResultToCanonical(primaryResult.data);
+
+  if (!primaryCanonicalized.ok) {
+    return failedNotionSearchResult(primaryCanonicalized.reason, primaryResult.logId);
+  }
+
+  if (primaryCanonicalized.result.results.length > 0) {
+    return {
+      status: "completed",
+      providerExecutionRef: primaryResult.logId ?? null,
+      output: primaryCanonicalized.result,
+    };
+  }
+
+  const fallbackResult = await executeNotionTool(createNotionSearchIndexFallbackInvocation());
+
+  if (!fallbackResult.successful) {
+    return buildExecutionResultFromToolResult(action, fallbackResult);
+  }
+
+  const fallbackCanonicalized = mapComposioNotionSearchResultToCanonical(fallbackResult.data);
+
+  if (!fallbackCanonicalized.ok) {
+    return failedNotionSearchResult(fallbackCanonicalized.reason, fallbackResult.logId);
+  }
+
+  const query = invocation.arguments.query;
+  const maxResults = invocation.arguments.page_size;
+
+  if (typeof query !== "string" || typeof maxResults !== "number") {
+    return failedNotionSearchResult("Notion search invocation was malformed", fallbackResult.logId);
+  }
+
+  return {
+    status: "completed",
+    providerExecutionRef: fallbackResult.logId ?? primaryResult.logId ?? null,
+    output: {
+      results: filterNotionSearchIndexFallbackResults(
+        fallbackCanonicalized.result.results,
+        query,
+        maxResults
+      ),
+    },
+  };
 }
 
 // Architecture Migration Phase C2.2b: tools.execute()のraw結果から
@@ -476,7 +553,7 @@ async function executeComposio(
         };
       }
 
-      const executeNotionTool = (invocation: { slug: string; arguments: Record<string, unknown> }) =>
+      const executeNotionTool: ExecuteNotionTool = (invocation) =>
         client.tools.execute(invocation.slug, {
           userId: toComposioUserId(request.userId),
           connectedAccountId: request.providerConnectionRef,
@@ -486,37 +563,52 @@ async function executeComposio(
         });
 
       if (mapped.kind === "search") {
-        const result = await executeNotionTool(mapped.invocation);
-        return buildExecutionResultFromToolResult(request.action, result);
+        return executeNotionSearchWithIndexFallback(
+          request.action,
+          mapped.invocation,
+          executeNotionTool
+        );
       }
 
       let pageInvocation = mapped.kind === "read_page" ? mapped.pageInvocation : undefined;
       let blocksInvocation = mapped.kind === "read_page" ? mapped.blocksInvocation : undefined;
 
       if (mapped.kind === "read_page_by_title") {
-        const searchResult = await executeNotionTool(mapped.searchInvocation);
+        const searchExecution = await executeNotionSearchWithIndexFallback(
+          request.action,
+          mapped.searchInvocation,
+          executeNotionTool
+        );
 
-        if (!searchResult.successful) {
-          return buildExecutionResultFromToolResult(request.action, searchResult);
+        if (searchExecution.status !== "completed") {
+          return searchExecution;
         }
 
-        const canonicalizedSearch = mapComposioNotionSearchResultToCanonical(searchResult.data);
+        const searchOutput = searchExecution.output as { results?: unknown };
+        const searchResults = Array.isArray(searchOutput.results) ? searchOutput.results : undefined;
 
-        if (!canonicalizedSearch.ok) {
+        if (!searchResults) {
           return {
             status: "failed",
             error: {
               code: "provider_execution_failed",
-              message: canonicalizedSearch.reason,
+              message: "Notion search response did not contain canonical results",
               retryable: false,
             },
-            providerExecutionRef: searchResult.logId ?? null,
+            providerExecutionRef: searchExecution.providerExecutionRef ?? null,
           };
         }
 
         const requestedTitle = mapped.searchInvocation.arguments.query as string;
-        const matches = canonicalizedSearch.result.results.filter(
-          (item) => item.objectType === "page" && item.title === requestedTitle
+        const matches = searchResults.filter(
+          (item): item is { objectType: string; id: string; title: string } =>
+            item !== null && typeof item === "object" &&
+            typeof (item as { objectType?: unknown }).objectType === "string" &&
+            typeof (item as { id?: unknown }).id === "string" &&
+            typeof (item as { title?: unknown }).title === "string"
+        ).filter(
+          (item) => item.objectType === "page" &&
+            hasExactNormalizedNotionTitleMatch(item.title, requestedTitle)
         );
 
         if (matches.length !== 1) {
@@ -529,7 +621,7 @@ async function executeComposio(
                 : "More than one Notion page matched the requested title",
               retryable: false,
             },
-            providerExecutionRef: searchResult.logId ?? null,
+            providerExecutionRef: searchExecution.providerExecutionRef ?? null,
           };
         }
 

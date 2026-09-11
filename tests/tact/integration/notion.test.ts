@@ -2,12 +2,14 @@ import {
   NOTION_FETCH_ALL_BLOCK_CONTENTS_TOOL_SLUG,
   NOTION_READ_MAX_BLOCKS,
   NOTION_READ_MAX_DEPTH,
+  NOTION_SEARCH_FALLBACK_MAX_ITEMS,
   NOTION_RETRIEVE_PAGE_TOOL_SLUG,
   NOTION_SEARCH_TOOL_SLUG,
   mapComposioNotionReadPageResultToCanonical,
   mapComposioNotionSearchResultToCanonical,
   mapNotionActionToComposioTool,
 } from "../../../core/tact-integration/providers/composio/mappings/notion";
+import { executeNotionSearchWithIndexFallback } from "../../../core/tact-integration/providers/composio/adapter";
 import { evaluatePolicyDecision } from "../../../core/tact-integration/policy";
 import {
   extractNotionReadPageReference,
@@ -32,6 +34,19 @@ function result(operation: "search" | "read_page", output: unknown): Orchestrati
     tasks: [], memoryUsed: [], toolsUsed: [], memoryWrites: [], learningSignals: [],
     metadata: { executionMode: "single-execution" },
     integrationReadResult: { service: "notion", operation, output: JSON.stringify(output) },
+  };
+}
+
+function notionSearchAction(query: string, maxResults = 10) {
+  return { service: "notion" as const, operation: "search" as const, input: { query, maxResults } };
+}
+
+function rawNotionPage(id: string, title: string) {
+  return {
+    object: "page",
+    id,
+    properties: { Name: { title: [{ plain_text: title }] } },
+    auth: { token: "must-not-leak" },
   };
 }
 
@@ -82,6 +97,128 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       normalized.ok && normalized.result.results[0]?.title === "A社 更新案件" &&
         normalized.result.results[0]?.parentHint === "データベース" &&
         !serialized.includes("database-secret") && !serialized.includes("must-not-leak") && !serialized.includes("properties")
+    ));
+  }
+
+  {
+    const action = notionSearchAction("TACT-NOTION-LIVE-TEST");
+    const mapped = mapNotionActionToComposioTool(action);
+    const invocations: Array<{ slug: string; arguments: Record<string, unknown> }> = [];
+    const execution = mapped.ok && mapped.kind === "search"
+      ? await executeNotionSearchWithIndexFallback(action, mapped.invocation, async (invocation) => {
+        invocations.push(invocation);
+        return { successful: true, logId: "normal-search", data: { results: [rawNotionPage("page-1", "TACT-NOTION-LIVE-TEST")] } };
+      })
+      : undefined;
+
+    results.push(check(
+      "[Notion index fallback] a non-empty title search returns normally without an empty-query fallback",
+      execution?.status === "completed" && invocations.length === 1 &&
+        invocations[0]?.arguments.query === "TACT-NOTION-LIVE-TEST"
+    ));
+  }
+
+  {
+    const action = notionSearchAction("TACT-NOTION-LIVE-TEST");
+    const mapped = mapNotionActionToComposioTool(action);
+    const invocations: Array<{ slug: string; arguments: Record<string, unknown> }> = [];
+    const execution = mapped.ok && mapped.kind === "search"
+      ? await executeNotionSearchWithIndexFallback(action, mapped.invocation, async (invocation) => {
+        invocations.push(invocation);
+        return invocations.length === 1
+          ? { successful: true, logId: "normal-empty", data: { results: [] } }
+          : { successful: true, logId: "fallback", data: { results: [rawNotionPage("page-2", "TACT-NOTION-LIVE-TEST")] } };
+      })
+      : undefined;
+    const output = execution?.status === "completed" ? execution.output as { results?: Array<{ title?: string }> } : undefined;
+
+    results.push(check(
+      "[Notion index fallback] empty title search makes one bounded empty-query request and returns its exact normalized title match",
+      execution?.status === "completed" && invocations.length === 2 &&
+        JSON.stringify(invocations[1]?.arguments) === JSON.stringify({
+          query: "", page_size: NOTION_SEARCH_FALLBACK_MAX_ITEMS,
+        }) &&
+        !Object.hasOwn(invocations[1]?.arguments ?? {}, "start_cursor") &&
+        output?.results?.length === 1 && output.results[0]?.title === "TACT-NOTION-LIVE-TEST"
+    ));
+  }
+
+  {
+    const action = notionSearchAction("Test", 1);
+    const mapped = mapNotionActionToComposioTool(action);
+    const execution = mapped.ok && mapped.kind === "search"
+      ? await executeNotionSearchWithIndexFallback(action, mapped.invocation, async (invocation) => (
+        invocation.arguments.query === ""
+          ? {
+            successful: true,
+            data: {
+              results: [
+                rawNotionPage("unrelated", "Roadmap"),
+                rawNotionPage("contains-1", "Test project"),
+                rawNotionPage("exact", "  test  "),
+                rawNotionPage("contains-2", "Testing notes"),
+              ],
+            },
+          }
+          : { successful: true, data: { results: [] } }
+      ))
+      : undefined;
+    const output = execution?.status === "completed"
+      ? execution.output as { results?: Array<{ id?: string; title?: string }> }
+      : undefined;
+    const serialized = JSON.stringify(output);
+
+    results.push(check(
+      "[Notion index fallback] exact normalized title wins over unrelated/contains matches and output remains normalized",
+      execution?.status === "completed" && output?.results?.length === 1 &&
+        output.results[0]?.id === "exact" && output.results[0]?.title === "test" &&
+        !serialized.includes("must-not-leak") && !serialized.includes("properties")
+    ));
+  }
+
+  {
+    const action = notionSearchAction("test", 1);
+    const mapped = mapNotionActionToComposioTool(action);
+    const execution = mapped.ok && mapped.kind === "search"
+      ? await executeNotionSearchWithIndexFallback(action, mapped.invocation, async (invocation) => (
+        invocation.arguments.query === ""
+          ? {
+            successful: true,
+            data: { results: [
+              rawNotionPage("unrelated", "Roadmap"),
+              rawNotionPage("contains-1", "Test project"),
+              rawNotionPage("contains-2", "Testing notes"),
+            ] },
+          }
+          : { successful: true, data: { results: [] } }
+      ))
+      : undefined;
+    const output = execution?.status === "completed"
+      ? execution.output as { results?: Array<{ id?: string }> }
+      : undefined;
+
+    results.push(check(
+      "[Notion index fallback] contains matching excludes unrelated results and respects canonical maxResults",
+      execution?.status === "completed" && output?.results?.length === 1 &&
+        output.results[0]?.id === "contains-1"
+    ));
+  }
+
+  {
+    const action = notionSearchAction("TACT-NOTION-LIVE-TEST");
+    const mapped = mapNotionActionToComposioTool(action);
+    let calls = 0;
+    const execution = mapped.ok && mapped.kind === "search"
+      ? await executeNotionSearchWithIndexFallback(action, mapped.invocation, async () => {
+        calls += 1;
+        return { successful: true, data: { results: calls === 1 ? [] : [rawNotionPage("unrelated", "Roadmap")] } };
+      })
+      : undefined;
+    const output = execution?.status === "completed" ? execution.output as { results?: unknown[] } : undefined;
+
+    results.push(check(
+      "[Notion index fallback] an empty fallback match set returns canonical zero results after exactly one additional request",
+      execution?.status === "completed" && calls === 2 && output?.results?.length === 0
     ));
   }
 

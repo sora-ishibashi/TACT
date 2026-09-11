@@ -13,6 +13,10 @@ export const NOTION_FETCH_ALL_BLOCK_CONTENTS_TOOL_SLUG = "NOTION_FETCH_ALL_BLOCK
 
 export const NOTION_SEARCH_DEFAULT_MAX_RESULTS = 10;
 export const NOTION_SEARCH_MAX_RESULTS = 20;
+// NOTION_SEARCH_NOTION_PAGE supports page_size. The provider's title index can
+// lag newly shared pages, so the adapter may make one cursor-free empty-query
+// fallback request. This is deliberately not workspace enumeration.
+export const NOTION_SEARCH_FALLBACK_MAX_ITEMS = 20;
 export const NOTION_SEARCH_MAX_QUERY_LENGTH = 200;
 export const NOTION_READ_MAX_DEPTH = 3;
 export const NOTION_READ_MAX_BLOCKS = 250;
@@ -28,6 +32,13 @@ export type NotionToolMappingResult =
     }
   | { ok: true; kind: "read_page_by_title"; searchInvocation: ComposioToolInvocation }
   | { ok: false; reason: string };
+
+export function createNotionSearchIndexFallbackInvocation(): ComposioToolInvocation {
+  return {
+    slug: NOTION_SEARCH_TOOL_SLUG,
+    arguments: { query: "", page_size: NOTION_SEARCH_FALLBACK_MAX_ITEMS },
+  };
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -266,6 +277,43 @@ export function mapComposioNotionSearchResultToCanonical(rawData: unknown):
   }
 
   return { ok: true, result: { results } };
+}
+
+function normalizeSearchTitle(value: string): string {
+  return value
+    .normalize("NFC")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase();
+}
+
+export function hasExactNormalizedNotionTitleMatch(title: string, query: string): boolean {
+  return normalizeSearchTitle(title) === normalizeSearchTitle(query);
+}
+
+// This is only for the provider's empty-query indexing fallback. It preserves
+// provider response order within each deterministic match tier and never
+// alters canonical result fields.
+export function filterNotionSearchIndexFallbackResults(
+  results: readonly NotionSearchResultItem[],
+  query: string,
+  maxResults: number
+): NotionSearchResultItem[] {
+  const normalizedQuery = normalizeSearchTitle(query);
+
+  if (!normalizedQuery || maxResults < 1) {
+    return [];
+  }
+
+  const exactMatches = results.filter((item) =>
+    normalizeSearchTitle(item.title) === normalizedQuery
+  );
+
+  const matches = exactMatches.length > 0
+    ? exactMatches
+    : results.filter((item) => normalizeSearchTitle(item.title).includes(normalizedQuery));
+
+  return matches.slice(0, maxResults);
 }
 
 function blockText(block: Record<string, unknown>): string | undefined {
