@@ -101,6 +101,38 @@ export interface WorkCostSummary {
 
 }
 
+// WORK-P1: provider-independent semantics for a delegated Work. These values
+// describe what TACT is responsible for accomplishing; provider action names
+// remain confined to the integration execution boundary.
+export type WorkRequestType = "inspect" | "prepare" | "act" | "monitor" | "unknown";
+
+export type WorkCapabilityRequirement =
+  | "organizational_context.read"
+  | "communication.read";
+
+export type WorkCompletionCondition =
+  | "subject_identified"
+  | "organizational_context_checked"
+  | "communication_checked"
+  | "result_synthesized"
+  | "result_delivered";
+
+export interface WorkEvidenceReference {
+  category: "conversation" | "organizational" | "communication";
+  sourceType: "slack" | "notion" | "gmail";
+  sourceRef: string;
+  operation?: "search" | "read_page" | "search_messages";
+}
+
+export interface ResolvedWorkIntent {
+  subject: string;
+  objective: string;
+  title: string;
+  requestType: WorkRequestType;
+  completionConditions: WorkCompletionCondition[];
+  requiredCapabilities: WorkCapabilityRequirement[];
+}
+
 export interface Work {
 
   id: string;
@@ -118,6 +150,21 @@ export interface Work {
   title?: string | null;
 
   objective?: string | null;
+
+  subject?: string | null;
+
+  requestType?: WorkRequestType | null;
+
+  completionConditions?: WorkCompletionCondition[] | null;
+
+  requiredCapabilities?: WorkCapabilityRequirement[] | null;
+
+  evidenceRefs?: WorkEvidenceReference[] | null;
+
+  // A durable conversation response was recorded. Channel adapters may still
+  // own their physical transport, but this is the canonical TACT delivery
+  // boundary used for Work completion.
+  resultDeliveredAt?: string | null;
 
   status: WorkStatus;
 
@@ -546,6 +593,10 @@ export const AUDIT_EVENT_CATEGORIES: readonly AuditEventCategory[] = [
 // P5 Runtime Adapterが実在して初めて意味を持つ値は今回登録しない)。
 export type AuditEventType =
   | "work.created"
+  | "work.intent.resolved"
+  | "work.completion.evaluated"
+  | "work.completed"
+  | "work.blocked"
   | "task.created"
   | "policy.evaluated"
   | "approval.requested"
@@ -570,6 +621,10 @@ export type AuditEventType =
 
 export const AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
   "work.created",
+  "work.intent.resolved",
+  "work.completion.evaluated",
+  "work.completed",
+  "work.blocked",
   "task.created",
   "policy.evaluated",
   "approval.requested",

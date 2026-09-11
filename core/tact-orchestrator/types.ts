@@ -35,6 +35,7 @@ import type { LLMUsage, LLMCost } from "../llm/types";
 import type { AttachmentEvidence } from "../tact-attachment/types";
 import type { ConversationEvidence } from "../tact-conversation/conversationEvidence";
 import type { ContextResolutionPlan, ContextResolutionResult } from "../tact-context-resolution";
+import type { ResolvedWorkIntent } from "../tact-work/types";
 // LW-P3: attachmentEvidenceと並行する、Local Workspace由来の
 // Evidence(type-onlyのimportのため、Browser固有実装への依存は生じない)。
 import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
@@ -171,6 +172,10 @@ export interface OrchestrationRequest {
   // CONTEXT-P2: server-derived, read-only evidence plan. It contains neither
   // a connection identity nor provider-specific parameters.
   contextResolutionPlan?: ContextResolutionPlan;
+
+  // WORK-P1: an internal, server-derived semantic boundary. It is never
+  // accepted from a browser or provider callback.
+  resolvedWorkIntent?: ResolvedWorkIntent;
 
   // Phase86: 直前Turnのuser発言(存在する場合のみ)。decomposeTask()が
   // classifyIntent()へ渡し、「具体例を5件追加で確認してください」の

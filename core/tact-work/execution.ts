@@ -1146,6 +1146,12 @@ export async function runWorkTurn(
 
     await deps.updateWorkStatus(work.id, userId, accessToken, "waiting_for_input");
 
+  } else if (orchestrationRequest.resolvedWorkIntent) {
+
+    // WORK-P1 semantic inspect Work is evaluated only after the response has
+    // been durably recorded by the Conversation boundary. Task/Run terminal
+    // state alone is deliberately insufficient to complete it.
+
   } else {
 
     // Architecture Migration Phase C2.1a: 以前はこのTurnの

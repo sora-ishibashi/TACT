@@ -49,6 +49,7 @@ import { run as runWorkTypes } from "./work/types.test";
 import { run as runWorkMapping } from "./work/mapping.test";
 import { run as runWorkStoreAuthorization } from "./work/storeAuthorization.test";
 import { run as runWorkIntake } from "./work/intake.test";
+import { run as runDelegatedWork } from "./work/delegatedWork.test";
 import { run as runWorkExecution } from "./work/execution.test";
 import { run as runWorkApproval } from "./work/approval.test";
 import { run as runWorkClarification } from "./work/clarification.test";
@@ -189,6 +190,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/mapping", run: runWorkMapping },
   { name: "work/storeAuthorization", run: runWorkStoreAuthorization },
   { name: "work/intake", run: runWorkIntake },
+  { name: "work/delegatedWork", run: runDelegatedWork },
   { name: "work/execution", run: runWorkExecution },
   { name: "work/approval", run: runWorkApproval },
   { name: "work/clarification", run: runWorkClarification },

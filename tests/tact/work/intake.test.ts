@@ -182,6 +182,54 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // WORK-P1: server-derived semantic intent is persisted as canonical Work
+  // fields; raw context/provider payloads never enter intake metadata.
+  {
+    let capturedParams: Parameters<ResolveWorkDeps["createWork"]>[0] | undefined;
+    const deps: ResolveWorkDeps = {
+      getWork: async () => undefined,
+      createWork: async (params) => {
+        capturedParams = params;
+        return makeWork({ id: "work-semantic" });
+      },
+    };
+
+    await resolveWork(
+      {
+        ...baseRequest,
+        content: "これ確認して",
+        source: "bot",
+        conversationId: "conversation-1",
+        resolvedIntent: {
+          subject: "TACTテスト商事の更新案件",
+          title: "TACTテスト商事の更新案件の状況確認",
+          objective: "TACTテスト商事の更新案件について、現在状況・期限・先方からの連絡状況を確認して報告する。",
+          requestType: "inspect",
+          completionConditions: ["subject_identified", "result_synthesized", "result_delivered"],
+          requiredCapabilities: ["organizational_context.read", "communication.read"],
+        },
+      },
+      "fake-token",
+      deps
+    );
+
+    results.push(check(
+      "[WORK-P1 intake] semantic title/objective/subject/request type/capabilities are persisted rather than raw referential text",
+      capturedParams?.title === "TACTテスト商事の更新案件の状況確認" &&
+        capturedParams.objective?.includes("現在状況") === true &&
+        capturedParams.subject === "TACTテスト商事の更新案件" &&
+        capturedParams.requestType === "inspect" &&
+        capturedParams.requiredCapabilities?.includes("communication.read") === true
+    ));
+
+    results.push(check(
+      "[WORK-P1 intake] metadata remains source-only and excludes context/provider identifiers",
+      JSON.stringify(capturedParams?.metadata).includes("source") &&
+        !JSON.stringify(capturedParams?.metadata).includes("connectionId") &&
+        !JSON.stringify(capturedParams?.metadata).includes("provider")
+    ));
+  }
+
   return summarize("work/intake", results);
 
 }

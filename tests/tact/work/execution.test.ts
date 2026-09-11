@@ -1982,6 +1982,62 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // WORK-P1: semantic context Work completion is deferred to the canonical
+  // Conversation delivery boundary; completed Task/Run state alone cannot
+  // transition the Work to completed.
+  {
+    const task = makeTask({ description: "確認結果をまとめる", assignedCapability: "research" });
+    const fakeOrchestration = async (_request: OrchestrationRequest, hooks?: OrchestrationHooks): Promise<OrchestrationResult> => {
+      await hooks?.onTasksPlanned?.([task]);
+      await hooks?.onAttempt?.(task, {
+        attempt: 1,
+        capability: "research",
+        status: "completed",
+        output: "done",
+        result: { success: true, output: "done" },
+      });
+      const summary = makeSummary({ taskId: task.id, status: "completed", output: "done" });
+      await hooks?.onTaskFinished?.(task, summary);
+      return {
+        answer: "done",
+        executionId: "semantic-work-exec",
+        tasks: [summary],
+        memoryUsed: [],
+        toolsUsed: [],
+        memoryWrites: [],
+        learningSignals: ["successful_execution"],
+        metadata: { executionMode: "single-execution" },
+      };
+    };
+    const { deps, calls } = makeRecordingDeps(fakeOrchestration);
+
+    await runWorkTurn(
+      {
+        work: makeWork({ status: "created" }),
+        userId: "user-1",
+        accessToken: "fake-token",
+        orchestrationRequest: {
+          ...baseOrchestrationRequest,
+          resolvedWorkIntent: {
+            subject: "TACTテスト商事の更新案件",
+            title: "TACTテスト商事の更新案件の状況確認",
+            objective: "現在状況を確認して報告する。",
+            requestType: "inspect",
+            completionConditions: ["subject_identified", "result_synthesized", "result_delivered"],
+            requiredCapabilities: [],
+          },
+        },
+      },
+      deps
+    );
+
+    results.push(check(
+      "[WORK-P1 completion boundary] completed Task/Run leaves semantic Work non-terminal until Conversation delivery finalization",
+      calls.updateTaskStatusCalls.some((call) => call.status === "completed") &&
+        !calls.workStatusUpdates.includes("completed")
+    ));
+  }
+
   return summarize("work/execution", results);
 
 }

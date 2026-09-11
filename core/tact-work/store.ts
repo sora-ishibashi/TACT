@@ -85,6 +85,12 @@ export interface WorkRow {
   created_by_actor_id: string;
   title: string | null;
   objective: string | null;
+  subject: string | null;
+  request_type: Work["requestType"] | null;
+  completion_conditions: Work["completionConditions"] | null;
+  required_capabilities: Work["requiredCapabilities"] | null;
+  evidence_refs: Work["evidenceRefs"] | null;
+  result_delivered_at: string | null;
   status: WorkStatus;
   primary_conversation_id: string | null;
   started_at: string | null;
@@ -220,6 +226,12 @@ export function toWork(row: WorkRow): Work {
     createdByActorId: row.created_by_actor_id,
     title: row.title,
     objective: row.objective,
+    subject: row.subject,
+    requestType: row.request_type,
+    completionConditions: row.completion_conditions,
+    requiredCapabilities: row.required_capabilities,
+    evidenceRefs: row.evidence_refs,
+    resultDeliveredAt: row.result_delivered_at,
     status: row.status,
     primaryConversationId: row.primary_conversation_id,
     startedAt: row.started_at,
@@ -359,7 +371,7 @@ export function toAuditEvent(row: AuditEventRow): AuditEvent {
 }
 
 const WORK_COLUMNS =
-  "id, user_id, organization_id, created_by_actor_kind, created_by_actor_id, title, objective, status, primary_conversation_id, started_at, completed_at, failed_at, cancelled_at, cost_summary, metadata, created_at, updated_at";
+  "id, user_id, organization_id, created_by_actor_kind, created_by_actor_id, title, objective, subject, request_type, completion_conditions, required_capabilities, evidence_refs, result_delivered_at, status, primary_conversation_id, started_at, completed_at, failed_at, cancelled_at, cost_summary, metadata, created_at, updated_at";
 
 const TASK_COLUMNS =
   "id, work_id, parent_task_id, description, status, assigned_capability, table_schema, created_at, updated_at";
@@ -439,6 +451,11 @@ export interface CreateWorkParams {
   organizationId?: string | null;
   title?: string | null;
   objective?: string | null;
+  subject?: string | null;
+  requestType?: Work["requestType"] | null;
+  completionConditions?: Work["completionConditions"] | null;
+  requiredCapabilities?: Work["requiredCapabilities"] | null;
+  evidenceRefs?: Work["evidenceRefs"] | null;
   primaryConversationId?: string | null;
   metadata?: Record<string, unknown> | null;
 }
@@ -459,6 +476,11 @@ export async function createWork(
       created_by_actor_id: params.createdByActorId,
       title: params.title ?? null,
       objective: params.objective ?? null,
+      subject: params.subject ?? null,
+      request_type: params.requestType ?? null,
+      completion_conditions: params.completionConditions ?? null,
+      required_capabilities: params.requiredCapabilities ?? null,
+      evidence_refs: params.evidenceRefs ?? null,
       primary_conversation_id: params.primaryConversationId ?? null,
       metadata: params.metadata ?? null,
     })
@@ -519,6 +541,53 @@ function timestampColumnForStatus(status: WorkStatus): string | null {
       return "cancelled_at";
     default:
       return null;
+  }
+
+}
+
+// Evidence is stored as small canonical references only. The Context Pack and
+// provider payloads remain in-memory and are deliberately never copied here.
+export async function updateWorkEvidenceRefs(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  evidenceRefs: NonNullable<Work["evidenceRefs"]>
+): Promise<void> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { error } = await client
+    .from("tact_works")
+    .update({ evidence_refs: evidenceRefs, updated_at: new Date().toISOString() })
+    .eq("id", workId)
+    .eq("user_id", userId);
+
+  if (error) {
+    throw error;
+  }
+
+}
+
+// This is intentionally called only after the answer has been durably added
+// to the canonical Conversation. It is idempotent so retries cannot rewrite
+// the original delivery timestamp.
+export async function markWorkResultDelivered(
+  workId: string,
+  userId: string,
+  accessToken: string
+): Promise<void> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { error } = await client
+    .from("tact_works")
+    .update({ result_delivered_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", workId)
+    .eq("user_id", userId)
+    .is("result_delivered_at", null);
+
+  if (error) {
+    throw error;
   }
 
 }

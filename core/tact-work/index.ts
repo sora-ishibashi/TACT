@@ -22,6 +22,8 @@ export * from "./types";
 export * from "./store";
 export * from "./intake";
 export * from "./execution";
+export * from "./delegatedIntent";
+export * from "./delegatedCompletion";
 export * from "./approval";
 // Fast Port P3a: Human Interaction Foundation(Clarification)。
 // core/tact-work/approval.tsと同じ二層構造(store.tsの生CRUD +

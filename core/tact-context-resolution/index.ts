@@ -294,8 +294,11 @@ export function buildContextResolutionResult(
       metrics,
     },
     sources: {
-      ...(plan.sources.notion ? { notion: sourceStatus(outcomes, "notion", hasNotionEvidence) ?? "no_match" } : {}),
-      ...(plan.sources.gmail ? { gmail: sourceStatus(outcomes, "gmail", hasGmailEvidence) ?? "no_match" } : {}),
+      // A planned source with no normalized execution outcome is not proof of
+      // a negative result. Keep the existing no_match semantics only for a
+      // completed provider attempt; fail closed for an absent outcome.
+      ...(plan.sources.notion ? { notion: sourceStatus(outcomes, "notion", hasNotionEvidence) ?? "failed" } : {}),
+      ...(plan.sources.gmail ? { gmail: sourceStatus(outcomes, "gmail", hasGmailEvidence) ?? "failed" } : {}),
     },
   };
 }

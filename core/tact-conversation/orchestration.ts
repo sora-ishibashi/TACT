@@ -11,6 +11,9 @@ import {
   resolveWork,
   runWorkTurn,
   defaultRunWorkTurnDeps,
+  resolveDelegatedWorkIntent,
+  finalizeDelegatedWorkAfterDelivery,
+  emitAuditSafely,
   getApproval,
   listApprovalsForWork,
   listTasksForWork,
@@ -28,6 +31,7 @@ import type {
   TaskResumeIntent,
   TaskResumeEligibilityBlockedReasonCode,
   TaskResumeTerminalReasonCode,
+  ResolvedWorkIntent,
 } from "../tact-work";
 import {
   listConnectionsForUser,
@@ -2539,6 +2543,9 @@ export async function resolveAndRunWork(
       source,
       conversationId: conversation.id,
       existingWorkId: conversation.workId ?? null,
+      ...(orchestrationRequest.resolvedWorkIntent
+        ? { resolvedIntent: orchestrationRequest.resolvedWorkIntent }
+        : {}),
     },
     accessToken
   );
@@ -2552,6 +2559,24 @@ export async function resolveAndRunWork(
     // 更新する(DBへは既にlinkConversationWork()で反映済み)。
     conversation.workId = work.id;
 
+  }
+
+  if (orchestrationRequest.resolvedWorkIntent) {
+    await emitAuditSafely(
+      {
+        workId: work.id,
+        category: "work",
+        eventType: "work.intent.resolved",
+        actor: { kind: "system", id: "work-intake" },
+        details: {
+          requestType: orchestrationRequest.resolvedWorkIntent.requestType,
+          completionConditionCount: orchestrationRequest.resolvedWorkIntent.completionConditions.length,
+          requiredCapabilityCount: orchestrationRequest.resolvedWorkIntent.requiredCapabilities.length,
+        },
+      },
+      conversation.userId,
+      accessToken
+    );
   }
 
   // Architecture Migration Phase C2.1b: runWorkTurn()自体はConnection
@@ -2637,6 +2662,21 @@ async function runNormalTurn(
   // Orchestratorへ渡すrequestを一切変更しない。
   const contextResolutionPlan = planContextResolution(orchestrationInput, conversationEvidence);
 
+  // A referential request without an identifiable subject is not a valid Work.
+  // Persist the existing clarification response, but do not create a false
+  // completed Work whose title/objective is merely "これ確認して".
+  if (contextResolutionPlan?.kind === "ambiguous") {
+    const message = await recordClarificationQuestion(
+      conversation,
+      accessToken,
+      contextResolutionPlan.clarification ?? "対象を特定できませんでした。もう少し情報を教えてください。"
+    );
+    return { conversation, userMessage, message };
+  }
+
+  const resolvedWorkIntent: ResolvedWorkIntent | undefined =
+    resolveDelegatedWorkIntent(contextResolutionPlan);
+
   let result = await resolveAndRunWork(
     conversation,
     accessToken,
@@ -2649,6 +2689,7 @@ async function runNormalTurn(
       workspaceEvidence,
       conversationEvidence,
       ...(contextResolutionPlan?.kind === "ready" ? { contextResolutionPlan } : {}),
+      ...(resolvedWorkIntent ? { resolvedWorkIntent } : {}),
     },
     orchestrationInput,
     source
@@ -2673,12 +2714,7 @@ async function runNormalTurn(
     result = { ...result, answer: integrationReadAnswer };
   }
 
-  if (contextResolutionPlan?.kind === "ambiguous") {
-    result = {
-      ...result,
-      answer: contextResolutionPlan.clarification ?? "対象を特定できませんでした。もう少し情報を教えてください。",
-    };
-  } else if (result.contextResolution) {
+  if (result.contextResolution) {
     result = { ...result, answer: formatContextResolutionAnswer(result.contextResolution) };
   }
 
@@ -2719,6 +2755,29 @@ async function runNormalTurn(
     assistantContent,
     executionRecord.id
   );
+
+  // Completion is intentionally deferred until the answer is durable in the
+  // canonical Conversation. The Slack adapter owns physical transport; this
+  // boundary prevents provider Task completion alone from completing Work.
+  if (resolvedWorkIntent && result.contextResolution && conversation.workId) {
+    try {
+      await finalizeDelegatedWorkAfterDelivery({
+        workId: conversation.workId,
+        userId: conversation.userId,
+        accessToken,
+        intent: resolvedWorkIntent,
+        contextResolution: result.contextResolution,
+      });
+    } catch (error) {
+      // The user response was already persisted. Keep it deliverable and leave
+      // Work non-terminal for safe recovery; do not log conversation/provider
+      // bodies or identifiers.
+      console.error("[tact-work] deferred completion finalization failed", {
+        name: error instanceof Error ? error.name : "UnknownError",
+        message: "Deferred Work completion finalization failed",
+      });
+    }
+  }
 
   const pendingApproval = await resolvePendingApproval(result, conversation, accessToken);
 

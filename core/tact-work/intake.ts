@@ -1,5 +1,5 @@
 import { createWork, getWork } from "./store";
-import type { Work, ActorReference } from "./types";
+import type { Work, ActorReference, ResolvedWorkIntent } from "./types";
 
 // =========================
 // TACT Work — Work Intake Boundary (Architecture Migration Phase B2)
@@ -52,6 +52,10 @@ export interface WorkIntakeRequest {
   existingWorkId?: string | null;
 
   metadata?: Record<string, unknown> | null;
+
+  // Server-derived only. Interfaces provide the raw current request; the
+  // Context Resolution boundary supplies these semantic fields.
+  resolvedIntent?: ResolvedWorkIntent;
 
 }
 
@@ -120,7 +124,12 @@ export async function resolveWork(
       createdByActorKind: request.requestedByActor.kind,
       createdByActorId: request.requestedByActor.id,
       primaryConversationId: request.conversationId ?? null,
-      title: deriveWorkTitle(request.content),
+      title: request.resolvedIntent?.title ?? deriveWorkTitle(request.content),
+      objective: request.resolvedIntent?.objective ?? null,
+      subject: request.resolvedIntent?.subject ?? null,
+      requestType: request.resolvedIntent?.requestType ?? null,
+      completionConditions: request.resolvedIntent?.completionConditions ?? null,
+      requiredCapabilities: request.resolvedIntent?.requiredCapabilities ?? null,
       metadata: {
         source: request.source,
         ...(request.metadata ?? {}),
