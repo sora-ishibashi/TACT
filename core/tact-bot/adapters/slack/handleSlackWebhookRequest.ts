@@ -27,6 +27,11 @@ import {
   type SlackConversationContextTrigger,
 } from "./slackConversationContext";
 import { getSlackWebApiClient } from "./slackClient";
+import {
+  buildSafeSlackBackgroundFailureDiagnostic,
+  type SlackBackgroundExecutionStage,
+  type SlackBackgroundFailureDiagnostic,
+} from "../../diagnostics/safeBackgroundFailureDiagnostic";
 
 // =========================
 // TACT Bot — Slack Webhook Request Handler (S1a)
@@ -106,6 +111,8 @@ export interface HandleSlackWebhookRequestDeps {
   // テスト用DI(署名検証のreplay protectionへ伝播する)。
   now?: () => number;
 
+  logBackgroundFailure?: (diagnostic: SlackBackgroundFailureDiagnostic) => void;
+
 }
 
 const defaultDeps: HandleSlackWebhookRequestDeps = {
@@ -140,6 +147,10 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
 
   scheduleBackgroundWork: (task) => {
     after(task);
+  },
+
+  logBackgroundFailure: (diagnostic) => {
+    console.error("[tact-bot] Slack bot background execution failed", diagnostic);
   },
 
 };
@@ -297,6 +308,9 @@ export async function handleSlackWebhookRequest(
   // は作らない、絶対条件Section21)。
   deps.scheduleBackgroundWork(async () => {
 
+    let stage: SlackBackgroundExecutionStage = "approval_detection";
+    let conversationEvidence: ConversationEvidence | undefined;
+
     try {
 
       // S1e(絶対条件Section2/3、最重要): normalized textが
@@ -309,20 +323,34 @@ export async function handleSlackWebhookRequest(
       const decisionMatch = deps.detectApprovalDecisionText(message.text);
 
       const retrieveConversationContext = deps.retrieveConversationContext ?? defaultDeps.retrieveConversationContext!;
-      const result = decisionMatch.matched
-        ? await deps.receiveApprovalDecision(message, decisionMatch.decision)
-        : await deps.receiveBotMessage(
-            message,
-            await retrieveConversationContext(contextTrigger).catch(() =>
-              triggerOnlySlackConversationEvidence(contextTrigger, true)
-            )
-          );
+      let result: ReceiveBotMessageResult | ReceiveSlackBotApprovalDecisionResult;
 
+      if (decisionMatch.matched) {
+        stage = "approval_decision";
+        result = await deps.receiveApprovalDecision(message, decisionMatch.decision);
+      } else {
+        stage = "conversation_context";
+        conversationEvidence = await retrieveConversationContext(contextTrigger).catch(() =>
+          triggerOnlySlackConversationEvidence(contextTrigger, true)
+        );
+
+        stage = "conversation_intake";
+        result = await deps.receiveBotMessage(message, conversationEvidence);
+      }
+
+      stage = "slack_action_delivery";
       await deps.executeBotActions(result.actions);
 
-    } catch {
+    } catch (error) {
 
-      console.error("[tact-bot] Slack bot background execution failed");
+      const knownSensitiveValues = [
+        rawBody,
+        message.text,
+        ...(conversationEvidence?.messages.map((contextMessage) => contextMessage.text) ?? []),
+      ];
+      (deps.logBackgroundFailure ?? defaultDeps.logBackgroundFailure!)(
+        buildSafeSlackBackgroundFailureDiagnostic(error, stage, knownSensitiveValues)
+      );
 
     }
 

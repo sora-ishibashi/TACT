@@ -413,6 +413,67 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- Background failure diagnostics remain server-only and redacted ----
+  {
+    const triggerText = "\u79d8\u5bc6\u306eSlack\u4f1a\u8a71\u672c\u6587";
+    const envelope = makeAppMentionEnvelope({
+      event_id: "Ev-background-failure-1",
+      event: {
+        type: "app_mention",
+        user: "U123USER",
+        text: `<@U999TACTBOT> ${triggerText}`,
+        ts: "1893456000.000100",
+        channel: "C123CHANNEL",
+      },
+    });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const { deps, scheduledTasks, receiveBotMessageCalls } = makeFakeDeps();
+    const diagnostics: unknown[] = [];
+    const failure = new Error(
+      `conversation failed for ${triggerText}; Authorization: Bearer xoxb-secret-token; connectionId=conn-sensitive; connected_account_id=ca_sensitive_12345678`,
+      { cause: new Error(`provider body included ${triggerText}; api_key=sk-sensitive-value`) }
+    );
+
+    deps.receiveBotMessage = async () => {
+      throw failure;
+    };
+    deps.logBackgroundFailure = (diagnostic) => {
+      diagnostics.push(diagnostic);
+    };
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, deps);
+    await scheduledTasks[0]();
+    const serializedDiagnostic = JSON.stringify(diagnostics[0]);
+
+    results.push(
+      check(
+        "[background failure diagnostics] Error/cause/stage are retained only for the server diagnostic boundary",
+        response.status === 200 &&
+          JSON.stringify(response.body) === JSON.stringify({ ok: true }) &&
+          receiveBotMessageCalls.length === 0 &&
+          diagnostics.length === 1 &&
+          typeof diagnostics[0] === "object" &&
+          diagnostics[0] !== null &&
+          (diagnostics[0] as { stage?: unknown }).stage === "conversation_intake" &&
+          (diagnostics[0] as { errorName?: unknown }).errorName === "Error" &&
+          (diagnostics[0] as { causeName?: unknown }).causeName === "Error"
+      )
+    );
+
+    results.push(
+      check(
+        "[background failure diagnostics] Slack text, tokens, connection/provider account identifiers, and raw error values are redacted from the server diagnostic",
+        !serializedDiagnostic.includes(triggerText) &&
+          !serializedDiagnostic.includes("xoxb-secret-token") &&
+          !serializedDiagnostic.includes("conn-sensitive") &&
+          !serializedDiagnostic.includes("ca_sensitive_12345678") &&
+          !serializedDiagnostic.includes("sk-sensitive-value") &&
+          serializedDiagnostic.includes("[redacted]") &&
+          !JSON.stringify(response.body).includes("conversation failed")
+      )
+    );
+  }
+
   return summarize("bot/slackWebhookHandler", results);
 
 }
