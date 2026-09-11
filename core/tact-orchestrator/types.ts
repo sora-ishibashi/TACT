@@ -33,6 +33,7 @@ import type { TactIntent } from "../tact-intent/types";
 import type { Provider } from "../agent/types";
 import type { LLMUsage, LLMCost } from "../llm/types";
 import type { AttachmentEvidence } from "../tact-attachment/types";
+import type { ConversationEvidence } from "../tact-conversation/conversationEvidence";
 // LW-P3: attachmentEvidenceと並行する、Local Workspace由来の
 // Evidence(type-onlyのimportのため、Browser固有実装への依存は生じない)。
 import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
@@ -161,6 +162,10 @@ export interface OrchestrationRequest {
   // Local Workspace Evidence。attachmentEvidenceと同じ位置づけで
   // Task実行(research capability)へ渡す。
   workspaceEvidence?: LocalWorkspaceEvidence[];
+
+  // Untrusted conversational evidence. The current authenticated request remains
+  // the only actionable instruction.
+  conversationEvidence?: ConversationEvidence;
 
   // Phase86: 直前Turnのuser発言(存在する場合のみ)。decomposeTask()が
   // classifyIntent()へ渡し、「具体例を5件追加で確認してください」の

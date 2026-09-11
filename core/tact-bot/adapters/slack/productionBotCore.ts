@@ -16,6 +16,7 @@ import type {
   BotApprovalDecisionKind,
   BotIncomingMessage,
 } from "../../types";
+import type { ConversationEvidence } from "../../../tact-conversation/conversationEvidence";
 import type { ChannelAdapterRegistry } from "../types";
 import { createSlackChannelAdapter } from "./slackChannelAdapter";
 import {
@@ -84,13 +85,14 @@ const defaultSlackTrustedBotCoreDeps: BotGatewayDependencies = {
 // しない。
 export async function receiveSlackBotMessageAsTrustedActor(
   message: BotIncomingMessage,
-  deps: BotGatewayDependencies = defaultSlackTrustedBotCoreDeps
+  deps: BotGatewayDependencies = defaultSlackTrustedBotCoreDeps,
+  conversationEvidence?: ConversationEvidence
 ): Promise<ReceiveBotMessageResult> {
 
   return receiveBotMessage(message, {
     identityResolver: deps.identityResolver ?? defaultSlackTrustedBotCoreDeps.identityResolver,
     coreConnector: deps.coreConnector ?? defaultSlackTrustedBotCoreDeps.coreConnector,
-  });
+  }, conversationEvidence);
 
 }
 

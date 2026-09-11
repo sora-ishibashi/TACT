@@ -20,6 +20,13 @@ import {
 } from "./normalizeSlackEvent";
 import { detectApprovalDecisionText as defaultDetectApprovalDecisionText } from "./detectApprovalDecisionText";
 import type { SlackAppMentionEvent, SlackEventCallbackEnvelope } from "./types";
+import type { ConversationEvidence } from "../../../tact-conversation/conversationEvidence";
+import {
+  retrieveSlackConversationContext,
+  triggerOnlySlackConversationEvidence,
+  type SlackConversationContextTrigger,
+} from "./slackConversationContext";
+import { getSlackWebApiClient } from "./slackClient";
 
 // =========================
 // TACT Bot — Slack Webhook Request Handler (S1a)
@@ -71,7 +78,9 @@ export interface HandleSlackWebhookRequestDeps {
     externalEventId: string;
   }) => Promise<ClaimExternalEventResult>;
 
-  receiveBotMessage: (message: BotIncomingMessage) => Promise<ReceiveBotMessageResult>;
+  receiveBotMessage: (message: BotIncomingMessage, conversationEvidence?: ConversationEvidence) => Promise<ReceiveBotMessageResult>;
+
+  retrieveConversationContext?: (trigger: SlackConversationContextTrigger) => Promise<ConversationEvidence>;
 
   // S1e: 決定論的なpure text判定(LLM不使用、絶対条件2/11)。
   // normalizeSlackAppMentionEvent()が既にmention除去・trim済みの
@@ -110,7 +119,14 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
   // Supabase-backed identity resolver/coreConnectorを注入する)を経由
   // する。receiveBotMessage()自身のglobal defaultは変更していない
   // (絶対条件Section3)。
-  receiveBotMessage: receiveSlackBotMessageAsTrustedActor,
+  receiveBotMessage: (message, conversationEvidence) =>
+    receiveSlackBotMessageAsTrustedActor(message, undefined, conversationEvidence),
+
+  retrieveConversationContext: (trigger) => {
+    const client = getSlackWebApiClient();
+    const api = client?.getThreadReplies && client.getChannelHistory ? client as import("./slackConversationContext").SlackConversationContextApi : null;
+    return retrieveSlackConversationContext(trigger, api, { tactBotUserId: process.env.SLACK_BOT_USER_ID });
+  },
 
   // S1e: ./detectApprovalDecisionText.tsのpure判定関数そのまま。
   detectApprovalDecisionText: defaultDetectApprovalDecisionText,
@@ -130,6 +146,23 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
 
 function ackIgnored(): SlackWebhookHandlerResponse {
   return { status: 200, body: { ok: true } };
+}
+
+function toSlackContextTrigger(
+  event: SlackAppMentionEvent,
+  message: BotIncomingMessage
+): SlackConversationContextTrigger {
+  const threadRef = typeof event.thread_ts === "string" && event.thread_ts.length > 0
+    ? event.thread_ts
+    : undefined;
+  return {
+    channelRef: message.conversation.externalConversationId,
+    triggerMessageRef: message.messageId,
+    triggerAuthorRef: message.actor.externalUserId,
+    triggerText: message.text,
+    triggerTimestamp: message.messageId,
+    ...(threadRef ? { threadRef } : {}),
+  };
 }
 
 // Fetch API Headersの最小subset(NextRequest.headers/テスト用の
@@ -244,6 +277,11 @@ export async function handleSlackWebhookRequest(
     return ackIgnored();
   }
 
+  // References are derived only after signature verification and event
+  // normalization. No HTTP caller-supplied channel/thread/user reference enters
+  // the context retrieval boundary.
+  const contextTrigger = toSlackContextTrigger(event, message);
+
   // 絶対条件(Section19/20): Research/Conversation/Slack outbound完了を
   // 待たずにACKを返す。background pipelineはTrusted Bot Message受信
   // →BotAction[]取得→Slack outbound配送(executeBotActions()、既存
@@ -270,9 +308,15 @@ export async function handleSlackWebhookRequest(
       // canonical receiveBotApprovalDecision()の責務)。
       const decisionMatch = deps.detectApprovalDecisionText(message.text);
 
+      const retrieveConversationContext = deps.retrieveConversationContext ?? defaultDeps.retrieveConversationContext!;
       const result = decisionMatch.matched
         ? await deps.receiveApprovalDecision(message, decisionMatch.decision)
-        : await deps.receiveBotMessage(message);
+        : await deps.receiveBotMessage(
+            message,
+            await retrieveConversationContext(contextTrigger).catch(() =>
+              triggerOnlySlackConversationEvidence(contextTrigger, true)
+            )
+          );
 
       await deps.executeBotActions(result.actions);
 

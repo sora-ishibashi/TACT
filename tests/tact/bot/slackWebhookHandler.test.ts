@@ -27,6 +27,7 @@ import {
 } from "../../../core/tact-bot/adapters/slack/handleSlackWebhookRequest";
 import type { ClaimExternalEventResult } from "../../../core/tact-bot/eventDedup/supabaseEventDedupStore";
 import type { BotIncomingMessage } from "../../../core/tact-bot/types";
+import { triggerOnlySlackConversationEvidence } from "../../../core/tact-bot/adapters/slack/slackConversationContext";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 const SIGNING_SECRET = "fake-signing-secret-for-test-only";
@@ -89,11 +90,13 @@ function makeFakeDeps(options: {
   deps: HandleSlackWebhookRequestDeps;
   claimCalls: { channel: string; externalEventId: string }[];
   receiveBotMessageCalls: BotIncomingMessage[];
+  retrievedContextTriggers: { channelRef: string; triggerMessageRef: string; threadRef?: string }[];
   scheduledTasks: (() => Promise<void>)[];
 } {
 
   const claimCalls: { channel: string; externalEventId: string }[] = [];
   const receiveBotMessageCalls: BotIncomingMessage[] = [];
+  const retrievedContextTriggers: { channelRef: string; triggerMessageRef: string; threadRef?: string }[] = [];
   const scheduledTasks: (() => Promise<void>)[] = [];
 
   const deps: HandleSlackWebhookRequestDeps = {
@@ -111,6 +114,11 @@ function makeFakeDeps(options: {
     receiveBotMessage: async (message) => {
       receiveBotMessageCalls.push(message);
       return { handled: true, actions: [] };
+    },
+
+    retrieveConversationContext: async (trigger) => {
+      retrievedContextTriggers.push(trigger);
+      return triggerOnlySlackConversationEvidence(trigger);
     },
 
     // S1e: このtest fileはApproval decision routing自体を対象としない
@@ -137,7 +145,7 @@ function makeFakeDeps(options: {
 
   };
 
-  return { deps, claimCalls, receiveBotMessageCalls, scheduledTasks };
+  return { deps, claimCalls, receiveBotMessageCalls, retrievedContextTriggers, scheduledTasks };
 
 }
 

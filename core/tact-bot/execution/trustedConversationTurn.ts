@@ -41,7 +41,9 @@ import {
 } from "../../tact-conversation";
 import type { AttachmentEvidence } from "../../tact-attachment/types";
 import type { LocalWorkspaceEvidence } from "../../tact-context-source/localWorkspace/types";
+import type { ConversationEvidence } from "../../tact-conversation/conversationEvidence";
 import { getServiceRoleKey } from "../../database/supabaseServiceRole";
+import { emitAuditSafely } from "../../tact-work/audit";
 
 // Web向けのRunConversationTurnParamsとの意図的な違い: userId/accessToken
 // を受け取らない。tactUserIdはserver-side identity resolver
@@ -60,6 +62,8 @@ export interface RunConversationTurnAsTrustedActorParams {
   attachmentEvidence?: AttachmentEvidence[];
 
   workspaceEvidence?: LocalWorkspaceEvidence[];
+
+  conversationEvidence?: ConversationEvidence;
 
 }
 
@@ -81,13 +85,14 @@ export async function runConversationTurnAsTrustedActor(
     return { ok: false, error: "trusted_execution_not_configured" };
   }
 
-  return runConversationTurn({
+  const outcome = await runConversationTurn({
     userId: params.tactUserId,
     accessToken: trustedExecutionCredential,
     content: params.content,
     conversationId: params.conversationId,
     attachmentEvidence: params.attachmentEvidence,
     workspaceEvidence: params.workspaceEvidence,
+    conversationEvidence: params.conversationEvidence,
     // Architecture Migration Phase B2: core/tact-work/(Work Intake)が
     // 新規Work作成時にWork.metadata.sourceへ記録するだけの観測用
     // タグ(業務判断には使われない、絶対条件: BotはWork Routerではない
@@ -97,5 +102,34 @@ export async function runConversationTurnAsTrustedActor(
     // idは一切使わない(BOT-P2.5から継続する絶対条件)。
     source: "bot",
   });
+
+  if (outcome.ok && params.conversationEvidence && outcome.conversation.workId) {
+    const evidence = params.conversationEvidence;
+    const details = {
+      sourceType: evidence.sourceType,
+      retrievalMode: evidence.provenance.retrievalMode,
+      retrievedMessageCount: evidence.metrics.retrievedMessageCount,
+      includedMessageCount: evidence.metrics.includedMessageCount,
+      normalizedCharCount: evidence.metrics.normalizedCharCount,
+      attachmentCount: evidence.metrics.attachmentCount,
+      truncated: evidence.metrics.truncated,
+    };
+    await emitAuditSafely({
+      workId: outcome.conversation.workId,
+      category: "context",
+      eventType: "context.requested",
+      actor: { kind: "user", id: params.tactUserId },
+      details: { sourceType: evidence.sourceType },
+    }, params.tactUserId, trustedExecutionCredential);
+    await emitAuditSafely({
+      workId: outcome.conversation.workId,
+      category: "context",
+      eventType: evidence.metrics.retrievalFailed ? "context.failed" : "context.retrieved",
+      actor: { kind: "user", id: params.tactUserId },
+      details,
+    }, params.tactUserId, trustedExecutionCredential);
+  }
+
+  return outcome;
 
 }

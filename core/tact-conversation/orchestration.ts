@@ -114,6 +114,8 @@ import type { ResearchEvidenceItem } from "../tact-research/types";
 import type { AttachmentEvidence } from "../tact-attachment/types";
 // LW-P3: attachmentEvidenceと並行するLocal Workspace Evidence。
 import type { LocalWorkspaceEvidence } from "../tact-context-source/localWorkspace/types";
+import type { ConversationEvidence } from "./conversationEvidence";
+import { formatConversationEvidenceAcknowledgement } from "./conversationEvidence";
 import type { ResearchPresentation } from "../tact-analysis/presentation/types";
 import { mergeResearchPresentationBlocks } from "../tact-analysis/presentation/artifactIntegration";
 import type { ResearchFrameworkArtifact } from "../tact-analysis/framework/types";
@@ -465,7 +467,8 @@ export async function runConversationOrchestration(
   // Local Workspace Evidence(app/api/tact/tact-conversations/route.ts
   // でのserver validation通過後の値)。
   workspaceEvidence: LocalWorkspaceEvidence[] = [],
-  source: WorkIntakeSource = "web"
+  source: WorkIntakeSource = "web",
+  conversationEvidence?: ConversationEvidence
 ): Promise<ConversationTurnResult> {
 
   const pending = await getPendingClarification(conversation, accessToken);
@@ -474,7 +477,7 @@ export async function runConversationOrchestration(
     return runClarificationAnswerTurn(conversation, accessToken, userInput, pending, source);
   }
 
-  return runNormalTurn(conversation, accessToken, userInput, attachmentIds, attachmentEvidence, workspaceEvidence, source);
+  return runNormalTurn(conversation, accessToken, userInput, attachmentIds, attachmentEvidence, workspaceEvidence, source, conversationEvidence);
 
 }
 
@@ -525,6 +528,8 @@ export interface RunConversationTurnParams {
 
   workspaceEvidence?: LocalWorkspaceEvidence[];
 
+  conversationEvidence?: ConversationEvidence;
+
   // Architecture Migration Phase B2: このTurnがどのInterfaceから
   // 来たか(core/tact-work/のWork Intakeが、新規Work作成時に
   // Work.metadata.sourceとして記録するだけの観測用タグ)。省略時は
@@ -561,6 +566,7 @@ export async function runConversationTurn(
     conversationId,
     attachmentEvidence = [],
     workspaceEvidence = [],
+    conversationEvidence,
     source = "web",
   } = params;
 
@@ -587,7 +593,8 @@ export async function runConversationTurn(
     [],
     attachmentEvidence,
     workspaceEvidence,
-    source
+    source,
+    conversationEvidence
   );
 
   // route.tsと同じ理由: runConversationOrchestration()の各ステップは
@@ -2573,7 +2580,8 @@ async function runNormalTurn(
   attachmentIds: string[] = [],
   attachmentEvidence: AttachmentEvidence[] = [],
   workspaceEvidence: LocalWorkspaceEvidence[] = [],
-  source: WorkIntakeSource = "web"
+  source: WorkIntakeSource = "web",
+  conversationEvidence?: ConversationEvidence
 ): Promise<ConversationTurnResult> {
 
   const userMessage = attachmentIds.length > 0
@@ -2634,6 +2642,7 @@ async function runNormalTurn(
       tableSchema,
       attachmentEvidence,
       workspaceEvidence,
+      conversationEvidence,
     },
     orchestrationInput,
     source
@@ -2656,6 +2665,13 @@ async function runNormalTurn(
 
   if (integrationReadAnswer) {
     result = { ...result, answer: integrationReadAnswer };
+  }
+
+  const contextAcknowledgement = conversationEvidence
+    ? formatConversationEvidenceAcknowledgement(orchestrationInput, conversationEvidence)
+    : undefined;
+  if (contextAcknowledgement) {
+    result = { ...result, answer: contextAcknowledgement };
   }
 
   const plan = planConversationTurn(result);

@@ -229,6 +229,7 @@ export function createConversationBotCoreConnector(
         tactUserId,
         content: context.normalizedInput,
         conversationId: existingTactConversationId ?? undefined,
+        conversationEvidence: context.conversationEvidence,
       });
 
       // Bot専用のTrusted Bot Execution Boundaryが未設定(service role
@@ -262,6 +263,7 @@ export function createConversationBotCoreConnector(
         turn = await deps.runTrustedTurn({
           tactUserId,
           content: context.normalizedInput,
+          conversationEvidence: context.conversationEvidence,
         });
 
       }

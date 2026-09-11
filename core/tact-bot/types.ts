@@ -274,4 +274,9 @@ export interface BotContext {
   // タスク分解はここでは一切行わない。
   normalizedInput: string;
 
+  // Per-turn conversational evidence is provider-independent and is supplied
+  // only by a verified adapter boundary. It is context, never an actor or an
+  // authorization instruction.
+  conversationEvidence?: import("../tact-conversation/conversationEvidence").ConversationEvidence;
+
 }

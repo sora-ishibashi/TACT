@@ -1,5 +1,6 @@
 import { WebClient, WebAPIPlatformError, WebAPIRateLimitedError, WebAPIHTTPError, WebAPIRequestError } from "@slack/web-api";
 import { getSlackBotToken } from "./slackOutboundConfig";
+import type { SlackContextSourceMessage, SlackConversationContextApi } from "./slackConversationContext";
 
 // =========================
 // TACT Bot — Slack Web API Client Boundary (S1c)
@@ -58,6 +59,33 @@ export interface SlackWebApiClient {
 
   postMessage(params: SlackPostMessageParams): Promise<SlackPostMessageResult>;
 
+  getThreadReplies?: SlackConversationContextApi["getThreadReplies"];
+
+  getChannelHistory?: SlackConversationContextApi["getChannelHistory"];
+
+}
+
+function toContextMessages(messages: unknown): SlackContextSourceMessage[] {
+  if (!Array.isArray(messages)) return [];
+  return messages.flatMap((value): SlackContextSourceMessage[] => {
+    if (!value || typeof value !== "object") return [];
+    const message = value as { ts?: unknown; user?: unknown; text?: unknown; subtype?: unknown; bot_id?: unknown; files?: unknown };
+    const files = Array.isArray(message.files)
+      ? message.files.flatMap((file) => file && typeof file === "object" ? [{
+          id: typeof (file as { id?: unknown }).id === "string" ? (file as { id: string }).id : undefined,
+          name: typeof (file as { name?: unknown }).name === "string" ? (file as { name: string }).name : undefined,
+          mimetype: typeof (file as { mimetype?: unknown }).mimetype === "string" ? (file as { mimetype: string }).mimetype : undefined,
+        }] : [])
+      : undefined;
+    return [{
+      ts: typeof message.ts === "string" ? message.ts : undefined,
+      user: typeof message.user === "string" ? message.user : undefined,
+      text: typeof message.text === "string" ? message.text : undefined,
+      subtype: typeof message.subtype === "string" ? message.subtype : undefined,
+      bot_id: typeof message.bot_id === "string" ? message.bot_id : undefined,
+      files,
+    }];
+  });
 }
 
 function normalizeSlackWebApiError(error: unknown): string {
@@ -114,6 +142,35 @@ export function createProductionSlackWebApiClient(token: string): SlackWebApiCli
 
       }
 
+    },
+
+    async getThreadReplies(params) {
+      try {
+        const response = await client.conversations.replies({
+          channel: params.channel,
+          ts: params.ts,
+          latest: params.latest,
+          inclusive: true,
+          limit: params.limit,
+        });
+        return { ok: response.ok !== false, messages: toContextMessages(response.messages) };
+      } catch {
+        return { ok: false, messages: [] };
+      }
+    },
+
+    async getChannelHistory(params) {
+      try {
+        const response = await client.conversations.history({
+          channel: params.channel,
+          latest: params.latest,
+          inclusive: false,
+          limit: params.limit,
+        });
+        return { ok: response.ok !== false, messages: toContextMessages(response.messages) };
+      } catch {
+        return { ok: false, messages: [] };
+      }
     },
 
   };

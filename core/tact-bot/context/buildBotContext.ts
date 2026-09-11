@@ -12,6 +12,7 @@
 // protocol上の定型パターンを剥がすだけの決定論的な処理である。
 
 import type { BotContext, BotIdentity, BotIncomingMessage } from "../types";
+import type { ConversationEvidence } from "../../tact-conversation/conversationEvidence";
 
 // "@TACT " "@tact:" 等、文頭のmention的な定型文字列を取り除く。
 // Slack実装(BOT-P2)ではplatform側が返す実際のmention記法
@@ -23,7 +24,8 @@ const LEADING_MENTION_PATTERN = /^\s*@?tact\s*[:,]?\s*/i;
 
 export function buildBotContext(
   message: BotIncomingMessage,
-  identity: BotIdentity | null
+  identity: BotIdentity | null,
+  conversationEvidence?: ConversationEvidence
 ): BotContext {
 
   const normalizedInput = message.text.replace(LEADING_MENTION_PATTERN, "").trim();
@@ -32,6 +34,7 @@ export function buildBotContext(
     message,
     identity,
     normalizedInput,
+    ...(conversationEvidence ? { conversationEvidence } : {}),
   };
 
 }

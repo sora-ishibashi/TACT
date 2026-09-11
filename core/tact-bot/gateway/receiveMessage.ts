@@ -24,6 +24,7 @@
 // 選択等)ではないため、gateway層のdeterministicな判定として扱う。
 
 import type { BotAction, BotContext, BotIncomingMessage } from "../types";
+import type { ConversationEvidence } from "../../tact-conversation/conversationEvidence";
 import { buildBotContext } from "../context/buildBotContext";
 import {
   unresolvedIdentityResolver,
@@ -74,7 +75,8 @@ function shouldHandle(message: BotIncomingMessage): boolean {
 
 export async function receiveBotMessage(
   message: BotIncomingMessage,
-  deps: BotGatewayDependencies = {}
+  deps: BotGatewayDependencies = {},
+  conversationEvidence?: ConversationEvidence
 ): Promise<ReceiveBotMessageResult> {
 
   const identityResolver = deps.identityResolver ?? unresolvedIdentityResolver;
@@ -96,7 +98,7 @@ export async function receiveBotMessage(
     message.channel,
     message.organizationId
   );
-  const context = buildBotContext(message, identity);
+  const context = buildBotContext(message, identity, conversationEvidence);
   const actions = await coreConnector.handle(context);
 
   return { handled: true, context, actions };

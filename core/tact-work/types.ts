@@ -525,7 +525,8 @@ export type AuditEventCategory =
   | "approval"
   | "clarification"
   | "execution"
-  | "provider";
+  | "provider"
+  | "context";
 
 export const AUDIT_EVENT_CATEGORIES: readonly AuditEventCategory[] = [
   "work",
@@ -536,6 +537,7 @@ export const AUDIT_EVENT_CATEGORIES: readonly AuditEventCategory[] = [
   "clarification",
   "execution",
   "provider",
+  "context",
 ];
 
 // Fast Port P4a Step4: stable machine-readable値。P4a時点では誰も
@@ -556,7 +558,10 @@ export type AuditEventType =
   | "run.failed"
   | "provider.called"
   | "provider.completed"
-  | "provider.failed";
+  | "provider.failed"
+  | "context.requested"
+  | "context.retrieved"
+  | "context.failed";
 
 export const AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
   "work.created",
@@ -573,6 +578,9 @@ export const AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
   "provider.called",
   "provider.completed",
   "provider.failed",
+  "context.requested",
+  "context.retrieved",
+  "context.failed",
 ];
 
 export interface AuditEvent {
