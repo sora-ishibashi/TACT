@@ -152,6 +152,7 @@ import { run as runIntegrationConnectionProvisioning } from "./integration/conne
 import { run as runIntegrationConnectionsApi } from "./integration/connectionsApi.test";
 import { run as runIntegrationConnectionLifecycle } from "./integration/connectionLifecycle.test";
 import { run as runUiConnectionsPanel } from "./ui/connectionsPanel.test";
+import { run as runUiOauthReturn } from "./ui/oauthReturn.test";
 import { run as runIntentSlackSendIntent } from "./intent/slackSendIntent.test";
 import { run as runIntentSlackListChannelsIntent } from "./intent/slackListChannelsIntent.test";
 import { run as runRuntimeAdapter } from "./runtime/adapter.test";
@@ -288,6 +289,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "integration/connectionsApi", run: runIntegrationConnectionsApi },
   { name: "integration/connectionLifecycle", run: runIntegrationConnectionLifecycle },
   { name: "ui/connectionsPanel", run: runUiConnectionsPanel },
+  { name: "ui/oauthReturn", run: runUiOauthReturn },
   { name: "intent/slackSendIntent", run: runIntentSlackSendIntent },
   { name: "intent/slackListChannelsIntent", run: runIntentSlackListChannelsIntent },
   { name: "runtime/adapter", run: runRuntimeAdapter },

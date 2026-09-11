@@ -163,6 +163,23 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   results.push(
     check(
+      "[PRODUCT-P1] OAuth return captures connectionId before URL cleanup and starts confirmation only after an access token is available",
+      (() => {
+        const captureIndex = connectionsPanelSource.indexOf("setOauthReturnConnectionId(connectionId);");
+        const cleanupIndex = connectionsPanelSource.indexOf("window.history.replaceState");
+
+        return (
+          captureIndex >= 0 &&
+          cleanupIndex > captureIndex &&
+          connectionsPanelSource.includes("oauthReturnConfirmationStartedRef") &&
+          connectionsPanelSource.includes("void confirmConnection(oauthReturnConnectionId, accessToken);")
+        );
+      })()
+    )
+  );
+
+  results.push(
+    check(
       "[絶対条件] ConnectionsPanel.tsxはComposio provider実装(core/tact-integration/providers/composio/配下)を一切importしない(UI層とProvider実装の境界、構造的な確認)",
       !/from ["'].*providers\/composio/.test(connectionsPanelSource) &&
         !/@composio\/(core|client)/.test(connectionsPanelSource)

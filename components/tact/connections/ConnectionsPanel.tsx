@@ -27,6 +27,11 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { INTEGRATION_CATALOG } from "./integrationCatalog";
 import { aggregateConnectionStatus, type AggregatableConnection, type ConnectionUiStatus } from "./aggregateConnectionStatus";
 import { describeConnectionActionError, describeConnectionListError } from "./connectionErrorMessages";
+import {
+  buildConnectionConfirmEndpoint,
+  readOAuthReturnConnectionId,
+  removeOAuthReturnConnectionId,
+} from "./oauthReturn";
 
 // OAuth Return Flow(PRODUCT-P1指示Section3): confirmを必要最小限だけ
 // pollingする。無制限にProvider/DBを叩かない(絶対条件)。
@@ -75,10 +80,16 @@ export default function ConnectionsPanel() {
 
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // Capture the TACT-owned return id before removing it from the URL. Auth
+  // hydration can finish after this component mounts, so confirmation starts
+  // separately once an access token is available.
+  const [oauthReturnConnectionId, setOauthReturnConnectionId] = useState<string | null>(null);
+
   // React 18 Strict Modeの開発時二重実行でconfirmを2回走らせない
   // ためのガード(実運用上のservice呼び出し回数を安定させる、絶対条件
   // 「無制限なProvider呼び出しを増やさない」の精神を開発時にも保つ)。
   const oauthReturnHandledRef = useRef(false);
+  const oauthReturnConfirmationStartedRef = useRef(false);
 
   const refreshConnections = useCallback(async () => {
 
@@ -139,13 +150,7 @@ export default function ConnectionsPanel() {
   // ブラウザからproviderConnectionRefを送ることは無い——ここで扱う
   // connectionIdはTACT-owned canonical idであり、confirm API自体が
   // 呼び出しごとに所有者を再検証する(既存契約のまま)。
-  const confirmConnection = useCallback(async (connectionId: string) => {
-
-    const accessToken = getAccessToken();
-
-    if (!accessToken) {
-      return;
-    }
+  const confirmConnection = useCallback(async (connectionId: string, accessToken: string) => {
 
     // どのserviceのconnectionIdかはUIからは分からない(絶対条件:
     // providerConnectionRefは送らない、connectionId自体はopaqueな
@@ -160,7 +165,7 @@ export default function ConnectionsPanel() {
 
       try {
 
-        const response = await fetch(`/api/tact/connections/${connectionId}/confirm`, {
+        const response = await fetch(buildConnectionConfirmEndpoint(connectionId), {
           method: "POST",
           headers: { Authorization: `Bearer ${accessToken}` },
         });
@@ -212,7 +217,7 @@ export default function ConnectionsPanel() {
     setActionError(describeConnectionActionError("confirm_timeout"));
     await refreshConnections();
 
-  }, [getAccessToken, refreshConnections]);
+  }, [refreshConnections]);
 
   useEffect(() => {
 
@@ -222,8 +227,7 @@ export default function ConnectionsPanel() {
         return;
       }
 
-      const params = new URLSearchParams(window.location.search);
-      const connectionId = params.get("connectionId");
+      const connectionId = readOAuthReturnConnectionId(window.location.search);
 
       if (!connectionId) {
         return;
@@ -231,20 +235,39 @@ export default function ConnectionsPanel() {
 
       oauthReturnHandledRef.current = true;
 
+      // Capture synchronously before changing browser-visible state. The later
+      // token-aware effect must never depend on connectionId still being in
+      // window.location.search.
+      setOauthReturnConnectionId(connectionId);
+
       // URLからconnectionIdを取り除く(再読み込みで再度confirmを
       // 走らせない、絶対条件: 無制限なProvider呼び出しを増やさない)。
-      const cleanedUrl = new URL(window.location.href);
-      cleanedUrl.searchParams.delete("connectionId");
-      window.history.replaceState(null, "", cleanedUrl.toString());
-
-      confirmConnection(connectionId);
+      window.history.replaceState(null, "", removeOAuthReturnConnectionId(window.location.href));
 
     }
 
     startOauthReturnConfirmation();
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+
+    if (!oauthReturnConnectionId || oauthReturnConfirmationStartedRef.current) {
+      return;
+    }
+
+    const accessToken = getAccessToken();
+
+    if (!accessToken) {
+      return;
+    }
+
+    oauthReturnConfirmationStartedRef.current = true;
+    queueMicrotask(() => {
+      void confirmConnection(oauthReturnConnectionId, accessToken);
+    });
+
+  }, [confirmConnection, getAccessToken, oauthReturnConnectionId, user]);
 
   const handleConnect = useCallback(async (service: string) => {
 
