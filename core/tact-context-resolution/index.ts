@@ -29,12 +29,26 @@ export interface ContextPack {
 export interface ContextResolutionPlan {
   kind: "ready" | "ambiguous";
   requestText: string;
-  subject?: { summary: string; queryTerms: string[] };
+  subject?: { summary: string; queryTerms: string[]; confidence?: SubjectResolutionConfidence };
   sources: {
     notion?: { query: string };
     gmail?: { query: string };
   };
   clarification?: string;
+}
+
+export type SubjectResolutionConfidence = "high" | "medium" | "low";
+
+/**
+ * A small, provider-independent subject boundary. This is intentionally
+ * derived before any provider selection and cannot carry an action, owner, or
+ * authorization decision.
+ */
+export interface ResolvedConversationSubject {
+  subject?: string;
+  queryTerms: string[];
+  confidence: SubjectResolutionConfidence;
+  ambiguous: boolean;
 }
 
 export interface ContextReadOutcome {
@@ -82,10 +96,35 @@ function isUnsafeInstructionLike(value: string): boolean {
   return /(?:削除|送信|返信|作成|更新|変更|実行).{0,12}(?:して|しといて|してください)/u.test(value);
 }
 
-function subjectFromConversation(evidence: ConversationEvidence): string | undefined {
-  const priorMessages = evidence.messages.filter(
-    (message) => message.relationship !== "trigger" && !isUnsafeInstructionLike(message.text)
-  );
+const EXPLICIT_UPDATE_SUBJECT = /([\p{L}\p{N}][\p{L}\p{N}ー・._-]{0,47})の更新案件/u;
+const ENTITY_WITH_CONVERSATIONAL_PARTICLE = /([\p{L}\p{N}][\p{L}\p{N}ー・._-]{0,47})(?:から|の(?:件|案件))/gu;
+
+function isMeaningfulSubjectEntity(value: string): boolean {
+  const normalized = boundedText(value, 48);
+  return normalized.length >= 2 && !/^(?:これ|それ|この|その|あの|更新|案件|件|メール|先方|お客様|顧客)$/u.test(normalized);
+}
+
+function subjectEntityFromMessage(value: string): string | undefined {
+  const text = boundedText(value, MAX_QUERY_LENGTH);
+  const explicit = text.match(EXPLICIT_UPDATE_SUBJECT)?.[1];
+  if (explicit && isMeaningfulSubjectEntity(explicit)) {
+    return boundedText(explicit, 48);
+  }
+
+  // A subject can be expressed as either "A社の件、更新..." or
+  // "A社から更新案件のメール...". We require both a concrete entity and
+  // the update signal, rather than treating a mail observation as a subject.
+  if (!/更新/u.test(text)) return undefined;
+  for (const match of text.matchAll(ENTITY_WITH_CONVERSATIONAL_PARTICLE)) {
+    const entity = match[1];
+    if (entity && isMeaningfulSubjectEntity(entity)) {
+      return boundedText(entity, 48);
+    }
+  }
+  return undefined;
+}
+
+function fallbackSubjectFromConversation(priorMessages: ConversationEvidence["messages"]): string | undefined {
 
   const candidates = priorMessages
     .map((message, index) => {
@@ -113,6 +152,43 @@ function queryTermsForSubject(subject: string): string[] {
   return [...terms].slice(0, 3);
 }
 
+/**
+ * Resolves a referential business subject from prior, untrusted conversation
+ * evidence. It is deterministic and read-only: the current authenticated
+ * request remains the sole source of request type and authorization.
+ */
+export function resolveConversationSubject(evidence: ConversationEvidence): ResolvedConversationSubject {
+  const priorMessages = evidence.messages.filter(
+    (message) => message.relationship !== "trigger" && !isUnsafeInstructionLike(message.text)
+  );
+
+  const compositional = priorMessages
+    .map((message, index) => ({ entity: subjectEntityFromMessage(message.text), index }))
+    .filter((candidate): candidate is { entity: string; index: number } => !!candidate.entity)
+    .sort((left, right) => left.index - right.index)[0];
+
+  if (compositional) {
+    return {
+      subject: `${compositional.entity}の更新案件`,
+      queryTerms: [compositional.entity, "更新案件"],
+      confidence: "high",
+      ambiguous: false,
+    };
+  }
+
+  const subject = fallbackSubjectFromConversation(priorMessages);
+  if (subject) {
+    return {
+      subject,
+      queryTerms: queryTermsForSubject(subject),
+      confidence: "medium",
+      ambiguous: false,
+    };
+  }
+
+  return { queryTerms: [], confidence: "low", ambiguous: true };
+}
+
 function mentionsCommunication(evidence: ConversationEvidence, requestText: string): boolean {
   const text = `${requestText}\n${evidence.messages.map((message) => message.text).join("\n")}`;
   return /(?:メール|gmail|e-mail|mail|受信|先方から)/iu.test(text);
@@ -131,8 +207,8 @@ export function planContextResolution(
     return undefined;
   }
 
-  const subject = subjectFromConversation(conversationEvidence);
-  if (!subject) {
+  const resolvedSubject = resolveConversationSubject(conversationEvidence);
+  if (resolvedSubject.ambiguous || !resolvedSubject.subject) {
     return {
       kind: "ambiguous",
       requestText,
@@ -141,18 +217,22 @@ export function planContextResolution(
     };
   }
 
-  const queryTerms = queryTermsForSubject(subject);
-  const gmailQuery = queryTerms[1] ?? queryTerms[0];
+  const subject = resolvedSubject.subject;
+  const queryTerms = resolvedSubject.queryTerms;
+  // The canonical subject remains the useful organizational query. For mail,
+  // prefer the narrower entity term when present, without exposing a
+  // provider-specific query decision from the subject resolver.
+  const gmailQuery = queryTerms.find((term) => term !== subject) ?? queryTerms[0];
 
   return {
     kind: "ready",
     requestText,
-    subject: { summary: subject, queryTerms },
+    subject: { summary: subject, queryTerms, confidence: resolvedSubject.confidence },
     // Organizational evidence is useful for a bounded, identifiable work
     // subject. Communication is selected only when the trigger/evidence asks
     // about mail or another communication signal.
     sources: {
-      notion: { query: queryTerms[0] },
+      notion: { query: subject },
       ...(mentionsCommunication(conversationEvidence, requestText)
         ? { gmail: { query: gmailQuery } }
         : {}),

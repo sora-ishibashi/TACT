@@ -2,8 +2,10 @@ import {
   buildContextResolutionResult,
   formatContextResolutionAnswer,
   planContextResolution,
+  resolveConversationSubject,
   type ContextReadOutcome,
 } from "../../../core/tact-context-resolution";
+import { classifyDelegatedRequestType, resolveDelegatedWorkIntent } from "../../../core/tact-work/delegatedIntent";
 import type { ConversationEvidence } from "../../../core/tact-conversation/conversationEvidence";
 import { decomposeTask } from "../../../core/tact-orchestrator/decomposer";
 import { check, summarize, type CheckResult } from "../lib/check";
@@ -49,6 +51,53 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     "[CONTEXT-P2 plan] referential Slack evidence derives the work subject and selects organizational plus communication evidence",
     plan?.kind === "ready" && plan.subject?.summary === "A社の更新案件" &&
       plan.sources.notion?.query === "A社の更新案件" && plan.sources.gmail?.query === "A社"
+  ));
+
+  const naturalMailSubject = resolveConversationSubject(evidence([
+    { text: "TACTテスト商事から更新案件のメール来てる" },
+    { text: "9月15日までに確認してほしいみたい" },
+    { text: "これ確認して", relationship: "trigger" },
+  ]));
+  results.push(check(
+    "[Subject resolution] an entity plus natural mail observation composes a canonical update-work subject without an LLM call",
+    naturalMailSubject.subject === "TACTテスト商事の更新案件" &&
+      naturalMailSubject.queryTerms.join(",") === "TACTテスト商事,更新案件" &&
+      naturalMailSubject.confidence === "high" && !naturalMailSubject.ambiguous
+  ));
+
+  const naturalCases = [
+    resolveConversationSubject(evidence([{ text: "TACTテスト商事の更新案件、対応必要そうだね" }])),
+    resolveConversationSubject(evidence([{ text: "A社の件、更新どうなってる？" }])),
+    resolveConversationSubject(evidence([{ text: "更新の件、A社から返事来た" }])),
+    resolveConversationSubject(evidence([
+      { text: "A社の更新案件について確認お願い" },
+      { text: "さっきのA社案件" },
+    ])),
+  ];
+  results.push(check(
+    "[Subject resolution] explicit and natural Japanese variants retain the entity and update-work terms",
+    naturalCases[0]?.subject === "TACTテスト商事の更新案件" &&
+      naturalCases[1]?.subject === "A社の更新案件" &&
+      naturalCases[2]?.subject === "A社の更新案件" &&
+      naturalCases[2]?.queryTerms.includes("A社") === true &&
+      naturalCases[2]?.queryTerms.includes("更新案件") === true &&
+      naturalCases[3]?.subject === "A社の更新案件"
+  ));
+
+  const naturalActPlan = planContextResolution("これ対応しといて", evidence([
+    { text: "TACTテスト商事から更新案件のメール来てる" },
+    { text: "これ対応しといて", relationship: "trigger" },
+  ]));
+  const naturalActIntent = resolveDelegatedWorkIntent(naturalActPlan);
+  results.push(check(
+    "[Subject resolution authority] the current trigger alone determines act classification; subject terms contain no provider implementation names",
+    naturalActPlan?.subject?.summary === "TACTテスト商事の更新案件" &&
+      classifyDelegatedRequestType("これ確認して") === "inspect" &&
+      naturalActIntent?.requestType === "act" &&
+      naturalActPlan?.sources.notion?.query === "TACTテスト商事の更新案件" &&
+      naturalActPlan?.sources.gmail?.query === "TACTテスト商事" &&
+      !JSON.stringify(naturalActPlan?.subject).includes("GMAIL_") &&
+      !JSON.stringify(naturalActPlan?.subject).includes("NOTION_")
   ));
 
   results.push(check(
