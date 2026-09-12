@@ -1,4 +1,5 @@
 import {
+  getWork,
   listTasksForWork,
   listApprovalsForWork,
   updateWorkStatus,
@@ -52,12 +53,20 @@ export interface ReconcileWorkCompletionStatusDeps {
 
   updateWorkStatus: typeof updateWorkStatus;
 
+  // Architecture audit finding F-02 fix: needed only to read the durable
+  // semantic signal (Work.requestType) before writing "completed" — see the
+  // comment on the "completed" branch below. Every existing call site of
+  // this function already has a validated userId/accessToken for this Work
+  // in scope, so this adds no new trust boundary.
+  getWork: typeof getWork;
+
 }
 
 const defaultDeps: ReconcileWorkCompletionStatusDeps = {
   listTasksForWork,
   listApprovalsForWork,
   updateWorkStatus,
+  getWork,
 };
 
 // 呼び出し元(runWorkTurn()・executeApprovedIntegrationAction())が
@@ -76,6 +85,19 @@ export type WorkCompletionReconciliationOutcome =
   // 既存のcanonical semanticsに対応するため。Task一覧だけでは
   // この状態を検出できない)。
   | { status: "no_change"; reason: "pending_approval_exists" }
+  // Architecture audit finding F-02(GMAIL-P1 Completion Ownership Audit)
+  // fix: 全Taskがterminalでfailedも無い(=素直に読めばcompletedにしたい)
+  // が、このWorkが durable semantic delegated Work(Work.requestType!=null、
+  // core/tact-work/intake.tsが作成時に一度だけ設定する持続的signal)で
+  // あり、かつまだWork.resultDeliveredAt(最終的な利用者向け結果が
+  // 記録されたことを示す既存canonical delivery boundary、
+  // markWorkResultDelivered()参照)が未設定の場合。この関数はここでは
+  // Workを一切変更しない——最終的な完了確定は、delivery後に呼ばれる
+  // core/tact-work/delegatedCompletion.tsのfinalizeDelegatedWorkAfterDelivery()
+  // /finalizeSemanticWorkAfterProtectedWrite()が、このsame関数を
+  // もう一度呼ぶことで行う(新しい評価器を作らない、既存の
+  // reconcileWorkCompletionStatus()自身をそのまま再利用する)。
+  | { status: "no_change"; reason: "awaiting_semantic_delivery" }
   // 全Taskがterminalで、1件以上failedがある → Work全体をfailedへ確定。
   | { status: "reconciled"; workStatus: "failed" }
   // 全Taskがterminalで、failedは無く1件以上completedがある → Work
@@ -128,6 +150,31 @@ export async function reconcileWorkCompletionStatus(
   const anyCompleted = tasks.some((task) => task.status === "completed");
 
   if (anyCompleted) {
+
+    // Architecture audit finding F-02 fix(GMAIL-P1 Completion Ownership
+    // Audit、最重要): 「全Taskがterminalで1件以上completed」というTask
+    // 集計だけで、無条件にWorkをcompletedへ確定させない。このWorkが
+    // durable semantic delegated Work(subject/objective/requestType/
+    // completionConditions/requiredCapabilitiesを持つ、core/tact-work/
+    // intake.tsが作成時に一度だけ設定する)である場合、Task terminal化
+    // だけでは「業務として完了した」ことにならない——最終的な利用者向け
+    // 結果が実際に届けられた(Work.resultDeliveredAt、既存canonical
+    // delivery boundary)ことが必要条件のまま残る(core/tact-work/
+    // delegatedCompletion.tsのfinalizeDelegatedWorkAfterDelivery()が
+    // 既にread/inspect側で確立していた不変条件を、write/act側の
+    // Approval resume経路でも構造的に守れるようにするための修正)。
+    //
+    // 絶対条件(この修正が守る境界): この判定はWork.requestTypeという
+    // 既存の永続列を読むだけであり、新しいWork status・新しいWork
+    // model・新しいProvider固有分岐のいずれも追加しない。classic Work
+    // (requestType未設定)は以下のgetWork()呼び出し後も即座にcompleted
+    // へ確定する——挙動は一切変わらない。
+    const work = await deps.getWork(workId, userId, accessToken);
+
+    if (work?.requestType != null && !work.resultDeliveredAt) {
+      return { status: "no_change", reason: "awaiting_semantic_delivery" };
+    }
+
     await deps.updateWorkStatus(workId, userId, accessToken, "completed");
     return { status: "reconciled", workStatus: "completed" };
   }

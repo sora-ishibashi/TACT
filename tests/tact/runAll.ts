@@ -58,6 +58,7 @@ import { run as runSecurityPreLiveSecP0 } from "./security/preLiveSecP0.test";
 import { run as runSecuritySecR1P0 } from "./security/secR1P0.test";
 import { run as runWorkAudit } from "./work/audit.test";
 import { run as runWorkCompletion } from "./work/completion.test";
+import { run as runWorkCompletionOwnership } from "./work/completionOwnership.test";
 import { run as runWorkTaskLifecycleMonotonicity } from "./work/taskLifecycleMonotonicity.test";
 import { run as runWorkApprovalIntegrity } from "./work/approvalIntegrity.test";
 import { run as runWorkTaskRunReconciliation } from "./work/taskRunReconciliation.test";
@@ -199,6 +200,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "security/secR1P0", run: runSecuritySecR1P0 },
   { name: "work/audit", run: runWorkAudit },
   { name: "work/completion", run: runWorkCompletion },
+  { name: "work/completionOwnership", run: runWorkCompletionOwnership },
   { name: "work/taskLifecycleMonotonicity", run: runWorkTaskLifecycleMonotonicity },
   { name: "work/approvalIntegrity", run: runWorkApprovalIntegrity },
   { name: "work/taskRunReconciliation", run: runWorkTaskRunReconciliation },

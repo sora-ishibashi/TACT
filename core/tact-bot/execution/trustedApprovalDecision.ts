@@ -52,6 +52,7 @@ import {
   approveApproval as defaultApproveApproval,
   rejectApproval as defaultRejectApproval,
   requestTaskResume as defaultRequestTaskResume,
+  finalizeSemanticWorkAfterProtectedWrite as defaultFinalizeSemanticWorkAfterProtectedWrite,
   type ApprovalResolutionOutcome,
 } from "../../tact-work";
 import type { IntegrationActionExecutionOutcome } from "../../tact-integration";
@@ -98,6 +99,15 @@ export interface HandleApprovalDecisionAsTrustedActorDeps {
 
   executePreparedTaskResume: typeof defaultExecutePreparedTaskResume;
 
+  // Architecture audit finding F-02 fix(GMAIL-P1 Completion Ownership
+  // Audit): a protected write's Run/Task terminal state alone must not
+  // complete a durable semantic delegated Work (core/tact-work/
+  // delegatedCompletion.tsのfinalizeSemanticWorkAfterProtectedWrite()
+  // 参照)。既存のapproveApproval/rejectApproval/requestTaskResumeと同じ
+  // tact-work canonical function(絶対条件: Integration/Composio固有の
+  // 識別子ではない、ファイル冒頭コメントの既存禁止事項に抵触しない)。
+  finalizeSemanticWorkAfterProtectedWrite: typeof defaultFinalizeSemanticWorkAfterProtectedWrite;
+
   // Architecture Migration Phase C2.1c-c: このtest環境にはSUPABASE_
   // SERVICE_ROLE_KEYが設定されていないため(trustedConversationTurn.ts
   // と同じ既存事情)、上記のdepsをfake実装へ差し替えるだけでは
@@ -114,6 +124,7 @@ const defaultDeps: HandleApprovalDecisionAsTrustedActorDeps = {
   rejectApproval: defaultRejectApproval,
   requestTaskResume: defaultRequestTaskResume,
   executePreparedTaskResume: defaultExecutePreparedTaskResume,
+  finalizeSemanticWorkAfterProtectedWrite: defaultFinalizeSemanticWorkAfterProtectedWrite,
   getServiceRoleKey: defaultGetServiceRoleKey,
 };
 
@@ -281,6 +292,50 @@ export async function handleApprovalDecisionAsTrustedActor(
     });
 
     if (resumeOutcome.status === "write_executed") {
+
+      // Architecture audit finding F-02 fix(GMAIL-P1 Completion Ownership
+      // Audit、最重要): executeApprovedIntegrationAction()(このoutcomeの
+      // source)は、Run/Taskのterminal化のたびに既存のgeneric
+      // reconcileWorkCompletionStatus()を呼ぶが、そのfunction自身は
+      // (core/tact-work/completion.tsの修正により)durable semantic
+      // delegated WorkをWork.resultDeliveredAtが立つまでcompletedへ
+      // 進めない。ここで、実行結果が定義済み(completed/failed/
+      // 既に実行済みのreplay)になった直後に、その同じcanonical delivery
+      // boundaryを進める——Gmail固有分岐は一切無く、classic
+      // (non-semantic)Workに対しては完全なno-op(finalizeSemanticWork
+      // AfterProtectedWrite()自身がWork.requestTypeを見て判定する)。
+      if (
+        resumeOutcome.outcome.status === "completed" ||
+        resumeOutcome.outcome.status === "failed" ||
+        resumeOutcome.outcome.status === "already_executed"
+      ) {
+
+        try {
+
+          await deps.finalizeSemanticWorkAfterProtectedWrite(
+            params.workId,
+            params.tactUserId,
+            trustedExecutionCredential
+          );
+
+        } catch (error) {
+
+          // 既存reconcileAfterTaskUpdate()と同じ「非致命的な副次処理は
+          // console.warnでbest-effort化する」既存パターン。Run/Task/
+          // Approvalは既に確定済みであり、この呼び出しの失敗によって
+          // executionOutcome自体(既に確定済みの外部side effectの結果)
+          // は変更しない。
+          console.warn(
+            "[tact-bot/trustedApprovalDecision] finalizeSemanticWorkAfterProtectedWrite() failed after " +
+            "a protected write produced a definitive outcome; Run/Task状態は既に確定済みのため、" +
+            "この内部集計の失敗によってexecutionOutcome自体は変更しない。",
+            error
+          );
+
+        }
+
+      }
+
       return { ok: true, approvalOutcome, executionOutcome: resumeOutcome.outcome };
     }
 

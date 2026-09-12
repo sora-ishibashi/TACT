@@ -1,5 +1,6 @@
 import type { ContextResolutionResult } from "../tact-context-resolution";
 import {
+  getWork,
   markWorkResultDelivered,
   updateWorkEvidenceRefs,
   updateWorkStatus,
@@ -126,4 +127,73 @@ export async function finalizeDelegatedWorkAfterDelivery(params: {
     params.accessToken
   );
   return evaluation;
+}
+
+// =========================
+// finalizeSemanticWorkAfterProtectedWrite
+// (Architecture audit finding F-02 fix: GMAIL-P1 Completion Ownership Audit)
+// =========================
+//
+// Write-side counterpart to finalizeDelegatedWorkAfterDelivery() above.
+// The protected-write resume path (core/tact-integration/execution.ts's
+// executeApprovedIntegrationAction(), reached via core/tact-conversation's
+// executePreparedTaskResume()) is a pre-existing, provider-neutral boundary
+// that has no knowledge of Work.requestType/completionConditions/
+// requiredCapabilities — it only ever calls the generic
+// reconcileWorkCompletionStatus(), which (per the fix in ./completion.ts)
+// now refuses to mark a durable semantic delegated Work "completed" until
+// Work.resultDeliveredAt is set.
+//
+// This function is the one place that marks that same canonical delivery
+// boundary for the write/"act" path, once the resume path has produced a
+// *definitive* Run/Task outcome (success, failure, or an already-executed
+// replay of a prior decision — never for an ambiguous/execution_error
+// outcome, where nothing has actually been confirmed). It is intentionally
+// symmetrical with finalizeDelegatedWorkAfterDelivery(): mark delivery,
+// then defer the actual terminal-state decision entirely to the same
+// shared reconcileWorkCompletionStatus() — no second completion evaluator,
+// no per-provider-specific branch, no new Work status.
+//
+// Safe to call unconditionally for every resumed protected write: it is a
+// no-op for a classic (non-semantic) Work (Work.requestType == null),
+// which remains fully owned by the existing
+// reconcileAfterTaskUpdate() -> reconcileWorkCompletionStatus() call inside
+// core/tact-integration/execution.ts, unchanged.
+
+export interface FinalizeSemanticWorkAfterProtectedWriteDeps {
+
+  getWork: typeof getWork;
+
+  markWorkResultDelivered: typeof markWorkResultDelivered;
+
+  reconcileWorkCompletionStatus: typeof reconcileWorkCompletionStatus;
+
+}
+
+const defaultFinalizeSemanticWorkAfterProtectedWriteDeps: FinalizeSemanticWorkAfterProtectedWriteDeps = {
+  getWork,
+  markWorkResultDelivered,
+  reconcileWorkCompletionStatus,
+};
+
+export async function finalizeSemanticWorkAfterProtectedWrite(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  deps: FinalizeSemanticWorkAfterProtectedWriteDeps = defaultFinalizeSemanticWorkAfterProtectedWriteDeps
+): Promise<void> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work || work.requestType == null) {
+    // Classic (non-semantic) Work, or ownership could not be re-confirmed —
+    // either way, this function has nothing to do. Completion for a classic
+    // Work remains entirely owned by the existing generic reconciliation
+    // already performed inside core/tact-integration/execution.ts.
+    return;
+  }
+
+  await deps.markWorkResultDelivered(workId, userId, accessToken);
+  await deps.reconcileWorkCompletionStatus(workId, userId, accessToken);
+
 }

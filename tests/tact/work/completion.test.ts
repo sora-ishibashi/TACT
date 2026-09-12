@@ -14,7 +14,7 @@
 // 確定させないこと。
 
 import { reconcileWorkCompletionStatus, type ReconcileWorkCompletionStatusDeps } from "../../../core/tact-work/completion";
-import type { WorkTask, Approval } from "../../../core/tact-work/types";
+import type { Approval, Work, WorkTask } from "../../../core/tact-work/types";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeTask(overrides: Partial<WorkTask> = {}): WorkTask {
@@ -23,6 +23,24 @@ function makeTask(overrides: Partial<WorkTask> = {}): WorkTask {
     workId: "work-1",
     description: "テスト",
     status: "pending",
+    createdAt: "2026-09-06T00:00:00.000Z",
+    updatedAt: "2026-09-06T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+// Architecture audit finding F-02 fix regression coverage: a "classic"
+// (non-semantic) Work by default — requestType/resultDeliveredAt both
+// unset, matching every Work created before WORK-P1. All pre-existing
+// Cases in this file exercise exactly this shape and must keep behaving
+// identically.
+function makeWork(overrides: Partial<Work> = {}): Work {
+  return {
+    id: "work-1",
+    userId: "user-1",
+    createdByActorKind: "user",
+    createdByActorId: "user-1",
+    status: "running",
     createdAt: "2026-09-06T00:00:00.000Z",
     updatedAt: "2026-09-06T00:00:00.000Z",
     ...overrides,
@@ -47,9 +65,9 @@ function makeApproval(overrides: Partial<Approval> = {}): Approval {
   };
 }
 
-function makeDeps(tasks: WorkTask[], approvals: Approval[] = []) {
+function makeDeps(tasks: WorkTask[], approvals: Approval[] = [], work: Work = makeWork()) {
 
-  const calls = { updateWorkStatusCalls: [] as string[] };
+  const calls = { updateWorkStatusCalls: [] as string[], getWorkCalls: 0 };
 
   const deps: ReconcileWorkCompletionStatusDeps = {
 
@@ -59,6 +77,11 @@ function makeDeps(tasks: WorkTask[], approvals: Approval[] = []) {
 
     updateWorkStatus: async (_workId, _userId, _accessToken, status) => {
       calls.updateWorkStatusCalls.push(status);
+    },
+
+    getWork: async () => {
+      calls.getWorkCalls += 1;
+      return work;
     },
 
   };
@@ -271,6 +294,105 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         outcome.status === "undetermined" &&
           outcome.reason === "all_tasks_cancelled_no_existing_precedent" &&
           calls.updateWorkStatusCalls.length === 0
+      )
+    );
+  }
+
+  // =========================
+  // Architecture audit finding F-02 fix: durable semantic delegated Work
+  // must not complete purely from Task-count, until Work.resultDeliveredAt
+  // is set (core/tact-work/completion.ts、"awaiting_semantic_delivery")。
+  // =========================
+
+  // ---- semantic Work(requestType != null)、全Task completed、
+  // resultDeliveredAtが未設定 -> Workをcompletedへ確定しない ----
+  {
+    const semanticWork = makeWork({ requestType: "inspect", resultDeliveredAt: null });
+
+    const { deps, calls } = makeDeps(
+      [makeTask({ status: "completed" })],
+      [],
+      semanticWork
+    );
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[F-02] semantic Work(requestType=inspect)+全Task completed+resultDeliveredAt未設定 -> Workはcompletedへ確定しない(awaiting_semantic_delivery)",
+        outcome.status === "no_change" &&
+          outcome.reason === "awaiting_semantic_delivery" &&
+          calls.updateWorkStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- semantic Work、全Task completed、resultDeliveredAtが設定済み
+  // -> 通常通りcompletedへ確定できる ----
+  {
+    const semanticWork = makeWork({
+      requestType: "inspect",
+      resultDeliveredAt: "2026-09-12T00:00:00.000Z",
+    });
+
+    const { deps, calls } = makeDeps(
+      [makeTask({ status: "completed" })],
+      [],
+      semanticWork
+    );
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[F-02] semantic Work+全Task completed+resultDeliveredAt設定済み -> 通常通りcompletedへ確定する",
+        outcome.status === "reconciled" &&
+          outcome.workStatus === "completed" &&
+          calls.updateWorkStatusCalls.join(",") === "completed"
+      )
+    );
+  }
+
+  // ---- semantic act Work、send Task failed -> resultDeliveredAtを
+  // 待たず即座にfailedへ確定する(false successより安全側、既存
+  // failure semanticsのまま変更しない) ----
+  {
+    const semanticWork = makeWork({ requestType: "act", resultDeliveredAt: null });
+
+    const { deps, calls } = makeDeps(
+      [
+        makeTask({ id: "task-1", status: "completed" }),
+        makeTask({ id: "task-2", status: "failed" }),
+      ],
+      [],
+      semanticWork
+    );
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[F-02] semantic act Work+send Task failed -> resultDeliveredAt未設定でも即座にfailedへ確定する(false successにしない)",
+        outcome.status === "reconciled" &&
+          outcome.workStatus === "failed" &&
+          calls.updateWorkStatusCalls.join(",") === "failed"
+      )
+    );
+  }
+
+  // ---- classic Work(requestType未設定)は、getWork()が呼ばれても
+  // (実装の都合)従来通り即座にcompletedへ確定する(回帰確認) ----
+  {
+    const { deps, calls } = makeDeps([makeTask({ status: "completed" })], [], makeWork());
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[F-02回帰確認] classic Work(requestType未設定)は従来通り即座にcompletedへ確定する(挙動変更なし)",
+        outcome.status === "reconciled" &&
+          outcome.workStatus === "completed" &&
+          calls.updateWorkStatusCalls.join(",") === "completed"
       )
     );
   }

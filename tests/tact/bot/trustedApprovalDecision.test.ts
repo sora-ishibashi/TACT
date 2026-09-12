@@ -88,18 +88,21 @@ function makeFakeDeps(options: {
   resumeRequestResult?: TaskResumeRequestOutcome;
   resumeExecutionResult?: TaskResumeExecutionOutcome;
   resumeExecutionThrows?: unknown;
+  finalizeSemanticWorkThrows?: unknown;
 } = {}): {
   deps: HandleApprovalDecisionAsTrustedActorDeps;
   approveCalls: unknown[][];
   rejectCalls: unknown[][];
   resumeRequestCalls: unknown[][];
   resumeExecutionCalls: unknown[][];
+  finalizeSemanticWorkCalls: unknown[][];
 } {
 
   const approveCalls: unknown[][] = [];
   const rejectCalls: unknown[][] = [];
   const resumeRequestCalls: unknown[][] = [];
   const resumeExecutionCalls: unknown[][] = [];
+  const finalizeSemanticWorkCalls: unknown[][] = [];
 
   const defaultWriteExecuted: TaskResumeExecutionOutcome = {
     status: "write_executed",
@@ -133,9 +136,17 @@ function makeFakeDeps(options: {
       }
       return options.resumeExecutionResult ?? defaultWriteExecuted;
     }) as HandleApprovalDecisionAsTrustedActorDeps["executePreparedTaskResume"],
+
+    // Architecture audit finding F-02 fix regression coverage.
+    finalizeSemanticWorkAfterProtectedWrite: async (...args: unknown[]) => {
+      finalizeSemanticWorkCalls.push(args);
+      if (options.finalizeSemanticWorkThrows !== undefined) {
+        throw options.finalizeSemanticWorkThrows;
+      }
+    },
   };
 
-  return { deps, approveCalls, rejectCalls, resumeRequestCalls, resumeExecutionCalls };
+  return { deps, approveCalls, rejectCalls, resumeRequestCalls, resumeExecutionCalls, finalizeSemanticWorkCalls };
 
 }
 
@@ -186,7 +197,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   // ---- Case1: 新規approve成功 -> requestTaskResume→executePreparedTaskResumeが各exactly 1 -> completed ----
   {
-    const { deps, approveCalls, resumeRequestCalls, resumeExecutionCalls } = makeFakeDeps({
+    const { deps, approveCalls, resumeRequestCalls, resumeExecutionCalls, finalizeSemanticWorkCalls } = makeFakeDeps({
       approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
     });
 
@@ -213,11 +224,20 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           (resumeRequestCalls[0]?.[0] as { reason?: string })?.reason === "approval_resolved"
       )
     );
+
+    results.push(
+      check(
+        "[F-02] write_executed+completedの直後、finalizeSemanticWorkAfterProtectedWrite()がworkId/trusted tactUserIdで正確に1回呼ばれる(durable semantic delivery boundaryを進める起点)",
+        finalizeSemanticWorkCalls.length === 1 &&
+          finalizeSemanticWorkCalls[0]?.[0] === "work-1" &&
+          finalizeSemanticWorkCalls[0]?.[1] === "tact-user-1"
+      )
+    );
   }
 
   // ---- Case2: canonical failed outcome -> そのまま返す、retry 0 ----
   {
-    const { resumeExecutionCalls, deps } = makeFakeDeps({
+    const { resumeExecutionCalls, finalizeSemanticWorkCalls, deps } = makeFakeDeps({
       approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
       resumeExecutionResult: { status: "write_executed", outcome: { status: "failed", run: {} as never } },
     });
@@ -230,11 +250,18 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         result.ok === true && result.executionOutcome?.status === "failed" && resumeExecutionCalls.length === 1
       )
     );
+
+    results.push(
+      check(
+        "[F-02] definite failureでもfinalizeSemanticWorkAfterProtectedWrite()は1回呼ばれる(delivery markingは成功/失敗どちらの確定結果でも行う——false successを主張するものではなく、単に定義済みの結果を記録するだけ)",
+        finalizeSemanticWorkCalls.length === 1
+      )
+    );
   }
 
   // ---- Case3: 既にapproved(repeated decision) + already_executed execution outcome ----
   {
-    const { deps, approveCalls, resumeExecutionCalls } = makeFakeDeps({
+    const { deps, approveCalls, resumeExecutionCalls, finalizeSemanticWorkCalls } = makeFakeDeps({
       approveResult: { status: "already_resolved", approval: makeApproval({ status: "approved" }) },
       resumeExecutionResult: { status: "write_executed", outcome: { status: "already_executed", run: {} as never } },
     });
@@ -251,11 +278,18 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           result.executionOutcome?.status === "already_executed"
       )
     );
+
+    results.push(
+      check(
+        "[F-02] already_executed(duplicate approval replay)でもfinalizeSemanticWorkAfterProtectedWrite()は1回呼ばれる(冪等——Workは既にterminalのはずで、これ自体は安全なno-opになる)",
+        finalizeSemanticWorkCalls.length === 1
+      )
+    );
   }
 
   // ---- Case3b(Fast Port P6b新規): requestTaskResume()自身がeligibility再確認でblocked/already_terminalを返した場合 -> Providerへ到達せず、既存invalid_actionへ安全に折り畳む ----
   {
-    const { deps, resumeExecutionCalls } = makeFakeDeps({
+    const { deps, resumeExecutionCalls, finalizeSemanticWorkCalls } = makeFakeDeps({
       approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
       resumeRequestResult: { status: "blocked", reasonCode: "active_run_exists" },
     });
@@ -270,11 +304,40 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           result.executionOutcome?.status === "invalid_action"
       )
     );
+
+    results.push(
+      check(
+        "[F-02] resume自体に到達しなかった場合、finalizeSemanticWorkAfterProtectedWrite()は一切呼ばれない(definitiveな結果が無いため、delivery markingしない)",
+        finalizeSemanticWorkCalls.length === 0
+      )
+    );
+  }
+
+  // ---- Case3c(F-02新規): executePreparedTaskResume()がwrite_executedを
+  // 返しても、outcome自体がinvalid_action/connection_unavailable等
+  // (definitiveな実行結果ではない)の場合はfinalizeSemanticWorkAfter
+  // ProtectedWrite()を呼ばない ----
+  {
+    const { deps, finalizeSemanticWorkCalls } = makeFakeDeps({
+      approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
+      resumeExecutionResult: { status: "write_executed", outcome: { status: "connection_unavailable" } },
+    });
+
+    const result = await handleApprovalDecisionAsTrustedActor(makeParams({ decision: "approve" }), deps);
+
+    results.push(
+      check(
+        "[F-02] write_executedだがoutcome.statusがconnection_unavailable(definitiveな実行結果ではない)の場合、finalizeSemanticWorkAfterProtectedWrite()は呼ばれない",
+        result.ok === true &&
+          result.executionOutcome?.status === "connection_unavailable" &&
+          finalizeSemanticWorkCalls.length === 0
+      )
+    );
   }
 
   // ---- Case4: reject -> requestTaskResume/executePreparedTaskResume 0 calls ----
   {
-    const { deps, rejectCalls, resumeRequestCalls, resumeExecutionCalls } = makeFakeDeps({
+    const { deps, rejectCalls, resumeRequestCalls, resumeExecutionCalls, finalizeSemanticWorkCalls } = makeFakeDeps({
       rejectResult: { status: "rejected", approval: makeApproval({ status: "rejected" }) },
     });
 
@@ -289,6 +352,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           result.ok === true &&
           result.approvalOutcome.status === "rejected" &&
           result.executionOutcome === undefined
+      )
+    );
+
+    results.push(
+      check(
+        "[F-02] reject decisionではfinalizeSemanticWorkAfterProtectedWrite()も0回のまま(rejectはRun/Task/Workをrejectapproval()自身が直接failedへ確定させる既存経路であり、write resumeへは一切進まない)",
+        finalizeSemanticWorkCalls.length === 0
       )
     );
   }
@@ -356,6 +426,37 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         "[Case6] execution_error結果にraw Error object/message/stackが含まれない(戻り値へは一切含めない)",
         !JSON.stringify(result).includes("simulated internal exception") &&
           !JSON.stringify(result).toLowerCase().includes("stack")
+      )
+    );
+  }
+
+  // ---- Case6b(F-02新規): finalizeSemanticWorkAfterProtectedWrite()自身が
+  // throwしても、handler自体はthrowせず、既に確定済みのexecutionOutcome
+  // (completed)をそのまま返す(best-effort、既存reconcileAfterTaskUpdate()
+  // と同じ「非致命的な副次処理の失敗でexternal side effectの成否判定を
+  // 変更しない」既存パターンをこのfileにも適用する) ----
+  {
+    const { deps, finalizeSemanticWorkCalls } = makeFakeDeps({
+      approveResult: { status: "approved", approval: makeApproval({ status: "approved" }), workResumed: true },
+      finalizeSemanticWorkThrows: new Error("simulated DB error during semantic delivery marking"),
+    });
+
+    let threw = false;
+    let result;
+
+    try {
+      result = await handleApprovalDecisionAsTrustedActor(makeParams({ decision: "approve" }), deps);
+    } catch {
+      threw = true;
+    }
+
+    results.push(
+      check(
+        "[Case6b][F-02] finalizeSemanticWorkAfterProtectedWrite()がunexpected exceptionを投げても、handler自体はthrowせず、既に確定済みのcompleted outcomeをそのまま返す",
+        threw === false &&
+          result?.ok === true &&
+          result.executionOutcome?.status === "completed" &&
+          finalizeSemanticWorkCalls.length === 1
       )
     );
   }
