@@ -34,6 +34,12 @@ import type { CapabilityInvocationResult } from "../tact-orchestrator/types";
 // approvalIntegrity.ts自身はこのfileを一切importしていないため、
 // 循環依存にはならない。
 import type { JsonValue } from "./approvalIntegrity";
+// REF-P1d: pinned referent候補のimmutable snapshot型を、tact-referentの
+// pure domain moduleからそのまま再利用する(型のみimport、新しい並行
+// 語彙を作らない)。依存方向はDesign Freeze §23で確定した一方向
+// (tact-work → tact-referent)のまま——tact-referent側はcore/tact-work
+// を一切importしない。
+import type { CandidateSnapshotEntry } from "../tact-referent/clarification";
 
 // =========================
 // Actor Reference (ARCH-R2 Section9)
@@ -531,6 +537,23 @@ export interface Clarification {
   expiresAt?: string | null;
 
   createdAt: string;
+
+  // =========================
+  // Referent Clarification (REF-P1d: Pinned Clarification +
+  // TOCTOU-Safe Candidate Selection)
+  // =========================
+  //
+  // supabase/migrations/20260922000000_add_referent_clarification_snapshot.sql
+  // で追加したnullable列にそのまま対応する。両方ともnull/undefinedの
+  // 場合、このClarificationは既存(Fast Port P3a)の自由記述回答のまま
+  // 振る舞う——candidateSnapshot/candidateSnapshotHashの有無が、
+  // referent-selection Clarificationかどうかを区別する唯一の判別子
+  // (新しいuniversal Clarification frameworkを導入しない、REF-P1d
+  // 絶対条件)。作成後は一切mutateされない(immutable、TOCTOU防御)。
+
+  candidateSnapshot?: readonly CandidateSnapshotEntry[] | null;
+
+  candidateSnapshotHash?: string | null;
 
 }
 

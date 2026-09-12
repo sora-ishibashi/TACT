@@ -18,6 +18,9 @@ import type {
   AuditEventCategory,
   AuditEventType,
 } from "./types";
+// REF-P1d: DBのjsonb列(unknown)をCandidateSnapshotEntry[]へ安全に
+// 検証・変換する、tact-referentのpure runtime validator。
+import { parseCandidateSnapshot, type CandidateSnapshotEntry } from "../tact-referent/clarification";
 import type { JsonValue } from "./approvalIntegrity";
 
 // =========================
@@ -190,6 +193,12 @@ export interface ClarificationRow {
   responded_at: string | null;
   expires_at: string | null;
   created_at: string;
+  // REF-P1d(supabase/migrations/20260922000000_add_referent_clarification_snapshot.sql)。
+  // jsonb列はunknownとして受け取り、toClarification()内でruntime検証する
+  // (DB層を信用しない、既存のparseStoredApprovalSubject()と同じ
+  // 設計判断)。
+  candidate_snapshot: unknown | null;
+  candidate_snapshot_hash: string | null;
 }
 
 // Fast Port P4a: Append-Only Audit Event Foundation。current-state
@@ -344,6 +353,13 @@ export function toClarification(row: ClarificationRow): Clarification {
     respondedAt: row.responded_at,
     expiresAt: row.expires_at,
     createdAt: row.created_at,
+    // REF-P1d: rowに列自体が無い(古いSELECT/fake row)場合はundefinedの
+    // まま、列はあるがNULL/不正な形の場合はparseCandidateSnapshot()が
+    // undefinedを返す——いずれの場合も既存の自由記述Clarification挙動
+    // へ安全にfall backする(ApprovalRowのsubject_json等と同じ、既存
+    // フィールドのnull/undefined扱いを踏襲)。
+    candidateSnapshot: parseCandidateSnapshot(row.candidate_snapshot),
+    candidateSnapshotHash: row.candidate_snapshot_hash,
   };
 
 }
@@ -385,7 +401,7 @@ const APPROVAL_COLUMNS =
   "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, requested_from_actor_kind, requested_from_actor_id, allowed_approver_ids, status, reason, payload, requested_at, responded_at, response, expires_at, created_at, subject_version, subject_json, subject_hash, subject_captured_at";
 
 const CLARIFICATION_COLUMNS =
-  "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, allowed_responder_ids, status, reason_code, question, response, responded_by_actor_kind, responded_by_actor_id, requested_at, responded_at, expires_at, created_at";
+  "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, allowed_responder_ids, status, reason_code, question, response, responded_by_actor_kind, responded_by_actor_id, requested_at, responded_at, expires_at, created_at, candidate_snapshot, candidate_snapshot_hash";
 
 const AUDIT_EVENT_COLUMNS =
   "id, work_id, task_id, run_id, approval_id, clarification_id, category, event_type, actor_kind, actor_id, reason_code, details, sequence, occurred_at, created_at";
@@ -1261,6 +1277,11 @@ export interface CreateClarificationParams {
   reasonCode: ClarificationReasonCode;
   question: string;
   expiresAt?: string | null;
+  // REF-P1d: 作成時にのみ設定する。updateClarificationStatus()は
+  // この2 fieldを一切書き込まない(絶対条件: candidate_snapshotは
+  // 作成後にmutateされない、immutability)。
+  candidateSnapshot?: readonly CandidateSnapshotEntry[] | null;
+  candidateSnapshotHash?: string | null;
 }
 
 export async function createClarification(
@@ -1290,6 +1311,8 @@ export async function createClarification(
       reason_code: params.reasonCode,
       question: params.question,
       expires_at: params.expiresAt ?? null,
+      candidate_snapshot: params.candidateSnapshot ?? null,
+      candidate_snapshot_hash: params.candidateSnapshotHash ?? null,
     })
     .select(CLARIFICATION_COLUMNS)
     .single();

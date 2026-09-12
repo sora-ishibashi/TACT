@@ -27,6 +27,7 @@ import {
   type ClarificationRequest,
 } from "../../../core/tact-work/clarification";
 import type { Clarification, Work, WorkStatus } from "../../../core/tact-work/types";
+import { resolveReferentClarificationSelection } from "../../../core/tact-referent/clarification";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeWork(overrides: Partial<Work> = {}): Work {
@@ -106,6 +107,11 @@ function makeFakeBackend(works: Record<string, string>): FakeBackend {
         respondedAt: null,
         expiresAt: params.expiresAt ?? null,
         createdAt: "2026-09-06T00:00:00.000Z",
+        // REF-P1d: 既存の汎用Clarification testはこの2 fieldを一切
+        // 使わない(渡されなければnull/undefinedのまま)——後方互換性を
+        // このfake自体でも保つ。
+        candidateSnapshot: params.candidateSnapshot ?? null,
+        candidateSnapshotHash: params.candidateSnapshotHash ?? null,
       };
 
       clarifications.set(id, clarification);
@@ -181,6 +187,15 @@ function makeFakeBackend(works: Record<string, string>): FakeBackend {
         details: request.details ?? null,
       });
     },
+
+    // REF-P1d: このfile自体は汎用(非referent)Clarification lifecycleの
+    // regressionであり、candidateSnapshotを持つClarificationを作らない
+    // ため、実装(pure関数、副作用なし)をそのまま使って構わない
+    // ——candidateSnapshot/candidateSnapshotHashが無い限り
+    // resolveClarification()はこの関数へ一切到達しない。
+    resolveReferentClarificationSelection,
+
+    now: () => new Date("2026-09-06T00:00:00.000Z"),
 
   };
 

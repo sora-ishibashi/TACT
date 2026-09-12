@@ -10,6 +10,17 @@ import type { Clarification, ClarificationReasonCode, ActorReference, WorkStatus
 // Fast Port P4b: Audit emission。clarification.ts自身がclarification.
 // requested/answeredのcanonical emitterである(絶対条件Step14)。
 import { emitAuditSafely } from "./audit";
+// REF-P1d: pinned referent候補選択のためのpure domain helper
+// (tact-referent側はcore/tact-workを一切importしない、一方向の依存)。
+import {
+  buildCandidateSnapshot,
+  computeReferentClarificationExpiresAt,
+  hashCandidateSnapshot,
+  resolveReferentClarificationSelection,
+  type CandidateSnapshotEntry,
+  type ReferentClarificationSelectionResult,
+} from "../tact-referent/clarification";
+import type { CommunicationCandidate } from "../tact-referent/types";
 
 // =========================
 // TACT Work — Clarification Execution Boundary (Fast Port P3a:
@@ -64,6 +75,13 @@ export interface ClarificationRequest {
 
   expiresAt?: string | null;
 
+  // REF-P1d: 作成時にのみ設定される、immutableなpinned candidate
+  // snapshot(既に構築・hash済みのものをそのまま渡す想定——このfile
+  // 自身での構築はrequestReferentClarification()が行う)。
+  candidateSnapshot?: readonly CandidateSnapshotEntry[] | null;
+
+  candidateSnapshotHash?: string | null;
+
 }
 
 export interface ClarificationExecutionDeps {
@@ -84,6 +102,16 @@ export interface ClarificationExecutionDeps {
   // approval.tsと同じDI pattern、Step13)。
   emitAuditEvent: typeof emitAuditSafely;
 
+  // REF-P1d: pinned candidate selectionの純粋判定ロジック(DI経由で
+  // test時に差し替え可能にする、既存パターンをそのまま踏襲)。
+  resolveReferentClarificationSelection: typeof resolveReferentClarificationSelection;
+
+  // REF-P1d: 決定論的testのため、時刻を注入可能にする(このfile内で
+  // Date.now()/new Date()を直接呼ばない、既存store.ts側の
+  // updateClarificationStatus()のresponded_atはI/O境界の既存挙動として
+  // 維持し変更しない)。
+  now: () => Date;
+
 }
 
 const defaultDeps: ClarificationExecutionDeps = {
@@ -94,6 +122,8 @@ const defaultDeps: ClarificationExecutionDeps = {
   listClarificationsForWork,
   updateWorkStatus,
   emitAuditEvent: emitAuditSafely,
+  resolveReferentClarificationSelection,
+  now: () => new Date(),
 };
 
 // =========================
@@ -126,6 +156,8 @@ export async function requestClarification(
       reasonCode: request.reasonCode,
       question: request.question,
       expiresAt: request.expiresAt ?? null,
+      candidateSnapshot: request.candidateSnapshot ?? null,
+      candidateSnapshotHash: request.candidateSnapshotHash ?? null,
     }
   );
 
@@ -158,6 +190,90 @@ export async function requestClarification(
   );
 
   return clarification;
+
+}
+
+// =========================
+// requestReferentClarification (REF-P1d)
+// =========================
+//
+// requestClarification()の薄いwrapper——並行するClarification
+// subsystemを作らない(このphaseの明示的指示)。candidate snapshotの
+// 構築・index付与・hash計算だけをこの関数が担い、永続化自体は既存の
+// requestClarification()/store.createClarification()にそのまま委譲する。
+//
+// 絶対条件: questionのrendering(「1. ... / 2. ...」形式のUI向け整形)は
+// ここでは行わない——orchestration層(REF-P1f)の責務。この関数は
+// 呼び出し元が既に組み立てたquestion textを受け取るだけであり、
+// candidate snapshotの構築とrequestClarification()への橋渡しに専念する
+// (Build Less)。
+
+export interface ReferentClarificationRequest {
+
+  workId: string;
+
+  taskId?: string | null;
+
+  requestedByActor: ActorReference;
+
+  question: string;
+
+  candidates: readonly CommunicationCandidate[];
+
+  allowedResponderIds?: string[] | null;
+
+  // 省略時はWRITE_REFERENT_CLARIFICATION_TTL_MS(24h)を
+  // deps.now()基準で適用する。
+  expiresAt?: string | null;
+
+}
+
+export interface RequestReferentClarificationDeps extends ClarificationExecutionDeps {
+
+  buildCandidateSnapshot: typeof buildCandidateSnapshot;
+
+  hashCandidateSnapshot: typeof hashCandidateSnapshot;
+
+  computeReferentClarificationExpiresAt: typeof computeReferentClarificationExpiresAt;
+
+}
+
+const defaultRequestReferentClarificationDeps: RequestReferentClarificationDeps = {
+  ...defaultDeps,
+  buildCandidateSnapshot,
+  hashCandidateSnapshot,
+  computeReferentClarificationExpiresAt,
+};
+
+export async function requestReferentClarification(
+  request: ReferentClarificationRequest,
+  userId: string,
+  accessToken: string,
+  deps: RequestReferentClarificationDeps = defaultRequestReferentClarificationDeps
+): Promise<Clarification | undefined> {
+
+  const candidateSnapshot = deps.buildCandidateSnapshot(request.candidates);
+  const candidateSnapshotHash = deps.hashCandidateSnapshot(candidateSnapshot);
+
+  return requestClarification(
+    {
+      workId: request.workId,
+      taskId: request.taskId,
+      requestedByActor: request.requestedByActor,
+      // REF-P1d時点で唯一のproducerはWRITEのtarget解決
+      // (missing_required_input、既存のCLARIFICATION_REASON_CODESの
+      // 唯一の値をそのまま再利用する——新しいreasonCodeを先取りしない)。
+      reasonCode: "missing_required_input",
+      question: request.question,
+      allowedResponderIds: request.allowedResponderIds,
+      expiresAt: request.expiresAt ?? deps.computeReferentClarificationExpiresAt(deps.now()),
+      candidateSnapshot,
+      candidateSnapshotHash,
+    },
+    userId,
+    accessToken,
+    deps
+  );
 
 }
 
@@ -199,7 +315,23 @@ export type ClarificationResolutionOutcome =
   | { status: "invalid_transition"; clarification: Clarification }
   | { status: "responder_not_allowed"; clarification: Clarification }
   | { status: "work_not_resumable"; clarification: Clarification; workStatus: WorkStatus }
-  | { status: "answered"; clarification: Clarification; workResumed: boolean };
+  // REF-P1d: candidateSnapshot/candidateSnapshotHashを持つ
+  // referent-selection Clarificationのみが到達する分岐。selectionの
+  // 詳細な理由(invalid_selection/stale/integrity_error)は
+  // selection.statusで区別する。絶対条件: この分岐に到達した場合、
+  // Clarification.statusはpendingのまま変更されない
+  // (updateClarificationStatus()を一切呼ばない)。
+  | { status: "invalid_referent_selection"; clarification: Clarification; selection: ReferentClarificationSelectionResult }
+  | {
+      status: "answered";
+      clarification: Clarification;
+      workResumed: boolean;
+      // REF-P1d: referent-selection Clarificationが正しく解決された
+      // 場合のみ設定される(response + candidate_snapshotから常に
+      // 導出可能な値をここでも便宜的に公開するだけであり、新しい
+      // 永続列ではない)。
+      referentSelection?: CandidateSnapshotEntry;
+    };
 
 // Work所有者(getClarification()の既存ownership defenseをそのまま
 // 使う)以外はこの関数へ到達できない——resolved tactUserId(Bot経由
@@ -245,6 +377,45 @@ export async function resolveClarification(
 
   if (work.status !== "waiting_for_input") {
     return { status: "work_not_resumable", clarification, workStatus: work.status };
+  }
+
+  // =========================
+  // REF-P1d: referent-selection validation seam
+  // =========================
+  //
+  // candidateSnapshot/candidateSnapshotHashの両方が揃っている場合
+  // だけ、このClarificationはreferent-selectionとして扱う——それ以外
+  // (既存の自由記述Clarification)は、この分岐に一切入らず、これまで
+  // 通りどんなresponseでもansweredへ遷移する(絶対条件: 既存の汎用
+  // Clarification挙動を一切変更しない、後方互換性)。
+  //
+  // 絶対条件(TOCTOU): resolveReferentClarificationSelection()には
+  // 常にclarification.candidateSnapshot(DBから読み出したstored
+  // snapshot)だけを渡す——fresh candidateを取得・混入する経路はここに
+  // 存在しない。
+  //
+  // 絶対条件: selectionが"selected"以外の場合、Clarification.statusは
+  // pendingのまま変更しない(updateClarificationStatus()を呼ばない)
+  // ——無効な数値/範囲外/期限切れ/改ざん検出のいずれも、誤って
+  // answeredへ遷移させない。
+  let referentSelection: CandidateSnapshotEntry | undefined;
+
+  if (clarification.candidateSnapshot && clarification.candidateSnapshotHash) {
+
+    const selection = deps.resolveReferentClarificationSelection({
+      response,
+      candidateSnapshot: clarification.candidateSnapshot,
+      candidateSnapshotHash: clarification.candidateSnapshotHash,
+      expiresAt: clarification.expiresAt ?? null,
+      now: deps.now(),
+    });
+
+    if (selection.status !== "selected") {
+      return { status: "invalid_referent_selection", clarification, selection };
+    }
+
+    referentSelection = selection.candidate;
+
   }
 
   await deps.updateClarificationStatus(workId, userId, accessToken, clarificationId, "answered", {
@@ -297,6 +468,7 @@ export async function resolveClarification(
       respondedByActorId: responderActor.id,
     },
     workResumed,
+    ...(referentSelection ? { referentSelection } : {}),
   };
 
 }
