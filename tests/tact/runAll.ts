@@ -167,6 +167,7 @@ import { run as runRuntimeReconciliation } from "./runtime/reconciliation.test";
 import { run as runRuntimeReconcileOneShotEntrypoint } from "./runtime/reconcileOneShotEntrypoint.test";
 import { run as runRuntimeReconcileOneShotTrustedActor } from "./runtime/reconcileOneShotIntegrationReadAsTrustedActor.test";
 import { run as runRuntimeReconcileOneShotTrustedActorCli } from "./runtime/reconcileOneShotIntegrationReadAsTrustedActorCli.test";
+import { run as runReferentHarness } from "./referent/referentHarness.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -309,6 +310,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "runtime/reconcileOneShotEntrypoint", run: runRuntimeReconcileOneShotEntrypoint },
   { name: "runtime/reconcileOneShotIntegrationReadAsTrustedActor", run: runRuntimeReconcileOneShotTrustedActor },
   { name: "runtime/reconcileOneShotIntegrationReadAsTrustedActorCli", run: runRuntimeReconcileOneShotTrustedActorCli },
+  { name: "referent/referentHarness", run: runReferentHarness },
 ];
 
 async function main() {
