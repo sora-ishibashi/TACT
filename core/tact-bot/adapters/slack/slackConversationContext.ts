@@ -3,6 +3,7 @@ import type {
   ConversationEvidence,
   ConversationEvidenceMessage,
 } from "../../../tact-conversation/conversationEvidence";
+import type { ConversationIntakeStage } from "../../../tact-diagnostics/conversationIntakeStage";
 
 export const SLACK_THREAD_CONTEXT_MAX_MESSAGES = 15;
 export const SLACK_CHANNEL_CONTEXT_MAX_PRECEDING_MESSAGES = 8;
@@ -25,9 +26,22 @@ export interface SlackContextSourceMessage {
 }
 
 export interface SlackConversationContextApi {
-  getThreadReplies(params: { channel: string; ts: string; latest: string; limit: number }): Promise<{ ok: boolean; messages: SlackContextSourceMessage[] }>;
-  getChannelHistory(params: { channel: string; latest: string; limit: number }): Promise<{ ok: boolean; messages: SlackContextSourceMessage[] }>;
+  getThreadReplies(params: { channel: string; ts: string; latest: string; limit: number }): Promise<SlackConversationContextResponse>;
+  getChannelHistory(params: { channel: string; latest: string; limit: number }): Promise<SlackConversationContextResponse>;
 }
+
+export interface SlackConversationContextResponse {
+  ok: boolean;
+  messages: SlackContextSourceMessage[];
+  // The Slack client already falls back to ok:false. Retaining the thrown
+  // value here lets the caller emit a redacted, operation-specific diagnostic
+  // without changing that fallback behavior.
+  error?: unknown;
+}
+
+export type SlackConversationRetrievalOperation =
+  | "conversations.history"
+  | "conversations.replies";
 
 export interface SlackConversationContextTrigger {
   channelRef: string;
@@ -137,13 +151,24 @@ export function triggerOnlySlackConversationEvidence(trigger: SlackConversationC
 export async function retrieveSlackConversationContext(
   trigger: SlackConversationContextTrigger,
   api: SlackConversationContextApi | null,
-  options: { tactBotUserId?: string; now?: () => Date } = {}
+  options: {
+    tactBotUserId?: string;
+    now?: () => Date;
+    onRetrievalFailure?: (failure: {
+      stage: ConversationIntakeStage;
+      operation: SlackConversationRetrievalOperation;
+      error: unknown;
+    }) => void;
+  } = {}
 ): Promise<ConversationEvidence> {
   if (!api) return triggerOnlySlackConversationEvidence(trigger, true);
   try {
     if (trigger.threadRef) {
       const response = await api.getThreadReplies({ channel: trigger.channelRef, ts: trigger.threadRef, latest: trigger.triggerTimestamp, limit: SLACK_THREAD_CONTEXT_MAX_MESSAGES });
-      if (!response.ok) return triggerOnlySlackConversationEvidence(trigger, true);
+      if (!response.ok) {
+        reportRetrievalFailure(options, "conversations.replies", response.error);
+        return triggerOnlySlackConversationEvidence(trigger, true);
+      }
       const messages = response.messages
         .filter((message) => timestampNumber(message.ts ?? "") <= timestampNumber(trigger.triggerTimestamp))
         .map((message) => normalizeSourceMessage(message, message.ts === trigger.threadRef ? "thread_root" : "prior_thread_reply", options.tactBotUserId))
@@ -152,7 +177,10 @@ export async function retrieveSlackConversationContext(
       return buildEvidence(trigger, "thread", messages, response.messages.length, false);
     }
     const response = await api.getChannelHistory({ channel: trigger.channelRef, latest: trigger.triggerTimestamp, limit: SLACK_CHANNEL_CONTEXT_MAX_PRECEDING_MESSAGES });
-    if (!response.ok) return triggerOnlySlackConversationEvidence(trigger, true);
+    if (!response.ok) {
+      reportRetrievalFailure(options, "conversations.history", response.error);
+      return triggerOnlySlackConversationEvidence(trigger, true);
+    }
     const earliest = timestampNumber(trigger.triggerTimestamp) - SLACK_CONTEXT_LOOKBACK_SECONDS;
     const messages = response.messages
       .filter((message) => {
@@ -163,7 +191,37 @@ export async function retrieveSlackConversationContext(
       .filter((message): message is ConversationEvidenceMessage => Boolean(message));
     messages.push(triggerMessage(trigger));
     return buildEvidence(trigger, "surrounding_messages", messages, response.messages.length, false);
-  } catch {
+  } catch (error) {
+    reportRetrievalFailure(
+      options,
+      trigger.threadRef ? "conversations.replies" : "conversations.history",
+      error
+    );
     return triggerOnlySlackConversationEvidence(trigger, true);
+  }
+}
+
+function reportRetrievalFailure(
+  options: {
+    onRetrievalFailure?: (failure: {
+      stage: ConversationIntakeStage;
+      operation: SlackConversationRetrievalOperation;
+      error: unknown;
+    }) => void;
+  },
+  operation: SlackConversationRetrievalOperation,
+  error: unknown
+): void {
+  if (error === undefined) return;
+  try {
+    options.onRetrievalFailure?.({
+      stage: operation === "conversations.replies"
+        ? "conversation_intake.slack_thread"
+        : "conversation_intake.slack_history",
+      operation,
+      error,
+    });
+  } catch {
+    // Diagnostics must not alter the existing trigger-only fallback.
   }
 }

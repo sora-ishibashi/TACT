@@ -174,8 +174,8 @@ export function createProductionSlackWebApiClient(token: string): SlackWebApiCli
           limit: params.limit,
         });
         return { ok: response.ok !== false, messages: toContextMessages(response.messages) };
-      } catch {
-        return { ok: false, messages: [] };
+      } catch (error) {
+        return { ok: false, messages: [], error };
       }
     },
 
@@ -188,8 +188,8 @@ export function createProductionSlackWebApiClient(token: string): SlackWebApiCli
           limit: params.limit,
         });
         return { ok: response.ok !== false, messages: toContextMessages(response.messages) };
-      } catch {
-        return { ok: false, messages: [] };
+      } catch (error) {
+        return { ok: false, messages: [], error };
       }
     },
 

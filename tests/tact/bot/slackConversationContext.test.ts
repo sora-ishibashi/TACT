@@ -4,6 +4,7 @@ import {
   SLACK_THREAD_CONTEXT_MAX_MESSAGES,
 } from "../../../core/tact-bot/adapters/slack/slackConversationContext";
 import { formatConversationEvidenceAcknowledgement } from "../../../core/tact-conversation/conversationEvidence";
+import { buildSafeSlackBackgroundFailureDiagnostic } from "../../../core/tact-bot/diagnostics/safeBackgroundFailureDiagnostic";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 const trigger = {
@@ -55,6 +56,48 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       getChannelHistory: async () => { throw new Error("missing_scope"); },
     });
     results.push(check("[context failure] retrieval failure preserves trigger-only Work intake", evidence.provenance.retrievalMode === "trigger_only" && evidence.metrics.retrievalFailed && evidence.messages.length === 1));
+  }
+  {
+    const failures: Array<{ stage: string; operation: string; error: unknown }> = [];
+    const secretSlackText = "private Slack message must not be logged";
+    const evidence = await retrieveSlackConversationContext(
+      { ...trigger, triggerText: secretSlackText },
+      {
+        getThreadReplies: async () => ({ ok: true, messages: [] }),
+        getChannelHistory: async () => ({ ok: false, messages: [], error: { message: `Gateway Timeout: ${secretSlackText}` } }),
+      },
+      { onRetrievalFailure: (failure) => failures.push(failure) }
+    );
+    const diagnostic = failures[0]
+      ? buildSafeSlackBackgroundFailureDiagnostic(failures[0].error, failures[0].stage as "conversation_intake.slack_history", [secretSlackText])
+      : undefined;
+    results.push(check(
+      "[context history diagnostic] a plain Slack Gateway Timeout retains the history stage and redacts message text",
+      evidence.metrics.retrievalFailed &&
+        failures[0]?.stage === "conversation_intake.slack_history" &&
+        failures[0]?.operation === "conversations.history" &&
+        diagnostic?.errorName === "NonErrorThrown" &&
+        diagnostic.message.includes("Gateway Timeout") &&
+        !JSON.stringify(diagnostic).includes(secretSlackText)
+    ));
+  }
+  {
+    const failures: Array<{ stage: string; operation: string; error: unknown }> = [];
+    const evidence = await retrieveSlackConversationContext(
+      { ...trigger, threadRef: "1899999990.000" },
+      {
+        getThreadReplies: async () => { throw { message: "Gateway Timeout" }; },
+        getChannelHistory: async () => ({ ok: true, messages: [] }),
+      },
+      { onRetrievalFailure: (failure) => failures.push(failure) }
+    );
+    results.push(check(
+      "[context thread diagnostic] replies failures retain the thread-specific stage",
+      evidence.metrics.retrievalFailed &&
+        failures[0]?.stage === "conversation_intake.slack_thread" &&
+        failures[0]?.operation === "conversations.replies" &&
+        (failures[0]?.error as { message?: string })?.message === "Gateway Timeout"
+    ));
   }
   results.push(check("[context bounds] thread and channel limits are deliberately bounded", SLACK_THREAD_CONTEXT_MAX_MESSAGES === 15 && SLACK_CHANNEL_CONTEXT_MAX_PRECEDING_MESSAGES === 8));
   return summarize("Slack Conversation Context", results);

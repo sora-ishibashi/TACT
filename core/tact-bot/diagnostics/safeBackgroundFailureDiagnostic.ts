@@ -1,3 +1,5 @@
+import type { ConversationIntakeStage } from "../../tact-diagnostics/conversationIntakeStage";
+
 // Server-only, redacted diagnostics for the Slack background boundary.
 // This is neither a user-facing formatter nor an audit payload.
 
@@ -10,6 +12,7 @@ export type SlackBackgroundExecutionStage =
   | "approval_decision"
   | "conversation_context"
   | "conversation_intake"
+  | ConversationIntakeStage
   | "slack_action_delivery";
 
 export interface SlackBackgroundFailureDiagnostic {

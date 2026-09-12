@@ -40,6 +40,7 @@ import type { Conversation, ConversationMessage } from "../../../core/tact-conve
 import type { Approval } from "../../../core/tact-work/types";
 import type { BotContext, BotIncomingMessage } from "../../../core/tact-bot/types";
 import { buildBotContext } from "../../../core/tact-bot/context/buildBotContext";
+import { conversationIntakeStageFor } from "../../../core/tact-diagnostics/conversationIntakeStage";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeMessage(overrides: Partial<BotIncomingMessage> = {}): BotIncomingMessage {
@@ -227,6 +228,26 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       )
     );
 
+  }
+
+  {
+    const failure = { message: "Gateway Timeout" };
+    const { deps } = recordingDeps();
+    const connector = createConversationBotCoreConnector({
+      ...deps,
+      findLink: async () => { throw failure; },
+    });
+    let captured: unknown;
+    try {
+      await connector.handle(contextWithIdentity(makeMessage(), "tact-user-1"));
+    } catch (error) {
+      captured = error;
+    }
+    results.push(check(
+      "[conversation link diagnostic] conversation-link DB failures preserve the original plain error and a precise lookup stage",
+      captured === failure &&
+        conversationIntakeStageFor(captured, "conversation_intake") === "conversation_intake.conversation_link_lookup"
+    ));
   }
 
   {

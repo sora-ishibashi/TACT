@@ -53,6 +53,7 @@ import { isLinkableChannel, type LinkableBotChannel } from "../identity/supabase
 import { toBotRequestApprovalAction } from "../approval";
 import type { BotAction, BotActionTarget, BotContext } from "../types";
 import type { BotCoreConnector } from "./types";
+import { atConversationIntakeStage } from "../../tact-diagnostics/conversationIntakeStage";
 
 // =========================
 // Dependencies (テスト用に差し替え可能にする)
@@ -222,7 +223,10 @@ export function createConversationBotCoreConnector(
         : undefined;
 
       const existingTactConversationId = linkLookup
-        ? await deps.findLink(linkLookup)
+        ? await atConversationIntakeStage(
+          "conversation_intake.conversation_link_lookup",
+          () => deps.findLink(linkLookup)
+        )
         : null;
 
       let turn = await deps.runTrustedTurn({

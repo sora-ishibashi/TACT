@@ -32,6 +32,7 @@ import {
 } from "../identity/resolver";
 import { createNotConnectedCoreConnector } from "../connector/notConnectedConnector";
 import type { BotCoreConnector } from "../connector/types";
+import { atConversationIntakeStage } from "../../tact-diagnostics/conversationIntakeStage";
 
 export interface BotGatewayDependencies {
 
@@ -93,10 +94,13 @@ export async function receiveBotMessage(
   // BOT-P2: identity lookupはworkspace/team scope込みで行う
   // (同じexternalUserIdでもorganizationId(platform側のteam/workspace
   // 識別子)が異なれば別人でありうるため、identity/resolver.ts参照)。
-  const identity = await identityResolver.resolve(
-    message.actor,
-    message.channel,
-    message.organizationId
+  const identity = await atConversationIntakeStage(
+    "conversation_intake.identity_resolution",
+    () => identityResolver.resolve(
+      message.actor,
+      message.channel,
+      message.organizationId
+    )
   );
   const context = buildBotContext(message, identity, conversationEvidence);
   const actions = await coreConnector.handle(context);

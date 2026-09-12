@@ -135,6 +135,7 @@ import type { ResearchFrameworkArtifact } from "../tact-analysis/framework/types
 import { mergeResearchFrameworkBlocks } from "../tact-analysis/framework/artifactIntegration";
 import type { AnalysisArtifactPlan } from "../tact-analysis/composition";
 import { mergeAnalysisArtifactPlanBlocks } from "../tact-analysis/composition";
+import { atConversationIntakeStage } from "../tact-diagnostics/conversationIntakeStage";
 
 // =========================
 // TACT Conversation — Orchestrator Integration (Phase 67, Phase68でClarification
@@ -484,7 +485,10 @@ export async function runConversationOrchestration(
   conversationEvidence?: ConversationEvidence
 ): Promise<ConversationTurnResult> {
 
-  const pending = await getPendingClarification(conversation, accessToken);
+  const pending = await atConversationIntakeStage(
+    "conversation_intake.clarification_lookup",
+    () => getPendingClarification(conversation, accessToken)
+  );
 
   if (pending) {
     return runClarificationAnswerTurn(conversation, accessToken, userInput, pending, source);
@@ -588,7 +592,10 @@ export async function runConversationTurn(
   // 他userのconversationIdを渡された場合は「存在しない」と同じ扱いで
   // 拒否する(IDOR対策、既存route.tsの既存方針をそのまま踏襲)。
   let conversation = conversationId
-    ? await getConversation(conversationId, userId, accessToken)
+    ? await atConversationIntakeStage(
+      "conversation_intake.conversation_lookup",
+      () => getConversation(conversationId, userId, accessToken)
+    )
     : undefined;
 
   if (conversationId && !conversation) {
@@ -596,7 +603,10 @@ export async function runConversationTurn(
   }
 
   if (!conversation) {
-    conversation = await createConversation(userId, accessToken, deriveConversationTitle(content));
+    conversation = await atConversationIntakeStage(
+      "conversation_intake.conversation_create",
+      () => createConversation(userId, accessToken, deriveConversationTitle(content))
+    );
   }
 
   const turn = await runConversationOrchestration(
@@ -2558,7 +2568,10 @@ export async function resolveAndRunWork(
 
   if (shouldRepairConversationWorkLink(conversation.workId, work.id)) {
 
-    await deps.linkConversationWork(conversation, accessToken, work.id);
+    await atConversationIntakeStage(
+      "conversation_intake.conversation_work_link",
+      () => deps.linkConversationWork(conversation, accessToken, work.id)
+    );
 
     // このTurn内で後続処理(applyArtifactMutation()等)が
     // conversation.workIdを参照する場合に備え、in-memoryの値も
@@ -2678,9 +2691,12 @@ async function runNormalTurn(
   conversationEvidence?: ConversationEvidence
 ): Promise<ConversationTurnResult> {
 
-  const userMessage = attachmentIds.length > 0
-    ? await appendConversationMessageWithAttachments(conversation, accessToken, userInput, attachmentIds)
-    : await appendConversationMessage(conversation, accessToken, "user", userInput);
+  const userMessage = await atConversationIntakeStage(
+    "conversation_intake.message_record",
+    () => attachmentIds.length > 0
+      ? appendConversationMessageWithAttachments(conversation, accessToken, userInput, attachmentIds)
+      : appendConversationMessage(conversation, accessToken, "user", userInput)
+  );
 
   const orchestrationInput = getAttachmentOnlyOrchestrationInput(
     userInput,
@@ -2709,7 +2725,10 @@ async function runNormalTurn(
   // Clarification再実行のために確立済み)をそのまま再利用するだけ。
   // 履歴取得に失敗しても(初回Turn等)previousUserInputはundefinedの
   // ままとなり、既存(Phase1〜85)と同じ挙動にフォールバックする。
-  const history = await getConversationMessages(conversation.id, accessToken);
+  const history = await atConversationIntakeStage(
+    "conversation_intake.conversation_history",
+    () => getConversationMessages(conversation.id, accessToken)
+  );
   const previousUserInput = findPrecedingUserInput(history, userMessage.id) ?? undefined;
 
   // Phase90(Structured Research Dataset Section4〜6): Table要求を

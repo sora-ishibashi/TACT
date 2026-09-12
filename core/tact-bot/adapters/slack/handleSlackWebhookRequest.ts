@@ -36,6 +36,7 @@ import {
   type SlackBackgroundExecutionStage,
   type SlackBackgroundFailureDiagnostic,
 } from "../../diagnostics/safeBackgroundFailureDiagnostic";
+import { conversationIntakeStageFor } from "../../../tact-diagnostics/conversationIntakeStage";
 
 // =========================
 // TACT Bot — Slack Webhook Request Handler (S1a)
@@ -139,7 +140,15 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
   retrieveConversationContext: (trigger) => {
     const client = getSlackWebApiClient();
     const api = client?.getThreadReplies && client.getChannelHistory ? client as import("./slackConversationContext").SlackConversationContextApi : null;
-    return retrieveSlackConversationContext(trigger, api, { tactBotUserId: process.env.SLACK_BOT_USER_ID });
+    return retrieveSlackConversationContext(trigger, api, {
+      tactBotUserId: process.env.SLACK_BOT_USER_ID,
+      onRetrievalFailure: ({ operation, error, stage }) => {
+        console.error("[tact-bot] Slack conversation context retrieval failed", {
+          ...buildSafeSlackBackgroundFailureDiagnostic(error, stage, [trigger.triggerText]),
+          operation,
+        });
+      },
+    });
   },
 
   // S1e: ./detectApprovalDecisionText.tsのpure判定関数そのまま。
@@ -438,7 +447,13 @@ export async function handleSlackWebhookRequest(
         ...(conversationEvidence?.messages.map((contextMessage) => contextMessage.text) ?? []),
       ];
       (deps.logBackgroundFailure ?? defaultDeps.logBackgroundFailure!)(
-        buildSafeSlackBackgroundFailureDiagnostic(error, stage, knownSensitiveValues)
+        buildSafeSlackBackgroundFailureDiagnostic(
+          error,
+          stage === "conversation_intake"
+            ? conversationIntakeStageFor(error, stage)
+            : stage,
+          knownSensitiveValues
+        )
       );
 
     }

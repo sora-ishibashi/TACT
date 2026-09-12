@@ -1,5 +1,6 @@
 import { createWork, getWork } from "./store";
 import type { Work, ActorReference, ResolvedWorkIntent } from "./types";
+import { atConversationIntakeStage } from "../tact-diagnostics/conversationIntakeStage";
 
 // =========================
 // TACT Work — Work Intake Boundary (Architecture Migration Phase B2)
@@ -105,7 +106,10 @@ export async function resolveWork(
 
   if (request.existingWorkId) {
 
-    const existing = await deps.getWork(request.existingWorkId, request.userId, accessToken);
+    const existing = await atConversationIntakeStage(
+      "conversation_intake.work_lookup",
+      () => deps.getWork(request.existingWorkId!, request.userId, accessToken)
+    );
 
     if (existing) {
       return existing;
@@ -118,24 +122,27 @@ export async function resolveWork(
 
   }
 
-  return deps.createWork(
-    {
-      userId: request.userId,
-      createdByActorKind: request.requestedByActor.kind,
-      createdByActorId: request.requestedByActor.id,
-      primaryConversationId: request.conversationId ?? null,
-      title: request.resolvedIntent?.title ?? deriveWorkTitle(request.content),
-      objective: request.resolvedIntent?.objective ?? null,
-      subject: request.resolvedIntent?.subject ?? null,
-      requestType: request.resolvedIntent?.requestType ?? null,
-      completionConditions: request.resolvedIntent?.completionConditions ?? null,
-      requiredCapabilities: request.resolvedIntent?.requiredCapabilities ?? null,
-      metadata: {
-        source: request.source,
-        ...(request.metadata ?? {}),
+  return atConversationIntakeStage(
+    "conversation_intake.work_create",
+    () => deps.createWork(
+      {
+        userId: request.userId,
+        createdByActorKind: request.requestedByActor.kind,
+        createdByActorId: request.requestedByActor.id,
+        primaryConversationId: request.conversationId ?? null,
+        title: request.resolvedIntent?.title ?? deriveWorkTitle(request.content),
+        objective: request.resolvedIntent?.objective ?? null,
+        subject: request.resolvedIntent?.subject ?? null,
+        requestType: request.resolvedIntent?.requestType ?? null,
+        completionConditions: request.resolvedIntent?.completionConditions ?? null,
+        requiredCapabilities: request.resolvedIntent?.requiredCapabilities ?? null,
+        metadata: {
+          source: request.source,
+          ...(request.metadata ?? {}),
+        },
       },
-    },
-    accessToken
+      accessToken
+    )
   );
 
 }

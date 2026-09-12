@@ -16,6 +16,8 @@ import { receiveBotMessage } from "../../../core/tact-bot/gateway/receiveMessage
 import type { BotIdentityResolver } from "../../../core/tact-bot/identity/resolver";
 import type { BotCoreConnector } from "../../../core/tact-bot/connector/types";
 import type { BotAction, BotIdentity, BotIncomingMessage } from "../../../core/tact-bot/types";
+import { conversationIntakeStageFor } from "../../../core/tact-diagnostics/conversationIntakeStage";
+import { buildSafeSlackBackgroundFailureDiagnostic } from "../../../core/tact-bot/diagnostics/safeBackgroundFailureDiagnostic";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeMessage(overrides: Partial<BotIncomingMessage> = {}): BotIncomingMessage {
@@ -87,6 +89,32 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       )
     );
 
+  }
+
+  {
+    const secretSlackText = "private identity-resolution message";
+    const thrown = { message: `Gateway Timeout: ${secretSlackText}` };
+    let captured: unknown;
+    try {
+      await receiveBotMessage(makeMessage({ text: secretSlackText }), {
+        identityResolver: { async resolve() { throw thrown; } },
+      });
+    } catch (error) {
+      captured = error;
+    }
+    const diagnostic = buildSafeSlackBackgroundFailureDiagnostic(
+      captured,
+      conversationIntakeStageFor(captured, "conversation_intake"),
+      [secretSlackText]
+    );
+    results.push(check(
+      "[identity diagnostic] a Supabase-shaped plain failure keeps identity_resolution and redacts Slack text",
+      captured === thrown &&
+        diagnostic.stage === "conversation_intake.identity_resolution" &&
+        diagnostic.errorName === "NonErrorThrown" &&
+        diagnostic.message.includes("Gateway Timeout") &&
+        !JSON.stringify(diagnostic).includes(secretSlackText)
+    ));
   }
 
   // ==========================================================

@@ -9,6 +9,7 @@
 
 import { resolveWork, type ResolveWorkDeps, type WorkIntakeRequest } from "../../../core/tact-work/intake";
 import type { Work } from "../../../core/tact-work/types";
+import { conversationIntakeStageFor } from "../../../core/tact-diagnostics/conversationIntakeStage";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeWork(overrides: Partial<Work> = {}): Work {
@@ -34,6 +35,38 @@ const baseRequest: WorkIntakeRequest = {
 export async function run(): Promise<{ pass: number; fail: number }> {
 
   const results: CheckResult[] = [];
+
+  {
+    const lookupFailure = { message: "Gateway Timeout" };
+    const createFailure = { message: "Gateway Timeout" };
+    let lookupCaptured: unknown;
+    let createCaptured: unknown;
+    try {
+      await resolveWork(
+        { ...baseRequest, existingWorkId: "work-existing" },
+        "fake-token",
+        { getWork: async () => { throw lookupFailure; }, createWork: async () => makeWork() }
+      );
+    } catch (error) {
+      lookupCaptured = error;
+    }
+    try {
+      await resolveWork(
+        baseRequest,
+        "fake-token",
+        { getWork: async () => undefined, createWork: async () => { throw createFailure; } }
+      );
+    } catch (error) {
+      createCaptured = error;
+    }
+    results.push(check(
+      "[work intake diagnostic] lookup and create failures retain their precise pre-provider stages",
+      lookupCaptured === lookupFailure &&
+        createCaptured === createFailure &&
+        conversationIntakeStageFor(lookupCaptured, "conversation_intake") === "conversation_intake.work_lookup" &&
+        conversationIntakeStageFor(createCaptured, "conversation_intake") === "conversation_intake.work_create"
+    ));
+  }
 
   // ---- existingWorkIdが無い場合、新規Workを作成する
   // (conversationId無しでもWorkが作れることの確認、絶対条件) ----
