@@ -170,6 +170,10 @@ import { run as runRuntimeReconcileOneShotTrustedActorCli } from "./runtime/reco
 import { run as runReferentHarness } from "./referent/referentHarness.test";
 import { run as runReferentDiscourse } from "./referent/discourse.test";
 import { run as runReferentSignals } from "./referent/signals.test";
+import { run as runReferentCandidates } from "./referent/candidates.test";
+import { run as runReferentConflicts } from "./referent/conflicts.test";
+import { run as runReferentResolve } from "./referent/resolve.test";
+import { run as runReferentWiredEvaluation } from "./referent/wiredEvaluation.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -315,6 +319,10 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "referent/referentHarness", run: runReferentHarness },
   { name: "referent/discourse", run: runReferentDiscourse },
   { name: "referent/signals", run: runReferentSignals },
+  { name: "referent/candidates", run: runReferentCandidates },
+  { name: "referent/conflicts", run: runReferentConflicts },
+  { name: "referent/resolve", run: runReferentResolve },
+  { name: "referent/wiredEvaluation", run: runReferentWiredEvaluation },
 ];
 
 async function main() {
