@@ -61,6 +61,7 @@ import { run as runWorkCompletion } from "./work/completion.test";
 import { run as runWorkCompletionOwnership } from "./work/completionOwnership.test";
 import { run as runWorkTaskLifecycleMonotonicity } from "./work/taskLifecycleMonotonicity.test";
 import { run as runWorkApprovalIntegrity } from "./work/approvalIntegrity.test";
+import { run as runWorkApprovalIntegritySourceReferent } from "./work/approvalIntegritySourceReferent.test";
 import { run as runWorkTaskRunReconciliation } from "./work/taskRunReconciliation.test";
 import { run as runGenerateLLMAnswerRetry } from "./research/generateLLMAnswerRetry.test";
 import { run as runEvaluateTaskExecution } from "./evaluation/evaluateTaskExecution.test";
@@ -148,6 +149,7 @@ import { run as runIntegrationComposioClient } from "./integration/composioClien
 import { run as runIntegrationGateway } from "./integration/gateway.test";
 import { run as runIntegrationPropose } from "./integration/propose.test";
 import { run as runIntegrationExecution } from "./integration/execution.test";
+import { run as runIntegrationSourceReferentExecution } from "./integration/sourceReferentExecution.test";
 import { run as runIntegrationCapability } from "./integration/capability.test";
 import { run as runIntegrationPolicy } from "./integration/policy.test";
 import { run as runIntegrationConnectionSchema } from "./integration/connectionSchema.test";
@@ -212,6 +214,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/completionOwnership", run: runWorkCompletionOwnership },
   { name: "work/taskLifecycleMonotonicity", run: runWorkTaskLifecycleMonotonicity },
   { name: "work/approvalIntegrity", run: runWorkApprovalIntegrity },
+  { name: "work/approvalIntegritySourceReferent", run: runWorkApprovalIntegritySourceReferent },
   { name: "work/taskRunReconciliation", run: runWorkTaskRunReconciliation },
   { name: "research/generateLLMAnswerRetry", run: runGenerateLLMAnswerRetry },
   { name: "evaluation/evaluateTaskExecution", run: runEvaluateTaskExecution },
@@ -299,6 +302,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "integration/gateway", run: runIntegrationGateway },
   { name: "integration/propose", run: runIntegrationPropose },
   { name: "integration/execution", run: runIntegrationExecution },
+  { name: "integration/sourceReferentExecution", run: runIntegrationSourceReferentExecution },
   { name: "integration/capability", run: runIntegrationCapability },
   { name: "integration/policy", run: runIntegrationPolicy },
   { name: "integration/connectionSchema", run: runIntegrationConnectionSchema },

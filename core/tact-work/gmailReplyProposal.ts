@@ -1,6 +1,13 @@
 import type { ContextResolutionResult } from "../tact-context-resolution";
 import type { GmailMessageSummary } from "../tact-integration";
 import type { ResolvedWorkIntent } from "./types";
+// REF-P1e: 型のみ再利用(既存canonical、core/tact-referent/types.tsで
+// 確立済み)。proposeGmailReply()自体はこのphaseで一切変更しない
+// ——sourceReferentは常にundefinedのまま生成され続ける(絶対条件:
+// live orchestration挙動を変えない)。この型に追加するのは、将来
+// (REF-P1f)のResolver/Clarification配線がsourceReferentを持つ
+// proposalを生成できるようにする、dormantな受け皿のみ。
+import type { SourceReferentSnapshot } from "../tact-referent/types";
 
 export interface GmailReplyProposal {
   action: {
@@ -10,6 +17,10 @@ export interface GmailReplyProposal {
   };
   reason: string;
   sourceMessageRef: string;
+  // REF-P1e: optional。proposeGmailReply()は現時点で一切設定しない
+  // (P1f以降、Resolver/Clarificationが選択したcandidateから
+  // buildSourceReferentSnapshot()経由で設定する想定の、dormant field)。
+  sourceReferent?: SourceReferentSnapshot;
 }
 
 const MAX_DRAFT_BODY_LENGTH = 2_000;

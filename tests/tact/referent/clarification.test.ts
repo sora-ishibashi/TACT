@@ -9,6 +9,7 @@
 import {
   WRITE_REFERENT_CLARIFICATION_TTL_MS,
   buildCandidateSnapshot,
+  buildSourceReferentSnapshot,
   computeReferentClarificationExpiresAt,
   hashCandidateSnapshot,
   parseCandidateSnapshot,
@@ -310,6 +311,42 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         parseNumericSelection("  2  ").ok === true &&
           (parseNumericSelection("  2  ") as { ok: true; index: number }).index === 2 &&
           parseNumericSelection("2a").ok === false
+      )
+    );
+  }
+
+  // =========================
+  // buildSourceReferentSnapshot() (REF-P1e: P1d → P1e conversion)
+  // =========================
+  {
+    const snapshot = buildCandidateSnapshot([CANDIDATE_A]);
+    const sourceReferent = buildSourceReferentSnapshot(snapshot[0]);
+
+    results.push(
+      check(
+        "[REF-P1e clarification] buildSourceReferentSnapshot()はCandidateSnapshotEntryをsourceType=\"gmail\"のSourceReferentSnapshotへ、body/snippetを一切増やさずに変換する",
+        sourceReferent?.sourceType === "gmail" &&
+          sourceReferent.sourceMessageRef === "m-a" &&
+          sourceReferent.threadRef === "t-a" &&
+          sourceReferent.sender === "a@example.com" &&
+          sourceReferent.normalizedSubject === "更新のご連絡" &&
+          sourceReferent.observedAt === "2026-09-01T00:00:00.000Z" &&
+          !("body" in sourceReferent) && !("snippet" in sourceReferent)
+      )
+    );
+  }
+
+  {
+    // sender/normalizedSubjectが欠けたcandidateは、安全に変換できない
+    // ため明示的にundefinedを返す(無言でsenderを空文字列にしない、
+    // fail closed)。
+    const incompleteEntry: CandidateSnapshotEntry = { index: 1, sourceMessageRef: "m-x" };
+    const result = buildSourceReferentSnapshot(incompleteEntry);
+
+    results.push(
+      check(
+        "[REF-P1e clarification] sender/normalizedSubjectが欠けたCandidateSnapshotEntryはSourceReferentSnapshotへ変換できず、undefinedを返す(fail closed、空文字列で穴埋めしない)",
+        result === undefined
       )
     );
   }

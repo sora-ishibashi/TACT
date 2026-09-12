@@ -1,4 +1,11 @@
 import { createHash } from "node:crypto";
+// REF-P1e: SourceReferentSnapshot(既存canonical、REF-P1aで確立済み)を
+// 型のみ再利用する。core/tact-referent/types.tsは完全に自己完結した
+// leaf module(他のいずれもimportしない)であり、このimportは
+// ARCH-P1aの絶対条件(DB/core/tact-integration非依存)に抵触しない
+// ——tact-referentはGmail/Slack/Composioの実行境界とは無関係な、
+// 純粋domain typeのみを提供する。
+import type { SourceReferentSnapshot } from "../tact-referent/types";
 
 // =========================
 // TACT Work — Approval Integrity (Architecture Migration ARCH-P1a)
@@ -75,6 +82,33 @@ export interface ApprovalSubject {
   connectionId: string | null;
 
   riskClassSnapshot: ApprovalRiskClassSnapshot | null;
+
+  // =========================
+  // sourceReferent (REF-P1e: SourceReferent Snapshot + Approval
+  // Integrity v2)
+  // =========================
+  //
+  // 絶対条件(このphaseの明示的設計判断、frozen): APPROVAL_SUBJECT_VERSION
+  // は1のまま変更しない——sourceReferentは完全にadditive/optionalな
+  // fieldであり、既存のv1 Approval(このfieldを一切持たない)の
+  // canonical文字列表現には一切影響しない(Object.keys()は存在しない
+  // keyを列挙しないため、stableStringify()の出力は既存v1 Approvalに
+  // ついて1バイトも変わらない)。"ApprovalSubject v2"という設計提案を
+  // 検討したが、既存のsubjectVersionによるハードな一致チェック
+  // (verifyApprovalIntegrity()のstored.version !== APPROVAL_SUBJECT_VERSION)
+  // を素朴にbumpすると、既存のpending/approved v1 Approval行が即座に
+  // version_unsupportedへ倒れてしまう(このphaseの絶対条件: 既存v1
+  // Approvalの継続動作を破壊しない)。バージョン番号自体を動かさず、
+  // 「このfieldが存在するかどうか」だけで referent-aware かどうかを
+  // 区別する——既存のApproval Subject field(canonicalInput等)が
+  // 既にoptionalな設計を許容していないのと対称的に、ここでは新規
+  // fieldそのものをoptionalにすることで後方互換性を型レベルで保証する。
+  //
+  // 絶対条件: これはProvider実行inputではない
+  // (Gmail/Composio toolへは絶対に渡さない、core/tact-integration/
+  // execution.tsのextractIntegrationActionFromApproval()が
+  // IntegrationAction.inputとは完全に別のsibling fieldとして扱う)。
+  sourceReferent?: SourceReferentSnapshot | null;
 
 }
 
@@ -300,6 +334,12 @@ export interface BuildApprovalSubjectParams {
 
   riskClassSnapshot: ApprovalRiskClassSnapshot | null;
 
+  // REF-P1e: 完全にoptional。呼び出し元がresolved/pinned referentを
+  // 持つ場合のみ渡す——省略/null時はcanonical subject自体に
+  // sourceReferent keyが一切現れない(v1 Approvalと同一の
+  // canonical文字列表現、後方互換性)。
+  sourceReferent?: SourceReferentSnapshot | null;
+
 }
 
 export type BuildApprovalSubjectResult =
@@ -329,6 +369,10 @@ export function buildApprovalSubject(
       canonicalInput: canonicalized.value,
       connectionId: params.connectionId,
       riskClassSnapshot: params.riskClassSnapshot,
+      // 絶対条件: keyそのものを省略する(explicit undefinedを埋め込ま
+      // ない)——stableStringify()はObject.keys()ベースであり、
+      // 存在しないkeyはv1 Approvalと同じ振る舞いを保つ。
+      ...(params.sourceReferent ? { sourceReferent: params.sourceReferent } : {}),
     },
 
   };
@@ -433,6 +477,7 @@ const APPROVAL_SUBJECT_FIELD_NAMES: readonly (keyof ApprovalSubject)[] = [
   "canonicalInput",
   "connectionId",
   "riskClassSnapshot",
+  "sourceReferent",
 ];
 
 const RISK_CLASS_SNAPSHOT_VALUES: ReadonlySet<string> = new Set([
@@ -440,6 +485,61 @@ const RISK_CLASS_SNAPSHOT_VALUES: ReadonlySet<string> = new Set([
   "write",
   "destructive",
 ]);
+
+// =========================
+// parseSourceReferentSnapshot (REF-P1e)
+// =========================
+//
+// unknown値をSourceReferentSnapshotとして厳密にvalidationする。
+// stored subject側・execution-time再構築側(core/tact-integration/
+// execution.ts)の両方から再利用する、唯一のvalidation実装
+// (絶対条件: 検証ロジックを複製しない)。絶対条件: body・snippet・
+// 生provider payload・Composio ID・OAuth情報等、frozen shapeに無い
+// fieldを一切許容しない(余分なfieldがあっても無視するだけで、
+// 不正な形にはしない——余剰fieldを許容してもそれ自体が悪用可能な
+// 経路を作らないため、狭すぎる検証よりexact-shape要求を優先しない)。
+export function parseSourceReferentSnapshot(value: unknown): SourceReferentSnapshot | undefined {
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const candidate = value as Record<string, unknown>;
+
+  if (candidate.sourceType !== "gmail") {
+    return undefined;
+  }
+
+  if (typeof candidate.sourceMessageRef !== "string" || candidate.sourceMessageRef.length === 0) {
+    return undefined;
+  }
+
+  if (typeof candidate.sender !== "string" || candidate.sender.length === 0) {
+    return undefined;
+  }
+
+  if (typeof candidate.normalizedSubject !== "string" || candidate.normalizedSubject.length === 0) {
+    return undefined;
+  }
+
+  if (candidate.threadRef !== undefined && typeof candidate.threadRef !== "string") {
+    return undefined;
+  }
+
+  if (candidate.observedAt !== undefined && typeof candidate.observedAt !== "string") {
+    return undefined;
+  }
+
+  return {
+    sourceType: "gmail",
+    sourceMessageRef: candidate.sourceMessageRef,
+    sender: candidate.sender,
+    normalizedSubject: candidate.normalizedSubject,
+    ...(typeof candidate.threadRef === "string" ? { threadRef: candidate.threadRef } : {}),
+    ...(typeof candidate.observedAt === "string" ? { observedAt: candidate.observedAt } : {}),
+  };
+
+}
 
 // stored.json(unknown)をApprovalSubjectとして厳密にvalidationする。
 // 型を強制せず、実際の値の形を1つ1つ確認する(呼び出し元DB層を
@@ -490,6 +590,21 @@ export function parseStoredApprovalSubject(json: unknown): ApprovalSubject | und
     return undefined;
   }
 
+  // REF-P1e: keyが存在しない(v1 Approval)場合はsourceReferent無しの
+  // まま許容する。keyが存在するのに不正な形の場合は、stored subject
+  // 全体を破損データとしてfail closedする(絶対条件: 永続化された
+  // 値は本来buildApprovalSubject()が正しい形でしか書き込まないはず
+  // ——ここでの不整合は改ざん/破損の兆候として扱う)。
+  let sourceReferent: SourceReferentSnapshot | undefined;
+
+  if ("sourceReferent" in candidate && candidate.sourceReferent !== null && candidate.sourceReferent !== undefined) {
+    const parsed = parseSourceReferentSnapshot(candidate.sourceReferent);
+    if (!parsed) {
+      return undefined;
+    }
+    sourceReferent = parsed;
+  }
+
   return {
     subjectVersion: candidate.subjectVersion,
     workId: candidate.workId,
@@ -499,15 +614,23 @@ export function parseStoredApprovalSubject(json: unknown): ApprovalSubject | und
     canonicalInput: canonicalInputResult.value,
     connectionId: candidate.connectionId as string | null,
     riskClassSnapshot: candidate.riskClassSnapshot as ApprovalRiskClassSnapshot | null,
+    ...(sourceReferent ? { sourceReferent } : {}),
   };
 
 }
 
 function findMismatchedFields(stored: ApprovalSubject, current: ApprovalSubject): string[] {
 
-  return APPROVAL_SUBJECT_FIELD_NAMES.filter(
-    (field) => stableStringify(stored[field] as unknown as JsonValue) !== stableStringify(current[field] as unknown as JsonValue)
-  );
+  return APPROVAL_SUBJECT_FIELD_NAMES.filter((field) => {
+    // REF-P1e: sourceReferentはoptional(v1 Approval/非referent-aware
+    // actionではundefined)。stableStringify()はObject.keys()前提の
+    // 実装であり、undefinedを直接渡すと例外になる——「無い」を
+    // nullと同一視して安全に比較する(既存の必須field群は元々
+    // T | nullでありundefinedを取らないため、この正規化は無害)。
+    const storedValue = (stored[field] ?? null) as JsonValue;
+    const currentValue = (current[field] ?? null) as JsonValue;
+    return stableStringify(storedValue) !== stableStringify(currentValue);
+  });
 
 }
 

@@ -33,7 +33,7 @@
 // 複製する(コピー元とロジックが乖離しないよう、コメントで明記する)。
 
 import { createHash } from "node:crypto";
-import type { CommunicationCandidate } from "./types";
+import type { CommunicationCandidate, SourceReferentSnapshot } from "./types";
 
 // =========================
 // CandidateSnapshotEntry
@@ -78,6 +78,40 @@ export function buildCandidateSnapshot(
     ...(candidate.normalizedSubject ? { normalizedSubject: candidate.normalizedSubject } : {}),
     ...(candidate.observedAt ? { observedAt: candidate.observedAt } : {}),
   }));
+
+}
+
+// =========================
+// P1d → P1e: CandidateSnapshotEntry → SourceReferentSnapshot (REF-P1e)
+// =========================
+//
+// Clarificationで選択されたcandidateを、Approval Integrityが
+// freezeできる形(SourceReferentSnapshot、core/tact-referent/types.ts
+// で確立済みの既存canonical type)へ変換する、唯一のpure mapping
+// helper——このmappingをorchestration層へ分散させない(このphaseの
+// 明示的指示)。
+//
+// 絶対条件: CandidateSnapshotEntry.sender/normalizedSubjectはoptional
+// だが、SourceReferentSnapshotの両fieldは必須——値が欠けている
+// candidateは安全にSourceReferentSnapshotへ変換できないため、
+// 明示的にundefinedを返す(fail closed、無言でsenderを空文字列に
+// するような穴埋めをしない)。
+export function buildSourceReferentSnapshot(
+  entry: CandidateSnapshotEntry
+): SourceReferentSnapshot | undefined {
+
+  if (!entry.sender || !entry.normalizedSubject) {
+    return undefined;
+  }
+
+  return {
+    sourceType: "gmail",
+    sourceMessageRef: entry.sourceMessageRef,
+    sender: entry.sender,
+    normalizedSubject: entry.normalizedSubject,
+    ...(entry.threadRef ? { threadRef: entry.threadRef } : {}),
+    ...(entry.observedAt ? { observedAt: entry.observedAt } : {}),
+  };
 
 }
 

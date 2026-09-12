@@ -15,6 +15,7 @@ import { evaluatePolicyDecision } from "./policy";
 import {
   buildApprovalSubject,
   verifyApprovalIntegrity,
+  parseSourceReferentSnapshot,
   type ApprovalIntegrityCheck,
   type JsonValue,
 } from "../tact-work/approvalIntegrity";
@@ -28,6 +29,12 @@ import { emitAuditSafely as defaultEmitAuditSafely } from "../tact-work/audit";
 import { attachRunExternalRef as defaultAttachRunExternalRef } from "../tact-work/store";
 import type { Approval, ApprovalStatus, Run, TaskStatus, WorkStatus } from "../tact-work/types";
 import type { Connection, IntegrationAction, IntegrationService } from "./types";
+// REF-P1e: SourceReferentSnapshot(既存canonical、core/tact-referent/
+// types.tsで確立済み)を型のみ再利用する。tact-referentは完全に
+// 自己完結したleaf moduleであり、このimportは既存のdependency
+// directionを一切崩さない(tact-integration → tact-referentの
+// type-only import、逆方向は存在しない)。
+import type { SourceReferentSnapshot } from "../tact-referent/types";
 // Fast Port P5c: provider-neutral型のみをimportする(絶対条件、
 // core/tact-runtime/providers/triggerDev.ts等のTrigger.dev SDK
 // importは一切ここへ持ち込まない——type-only importなので実行時の
@@ -228,9 +235,22 @@ export type IntegrationActionExecutionOutcome =
 // input, connectionId}}, ...metadata}という形で組み立てたもの)から、
 // 実行に必要なCanonical Actionを安全に取り出す。想定外の形式でも
 // 例外を投げず、undefinedを返すだけにとどめる(防御的)。
+//
+// REF-P1e: sourceReferentはmetadataのsibling field(service/operation/
+// input/connectionIdと同じ階層)としてのみ受け取り、絶対に
+// action.input側へ混入させない——返り値のaction.input(provider
+// mapperがそのまま読む唯一のfield)には決して現れない構造にする
+// (「mapperが未知keyを無視するから安全」という前提には頼らない、
+// 型構造自体でleakageを不可能にする、このphaseの絶対条件)。
+// keyが存在しない(v1/非referent-aware Approval)・不正な形の場合は
+// undefinedのまま返す——現在subjectの再構築側(呼び出し元)が、
+// stored subjectとの比較を通じて安全に扱う(存在しない/壊れている
+// sourceReferentは、単に「referent-awareではないactionとして」
+// 扱われるだけであり、この関数自体が例外を投げたりaction全体を
+// 無効化したりはしない)。
 function extractIntegrationActionFromApproval(
   approval: Approval
-): { action: IntegrationAction; connectionId: string } | undefined {
+): { action: IntegrationAction; connectionId: string; sourceReferent?: SourceReferentSnapshot } | undefined {
 
   const payload = approval.payload;
   const rawAction = payload?.action;
@@ -245,7 +265,7 @@ function extractIntegrationActionFromApproval(
     return undefined;
   }
 
-  const { service, operation, input, connectionId } = metadata as Record<string, unknown>;
+  const { service, operation, input, connectionId, sourceReferent } = metadata as Record<string, unknown>;
 
   if (
     typeof service !== "string" ||
@@ -257,6 +277,8 @@ function extractIntegrationActionFromApproval(
     return undefined;
   }
 
+  const parsedSourceReferent = parseSourceReferentSnapshot(sourceReferent);
+
   return {
     action: {
       service: service as IntegrationService,
@@ -264,6 +286,7 @@ function extractIntegrationActionFromApproval(
       input: input as Record<string, unknown>,
     },
     connectionId,
+    ...(parsedSourceReferent ? { sourceReferent: parsedSourceReferent } : {}),
   };
 
 }
@@ -868,6 +891,14 @@ export async function executeApprovedIntegrationAction(
     input: extracted.action.input,
     connectionId: extracted.connectionId,
     riskClassSnapshot: policyDecision.riskClass,
+    // REF-P1e: extracted.sourceReferentはApproval.payload(この関数の
+    // 直前で再抽出したもの)からのみ得る——Gmail再検索・Slack「これ」
+    // 再解決・Action fieldからの推測のいずれも一切行わない
+    // (絶対条件: 永続化されたApproval状態が唯一の真実の源)。stored
+    // subject側に元々sourceReferentが無ければ(v1/非referent-aware
+    // Approval)、ここもextracted.sourceReferentがundefinedのままで
+    // 対称的に一致する。
+    sourceReferent: extracted.sourceReferent ?? null,
   });
 
   if (!currentSubjectResult.ok) {
