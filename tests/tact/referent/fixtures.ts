@@ -127,7 +127,9 @@ export interface ReferentFixture {
 // あり、「fixtureを通すためだけの場当たり的なresolution実装」は
 // 一切行っていない(このfileはresolverを一切importしない)。
 
-function candidate(
+// REF-P1b(discourse.test.ts/signals.test.ts)からも再利用する、
+// 最小限のtest-only helper。本番コードには一切影響しない。
+export function candidate(
   overrides: Partial<CommunicationCandidate> & Pick<CommunicationCandidate, "messageId">
 ): CommunicationCandidate {
   return {
@@ -137,7 +139,7 @@ function candidate(
   };
 }
 
-function slackMessage(
+export function slackMessage(
   overrides: Partial<ConversationEvidenceMessage> & Pick<ConversationEvidenceMessage, "messageRef" | "text">
 ): ConversationEvidenceMessage {
   return {

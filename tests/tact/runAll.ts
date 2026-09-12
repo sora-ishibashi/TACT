@@ -168,6 +168,8 @@ import { run as runRuntimeReconcileOneShotEntrypoint } from "./runtime/reconcile
 import { run as runRuntimeReconcileOneShotTrustedActor } from "./runtime/reconcileOneShotIntegrationReadAsTrustedActor.test";
 import { run as runRuntimeReconcileOneShotTrustedActorCli } from "./runtime/reconcileOneShotIntegrationReadAsTrustedActorCli.test";
 import { run as runReferentHarness } from "./referent/referentHarness.test";
+import { run as runReferentDiscourse } from "./referent/discourse.test";
+import { run as runReferentSignals } from "./referent/signals.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -311,6 +313,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "runtime/reconcileOneShotIntegrationReadAsTrustedActor", run: runRuntimeReconcileOneShotTrustedActor },
   { name: "runtime/reconcileOneShotIntegrationReadAsTrustedActorCli", run: runRuntimeReconcileOneShotTrustedActorCli },
   { name: "referent/referentHarness", run: runReferentHarness },
+  { name: "referent/discourse", run: runReferentDiscourse },
+  { name: "referent/signals", run: runReferentSignals },
 ];
 
 async function main() {
