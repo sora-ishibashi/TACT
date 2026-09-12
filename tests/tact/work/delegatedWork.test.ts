@@ -4,6 +4,7 @@ import {
   resolveDelegatedWorkIntent,
 } from "../../../core/tact-work/delegatedIntent";
 import { evaluateDelegatedWorkCompletion } from "../../../core/tact-work/delegatedCompletion";
+import { proposeGmailReply } from "../../../core/tact-work/gmailReplyProposal";
 import type { ContextResolutionPlan, ContextResolutionResult } from "../../../core/tact-context-resolution";
 import { check, summarize, type CheckResult } from "../lib/check";
 
@@ -51,6 +52,15 @@ function resolution(overrides: Partial<ContextResolutionResult["sources"]> = {})
       metrics: { evidenceCount: 3, totalChars: 72, truncated: false },
     },
     sources: { notion: "available", gmail: "available", ...overrides },
+    rawGmailSearch: {
+      messages: [{
+        messageId: "gmail-message-1",
+        threadId: "gmail-thread-1",
+        subject: "TACTテスト商事 更新案件について",
+        from: "田中 <tanaka@example.com>",
+        bodyText: "更新案件について確認をお願いいたします。",
+      }],
+    },
   };
 }
 export async function run(): Promise<{ pass: number; fail: number }> {
@@ -64,6 +74,29 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       intent.objective.includes("現在状況") &&
       intent.requestType === "inspect"
   ));
+
+  {
+    const actionPlan = { ...plan, requestText: "これ対応しといて" };
+    const actionIntent = resolveDelegatedWorkIntent(actionPlan);
+    const proposal = actionIntent ? proposeGmailReply(actionIntent, { ...resolution(), plan: actionPlan }) : undefined;
+    const noRecipient = actionIntent ? proposeGmailReply(actionIntent, {
+      ...resolution(), plan: actionPlan, rawGmailSearch: { messages: [{ messageId: "m1", subject: "件名", from: "田中さん" }] },
+    }) : undefined;
+    const manyMessages = actionIntent ? proposeGmailReply(actionIntent, {
+      ...resolution(), plan: actionPlan, rawGmailSearch: { messages: [
+        { messageId: "m1", subject: "件名", from: "a@example.com" },
+        { messageId: "m2", subject: "件名", from: "b@example.com" },
+      ] },
+    }) : undefined;
+
+    results.push(check(
+      "[GMAIL-P1 proposal] only the current action request produces a bounded, exact-recipient proposal; ambiguous sender/message fails closed",
+      actionIntent?.requestType === "act" &&
+        actionIntent.requiredCapabilities.includes("communication.write") === true &&
+        proposal?.action.operation === "send_message" && proposal.action.input.to[0] === "tanaka@example.com" &&
+        proposal.action.input.subject.startsWith("Re:") && !noRecipient && !manyMessages
+    ));
+  }
 
   results.push(check(
     "[WORK-P1 capability] Work semantics use capability categories and never Composio/provider action names",
@@ -81,9 +114,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   ));
 
   results.push(check(
-    "[WORK-P1 read-vs-act] a send-like request is classified but not converted into this read-only context Work",
+    "[GMAIL-P1 read-vs-act] a send-like current request is an act Work and remains non-terminal until the protected action is completed",
     classifyDelegatedRequestType("これ送って") === "act" &&
-      resolveDelegatedWorkIntent({ ...plan, requestText: "これ送って" }) === undefined
+      resolveDelegatedWorkIntent({ ...plan, requestText: "これ送って" })?.requestType === "act"
   ));
 
   if (intent) {

@@ -940,8 +940,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[ARCH-P1c/Case4] serviceが承認後に変化した場合、policy allowlistに存在しないためinvalid_action(Policy側の既存defense-in-depthが先に働く、Integrity検証より手前)、provider call 0",
-        outcome.status === "invalid_action" && calls.executeIntegrationActionCalls === 0
+        "[ARCH-P1c/Case4] service mutation to known gmail.send_message fails Approval Integrity before any provider call",
+        outcome.status === "approval_integrity_failed" && calls.executeIntegrationActionCalls === 0
       )
     );
   }

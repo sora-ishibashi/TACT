@@ -16,6 +16,7 @@ import {
 import { mapSlackActionToComposioTool, mapComposioListChannelsResultToCanonical } from "./mappings/slack";
 import {
   mapComposioGmailSearchResultToCanonical,
+  mapComposioGmailSendResultToCanonical,
   mapGmailActionToComposioTool,
 } from "./mappings/gmail";
 import {
@@ -465,6 +466,17 @@ export function buildExecutionResultFromToolResult(
       output: canonicalized.result,
     };
 
+  }
+
+  if (action.service === "gmail" && action.operation === "send_message") {
+    const canonicalized = mapComposioGmailSendResultToCanonical(result.data);
+    if (!canonicalized.ok) {
+      return {
+        status: "failed",
+        error: { code: "provider_execution_failed", message: canonicalized.reason, retryable: false },
+      };
+    }
+    return { status: "completed", providerExecutionRef: result.logId ?? null, output: canonicalized.result };
   }
 
   if (action.service === "notion" && action.operation === "search") {

@@ -97,6 +97,24 @@ export interface GmailSearchMessagesResult {
   messages: GmailMessageSummary[];
 }
 
+// Canonical write contract.  Provider-specific recipient field names and
+// response payloads remain inside the provider adapter.
+export interface GmailSendMessageInput {
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  bodyText: string;
+  threadId?: string;
+  inReplyToMessageId?: string;
+}
+
+export interface GmailSendMessageResult {
+  messageId?: string;
+  threadId?: string;
+  sent: boolean;
+}
+
 export interface NotionSearchResultItem {
   objectType: "page" | "database" | "unknown";
   id: string;

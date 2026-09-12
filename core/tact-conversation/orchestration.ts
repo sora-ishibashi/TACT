@@ -13,6 +13,11 @@ import {
   defaultRunWorkTurnDeps,
   resolveDelegatedWorkIntent,
   finalizeDelegatedWorkAfterDelivery,
+  createTask,
+  requestApproval,
+  buildApprovalSubject,
+  proposeGmailReply,
+  formatGmailReplyProposal,
   emitAuditSafely,
   getApproval,
   listApprovalsForWork,
@@ -48,6 +53,7 @@ import type { IntegrationService, IntegrationActionExecutionOutcome } from "../t
 // 依存がこのfileへ間接的に伝播する(orchestration.tsはwiring層のため
 // 許容——core/tact-work・core/tact-integration自体はSDKを一切知らない)。
 import { resolveRuntimeIntegrationReadAdapter } from "../tact-runtime/enablement";
+import type { ContextResolutionResult } from "../tact-context-resolution";
 
 import type {
   Conversation,
@@ -2601,6 +2607,66 @@ export async function resolveAndRunWork(
 
 }
 
+async function prepareGmailReplyApproval(params: {
+  workId: string;
+  userId: string;
+  accessToken: string;
+  intent: ResolvedWorkIntent;
+  contextResolution: ContextResolutionResult;
+}): Promise<{ approval?: Approval; proposalText?: string; unavailable?: boolean }> {
+  if (params.intent.requestType !== "act") return {};
+
+  // Retries of the same Conversation turn must surface the already-pending
+  // proposal rather than create a second protected action.
+  const existing = await listApprovalsForWork(params.workId, params.userId, params.accessToken);
+  const pending = existing.find((approval) => approval.status === "pending" &&
+    (approval.payload.action as { metadata?: { service?: unknown; operation?: unknown } } | undefined)?.metadata?.service === "gmail" &&
+    (approval.payload.action as { metadata?: { operation?: unknown } } | undefined)?.metadata?.operation === "send_message");
+  if (pending) return { approval: pending };
+
+  const proposal = proposeGmailReply(params.intent, params.contextResolution);
+  if (!proposal) return {};
+
+  const connection = await resolveIntegrationConnectionViaTactIntegration({
+    service: "gmail", userId: params.userId, accessToken: params.accessToken,
+  });
+  if (connection.status !== "single") return { unavailable: true };
+
+  const task = await createTask(params.workId, params.userId, params.accessToken, {
+    description: "Prepare approved customer email response",
+    assignedCapability: "integration.gmail.send_message",
+  });
+  if (!task) return {};
+
+  const subject = buildApprovalSubject({
+    workId: params.workId,
+    taskId: task.id,
+    service: proposal.action.service,
+    operation: proposal.action.operation,
+    input: proposal.action.input,
+    connectionId: connection.connectionId,
+    riskClassSnapshot: "write",
+  });
+  if (!subject.ok) return {};
+
+  const approval = await requestApproval({
+    workId: params.workId,
+    taskId: task.id,
+    scope: "task",
+    requestedByActor: { kind: "ai", id: "gmail-work" },
+    requestedFromActor: { kind: "user", id: params.userId },
+    reason: proposal.reason,
+    action: {
+      kind: "external_message",
+      summary: "メール返信を送信",
+      metadata: proposal.action,
+    },
+    subject: subject.subject,
+  }, params.userId, params.accessToken);
+
+  return approval ? { approval, proposalText: formatGmailReplyProposal(proposal) } : {};
+}
+
 async function runNormalTurn(
   conversation: Conversation,
   accessToken: string,
@@ -2718,6 +2784,38 @@ async function runNormalTurn(
     result = { ...result, answer: formatContextResolutionAnswer(result.contextResolution) };
   }
 
+  if (resolvedWorkIntent?.requestType === "act" && result.contextResolution && conversation.workId) {
+    const prepared = await prepareGmailReplyApproval({
+      workId: conversation.workId,
+      userId: conversation.userId,
+      accessToken,
+      intent: resolvedWorkIntent,
+      contextResolution: result.contextResolution,
+    });
+    if (prepared.approval) {
+      result = {
+        ...result,
+        pendingApproval: {
+          approvalId: prepared.approval.id,
+          summary: "メール返信を送信",
+          reason: "返信案を確認してください。",
+        },
+        ...(prepared.proposalText ? { answer: prepared.proposalText } : {}),
+      };
+    } else if (prepared.unavailable) {
+      result = { ...result, answer: "メール送信の接続を確認できないため、返信案は作成しましたが送信提案はできませんでした。" };
+    } else {
+      result = { ...result, answer: "返信対象のメールまたは送信先を一意に確認できませんでした。対象を指定してください。" };
+    }
+  }
+
+  if (resolvedWorkIntent?.requestType === "prepare" && result.contextResolution) {
+    const proposal = proposeGmailReply(resolvedWorkIntent, result.contextResolution);
+    result = proposal
+      ? { ...result, answer: `${formatGmailReplyProposal(proposal)}\n\nこれは返信案です。送信はしていません。` }
+      : { ...result, answer: "返信対象のメールまたは送信先を一意に確認できませんでした。対象を指定してください。" };
+  }
+
   const plan = planConversationTurn(result);
 
   if (plan.kind === "clarification") {
@@ -2759,7 +2857,7 @@ async function runNormalTurn(
   // Completion is intentionally deferred until the answer is durable in the
   // canonical Conversation. The Slack adapter owns physical transport; this
   // boundary prevents provider Task completion alone from completing Work.
-  if (resolvedWorkIntent && result.contextResolution && conversation.workId) {
+  if (resolvedWorkIntent && resolvedWorkIntent.requestType !== "act" && result.contextResolution && conversation.workId) {
     try {
       await finalizeDelegatedWorkAfterDelivery({
         workId: conversation.workId,

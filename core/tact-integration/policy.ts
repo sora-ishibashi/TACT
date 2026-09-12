@@ -74,6 +74,7 @@ const POLICY_ALLOWLIST: readonly IntegrationActionPolicy[] = [
   { service: "slack", operation: "send_message", riskClass: "write" },
   { service: "slack", operation: "list_channels", riskClass: "read" },
   { service: "gmail", operation: "search_messages", riskClass: "read" },
+  { service: "gmail", operation: "send_message", riskClass: "write" },
   { service: "notion", operation: "search", riskClass: "read" },
   { service: "notion", operation: "read_page", riskClass: "read" },
 ];

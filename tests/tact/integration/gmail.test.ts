@@ -1,6 +1,8 @@
 import {
   GMAIL_FETCH_EMAILS_TOOL_SLUG,
+  GMAIL_SEND_EMAIL_TOOL_SLUG,
   GMAIL_MESSAGE_BODY_MAX_LENGTH,
+  mapComposioGmailSendResultToCanonical,
   mapComposioGmailSearchResultToCanonical,
   mapGmailActionToComposioTool,
 } from "../../../core/tact-integration/providers/composio/mappings/gmail";
@@ -58,6 +60,60 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       mapped.ok && JSON.stringify(mapped.invocation.arguments) === JSON.stringify({
         query: "A社", max_results: 10, user_id: "me", include_payload: true, include_spam_trash: false,
       })
+    ));
+  }
+
+  {
+    const mapped = mapGmailActionToComposioTool({
+      service: "gmail",
+      operation: "send_message",
+      input: {
+        to: ["customer@example.com", "team@example.com"],
+        cc: ["manager@example.com"],
+        subject: "確認のご連絡",
+        bodyText: "確認しました。",
+      },
+    });
+    const policy = evaluatePolicyDecision("gmail", "send_message");
+    results.push(check(
+      "[Gmail send mapping] canonical text mail maps once to the verified provider action and requires approval",
+      mapped.ok && mapped.invocation.slug === GMAIL_SEND_EMAIL_TOOL_SLUG &&
+        JSON.stringify(mapped.invocation.arguments) === JSON.stringify({
+          recipient_email: "customer@example.com",
+          extra_recipients: ["team@example.com"],
+          cc: ["manager@example.com"],
+          subject: "確認のご連絡",
+          body: "確認しました。",
+          is_html: false,
+          user_id: "me",
+        }) &&
+        policy.decision === "require_approval" && policy.riskClass === "write"
+    ));
+
+    const invalid = mapGmailActionToComposioTool({
+      service: "gmail", operation: "send_message",
+      input: { to: ["not-an-email"], subject: "x", bodyText: "x", providerRequestId: "attacker" },
+    });
+    const replyUnsupported = mapGmailActionToComposioTool({
+      service: "gmail", operation: "send_message",
+      input: { to: ["customer@example.com"], subject: "x", bodyText: "x", threadId: "thread-1" },
+    });
+    results.push(check(
+      "[Gmail send validation] invalid/provider-controlled input and unsupported reply binding fail closed",
+      !invalid.ok && !replyUnsupported.ok
+    ));
+  }
+
+  {
+    const normalized = mapComposioGmailSendResultToCanonical({
+      id: "sent-message-1", threadId: "thread-1", token: "must-not-leak", headers: { authorization: "secret" },
+    });
+    const missingId = mapComposioGmailSendResultToCanonical({ threadId: "thread-1" });
+    const serialized = normalized.ok ? JSON.stringify(normalized.result) : "";
+    results.push(check(
+      "[Gmail send normalization] confirms only a provider-returned message id and exposes no provider payload",
+      normalized.ok && normalized.result.sent && normalized.result.messageId === "sent-message-1" &&
+        normalized.result.threadId === "thread-1" && !serialized.includes("token") && !serialized.includes("secret") && !missingId.ok
     ));
   }
 

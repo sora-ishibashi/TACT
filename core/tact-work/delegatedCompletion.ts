@@ -38,6 +38,12 @@ export function evaluateDelegatedWorkCompletion(
   if (intent.requiredCapabilities.includes("communication.read") && !sourceIsComplete(contextResolution, "gmail")) {
     unmetConditions.push("communication_checked");
   }
+  // An act Work is intentionally never completed by the read-side Context-P2
+  // finalizer. The protected-write resume path is the only path allowed to
+  // satisfy communication_sent after a valid Approval.
+  if (intent.requiredCapabilities.includes("communication.write")) {
+    unmetConditions.push("communication_sent");
+  }
   if (!resultDelivered) unmetConditions.push("result_delivered");
 
   if (unmetConditions.some((condition) => condition !== "result_delivered")) {

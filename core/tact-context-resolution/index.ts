@@ -48,6 +48,10 @@ export interface ContextResolutionResult {
   plan: ContextResolutionPlan;
   pack: ContextPack;
   sources: Partial<Record<"notion" | "gmail", ContextSourceStatus>>;
+  // Server-only canonical Gmail result. It exists only while the current Work
+  // derives a reply proposal; it is never persisted as Work metadata/audit
+  // data or returned to browser callers.
+  rawGmailSearch?: GmailSearchMessagesResult;
 }
 
 const MAX_QUERY_LENGTH = 120;
@@ -62,6 +66,12 @@ function normalizeText(value: string): string {
 
 function boundedText(value: string, maxLength: number): string {
   return normalizeText(value).slice(0, maxLength);
+}
+
+// Only the authenticated trigger can opt into a candidate external action;
+// this function intentionally never evaluates historical conversation text.
+function isReferentialDelegationRequest(value: string): boolean {
+  return /(?:これ|この(?:件|案件)|それ).{0,12}(?:対応|返信|返事|送って|お願いします)|(?:対応|返信|返事|送って).{0,12}(?:これ|この(?:件|案件)|それ)|(?:返信案|下書き).{0,12}(?:作って|作成|準備)/u.test(value);
 }
 
 function isReferentialConfirmationRequest(value: string): boolean {
@@ -117,7 +127,7 @@ export function planContextResolution(
   requestText: string,
   conversationEvidence: ConversationEvidence | undefined
 ): ContextResolutionPlan | undefined {
-  if (!conversationEvidence || !isReferentialConfirmationRequest(requestText)) {
+  if (!conversationEvidence || (!isReferentialConfirmationRequest(requestText) && !isReferentialDelegationRequest(requestText))) {
     return undefined;
   }
 
@@ -300,6 +310,7 @@ export function buildContextResolutionResult(
       ...(plan.sources.notion ? { notion: sourceStatus(outcomes, "notion", hasNotionEvidence) ?? "failed" } : {}),
       ...(plan.sources.gmail ? { gmail: sourceStatus(outcomes, "gmail", hasGmailEvidence) ?? "failed" } : {}),
     },
+    ...(gmailSearch ? { rawGmailSearch: gmailSearch } : {}),
   };
 }
 

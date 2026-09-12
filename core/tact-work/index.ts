@@ -24,7 +24,9 @@ export * from "./intake";
 export * from "./execution";
 export * from "./delegatedIntent";
 export * from "./delegatedCompletion";
+export * from "./gmailReplyProposal";
 export * from "./approval";
+export * from "./approvalIntegrity";
 // Fast Port P3a: Human Interaction Foundation(Clarification)。
 // core/tact-work/approval.tsと同じ二層構造(store.tsの生CRUD +
 // このExecution Boundary)を持つため、同じbarrelから公開する。

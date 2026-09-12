@@ -22,6 +22,8 @@ function bounded(value: string, maximum: number): string {
  */
 export function classifyDelegatedRequestType(requestText: string): WorkRequestType {
   const text = bounded(requestText, 240);
+  if (/(?:対応(?:しといて|して)?|返信(?:して|しといて)?|返事(?:して|しといて)?|送って)/u.test(text)) return "act";
+  if (/(?:返信案|下書き).{0,12}(?:作って|作成|準備)/u.test(text)) return "prepare";
   if (/(?:確認|調べ|読ん|見て|検証|状況)/u.test(text)) return "inspect";
   if (/(?:下書き|案を作|作成して|準備して)/u.test(text)) return "prepare";
   if (/(?:送って|送信|削除|更新|作業して|実行して)/u.test(text)) return "act";
@@ -44,32 +46,31 @@ export function resolveDelegatedWorkIntent(
   const subject = bounded(plan.subject.summary, MAX_SUBJECT_LENGTH);
   const requestType = classifyDelegatedRequestType(plan.requestText);
 
-  // WORK-P1 currently executes only the bounded read-only confirmation path.
-  // A recognized write-like request is represented as intent, never executed
-  // through this helper.
-  if (!subject || requestType !== "inspect") {
+  if (!subject || (requestType !== "inspect" && requestType !== "prepare" && requestType !== "act")) {
     return undefined;
   }
 
   const requiredCapabilities: WorkCapabilityRequirement[] = [];
   if (plan.sources.notion) requiredCapabilities.push("organizational_context.read");
   if (plan.sources.gmail) requiredCapabilities.push("communication.read");
+  if (requestType === "act") requiredCapabilities.push("communication.write");
 
   const completionConditions: ResolvedWorkIntent["completionConditions"] = [
     "subject_identified",
     ...(plan.sources.notion ? ["organizational_context_checked" as const] : []),
     ...(plan.sources.gmail ? ["communication_checked" as const] : []),
+    ...(requestType === "act" ? ["reply_prepared" as const, "approval_granted" as const, "communication_sent" as const] : []),
     "result_synthesized",
     "result_delivered",
   ];
 
-  const objectiveParts = ["現在状況"];
+  const objectiveParts = requestType === "act" ? ["必要な対応を準備し、承認後に実行"] : ["現在状況"];
   if (plan.sources.notion) objectiveParts.push("期限");
   if (plan.sources.gmail) objectiveParts.push("先方からの連絡状況");
 
   return {
     subject,
-    title: bounded(`${subject}の状況確認`, 160),
+    title: bounded(`${subject}${requestType === "act" ? "への対応" : requestType === "prepare" ? "の返信案作成" : "の状況確認"}`, 160),
     objective: bounded(`${subject}について、${objectiveParts.join("・")}を確認して報告する。`, 320),
     requestType,
     completionConditions,

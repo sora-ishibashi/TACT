@@ -108,12 +108,16 @@ export type WorkRequestType = "inspect" | "prepare" | "act" | "monitor" | "unkno
 
 export type WorkCapabilityRequirement =
   | "organizational_context.read"
-  | "communication.read";
+  | "communication.read"
+  | "communication.write";
 
 export type WorkCompletionCondition =
   | "subject_identified"
   | "organizational_context_checked"
   | "communication_checked"
+  | "reply_prepared"
+  | "approval_granted"
+  | "communication_sent"
   | "result_synthesized"
   | "result_delivered";
 
