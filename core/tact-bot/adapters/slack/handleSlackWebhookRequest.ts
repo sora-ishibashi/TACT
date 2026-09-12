@@ -19,6 +19,10 @@ import {
   normalizeSlackAppMentionEvent,
 } from "./normalizeSlackEvent";
 import { detectApprovalDecisionText as defaultDetectApprovalDecisionText } from "./detectApprovalDecisionText";
+import {
+  SLACK_APPROVAL_APPROVE_ACTION_ID,
+  SLACK_APPROVAL_REJECT_ACTION_ID,
+} from "./slackChannelAdapter";
 import type { SlackAppMentionEvent, SlackEventCallbackEnvelope } from "./types";
 import type { ConversationEvidence } from "../../../tact-conversation/conversationEvidence";
 import {
@@ -90,6 +94,8 @@ export interface HandleSlackWebhookRequestDeps {
   // S1e: 決定論的なpure text判定(LLM不使用、絶対条件2/11)。
   // normalizeSlackAppMentionEvent()が既にmention除去・trim済みの
   // BotIncomingMessage.textを渡す。
+  // Deprecated compatibility injection. Text is never used to authorize an
+  // Approval; only a signed Block Kit action reaches receiveApprovalDecision.
   detectApprovalDecisionText: typeof defaultDetectApprovalDecisionText;
 
   // S1e: detectApprovalDecisionText()がmatchした場合にのみ呼ばれる、
@@ -98,7 +104,8 @@ export interface HandleSlackWebhookRequestDeps {
   // をこのfileから直接呼ばない)。
   receiveApprovalDecision: (
     message: BotIncomingMessage,
-    decisionKind: BotApprovalDecisionKind
+    decisionKind: BotApprovalDecisionKind,
+    expectedApprovalId?: string
   ) => Promise<ReceiveSlackBotApprovalDecisionResult>;
 
   // S1c: BotAction[]をSlackへ配送する(既存BotAction execution gateway
@@ -139,7 +146,8 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
   detectApprovalDecisionText: defaultDetectApprovalDecisionText,
 
   // S1e: ./productionBotCore.tsのreceiveSlackBotApprovalDecisionAsTrustedActor()。
-  receiveApprovalDecision: receiveSlackBotApprovalDecisionAsTrustedActor,
+  receiveApprovalDecision: (message, decisionKind, expectedApprovalId) =>
+    receiveSlackBotApprovalDecisionAsTrustedActor(message, decisionKind, undefined, expectedApprovalId),
 
   // S1c: ./productionBotCore.tsのexecuteSlackBotActions()(実
   // core/tact-bot/gateway/executeBotActions.ts + SlackChannelAdapter)。
@@ -157,6 +165,77 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
 
 function ackIgnored(): SlackWebhookHandlerResponse {
   return { status: 200, body: { ok: true } };
+}
+
+type SlackApprovalInteraction = {
+  message: BotIncomingMessage;
+  decision: BotApprovalDecisionKind;
+  approvalId: string;
+};
+
+// Block Kit values are correlation data only. This parser intentionally has no
+// natural-language decision path and accepts neither work IDs nor free-form
+// authorization instructions.
+function parseSlackApprovalInteraction(rawBody: string): SlackApprovalInteraction | null {
+  let payload: unknown;
+  try {
+    const encoded = new URLSearchParams(rawBody).get("payload");
+    payload = encoded ? JSON.parse(encoded) : null;
+  } catch {
+    return null;
+  }
+
+  if (!payload || typeof payload !== "object") return null;
+  const candidate = payload as {
+    type?: unknown;
+    user?: { id?: unknown };
+    team?: { id?: unknown };
+    channel?: { id?: unknown };
+    container?: { message_ts?: unknown; thread_ts?: unknown };
+    actions?: Array<{ action_id?: unknown; value?: unknown }>;
+  };
+  const action = Array.isArray(candidate.actions) && candidate.actions.length === 1
+    ? candidate.actions[0]
+    : undefined;
+  const decision = action?.action_id === SLACK_APPROVAL_APPROVE_ACTION_ID
+    ? "approve"
+    : action?.action_id === SLACK_APPROVAL_REJECT_ACTION_ID
+      ? "reject"
+      : undefined;
+  const userId = candidate.user?.id;
+  const teamId = candidate.team?.id;
+  const channelId = candidate.channel?.id;
+  const messageTs = candidate.container?.message_ts;
+  const threadTs = candidate.container?.thread_ts;
+  const approvalId = action?.value;
+
+  if (
+    candidate.type !== "block_actions" || !decision ||
+    typeof userId !== "string" || !userId ||
+    typeof teamId !== "string" || !teamId ||
+    typeof channelId !== "string" || !channelId ||
+    typeof messageTs !== "string" || !messageTs ||
+    typeof approvalId !== "string" || !approvalId
+  ) return null;
+
+  return {
+    decision,
+    approvalId,
+    message: {
+      channel: "slack",
+      actor: { externalUserId: userId },
+      conversation: {
+        externalConversationId: channelId,
+        type: "channel",
+        threadId: typeof threadTs === "string" && threadTs ? threadTs : messageTs,
+      },
+      organizationId: teamId,
+      messageId: messageTs,
+      text: "",
+      mentionedTact: false,
+      receivedAt: new Date().toISOString(),
+    },
+  };
 }
 
 function toSlackContextTrigger(
@@ -206,6 +285,25 @@ export async function handleSlackWebhookRequest(
 
   if (!verification.ok) {
     return { status: 401, body: { error: "invalid_signature" } };
+  }
+
+  const interaction = parseSlackApprovalInteraction(rawBody);
+  if (interaction) {
+    deps.scheduleBackgroundWork(async () => {
+      try {
+        const result = await deps.receiveApprovalDecision(
+          interaction.message,
+          interaction.decision,
+          interaction.approvalId
+        );
+        await deps.executeBotActions(result.actions);
+      } catch (error) {
+        (deps.logBackgroundFailure ?? defaultDeps.logBackgroundFailure!)(
+          buildSafeSlackBackgroundFailureDiagnostic(error, "approval_decision", [rawBody])
+        );
+      }
+    });
+    return { status: 200, body: { ok: true } };
   }
 
   // 絶対条件(Section5、7): JSON.parse前のraw bodyだけを署名検証に使い、
@@ -320,23 +418,14 @@ export async function handleSlackWebhookRequest(
       // だけを行い、識別・相関解決・実行判断のいずれも行わない
       // (それらはreceiveApprovalDecision()側、さらにその内部の
       // canonical receiveBotApprovalDecision()の責務)。
-      const decisionMatch = deps.detectApprovalDecisionText(message.text);
-
       const retrieveConversationContext = deps.retrieveConversationContext ?? defaultDeps.retrieveConversationContext!;
-      let result: ReceiveBotMessageResult | ReceiveSlackBotApprovalDecisionResult;
+      stage = "conversation_context";
+      conversationEvidence = await retrieveConversationContext(contextTrigger).catch(() =>
+        triggerOnlySlackConversationEvidence(contextTrigger, true)
+      );
 
-      if (decisionMatch.matched) {
-        stage = "approval_decision";
-        result = await deps.receiveApprovalDecision(message, decisionMatch.decision);
-      } else {
-        stage = "conversation_context";
-        conversationEvidence = await retrieveConversationContext(contextTrigger).catch(() =>
-          triggerOnlySlackConversationEvidence(contextTrigger, true)
-        );
-
-        stage = "conversation_intake";
-        result = await deps.receiveBotMessage(message, conversationEvidence);
-      }
+      stage = "conversation_intake";
+      const result: ReceiveBotMessageResult = await deps.receiveBotMessage(message, conversationEvidence);
 
       stage = "slack_action_delivery";
       await deps.executeBotActions(result.actions);

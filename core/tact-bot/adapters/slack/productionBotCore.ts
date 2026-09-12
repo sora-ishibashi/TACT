@@ -220,7 +220,8 @@ function buildResolutionFailureMessage(
 export async function receiveSlackBotApprovalDecisionAsTrustedActor(
   message: BotIncomingMessage,
   decisionKind: BotApprovalDecisionKind,
-  deps: ReceiveSlackBotApprovalDecisionDeps = defaultSlackApprovalDecisionDeps
+  deps: ReceiveSlackBotApprovalDecisionDeps = defaultSlackApprovalDecisionDeps,
+  expectedApprovalId?: string
 ): Promise<ReceiveSlackBotApprovalDecisionResult> {
 
   const target = buildTarget(message);
@@ -283,6 +284,25 @@ export async function receiveSlackBotApprovalDecisionAsTrustedActor(
       ],
     };
 
+  }
+
+  // A Slack Block Kit control is bound to one canonical Approval. The value
+  // itself is not trusted authorization (the signed callback, resolved actor,
+  // thread lookup, and canonical receiver remain authoritative), but it must
+  // match the still-pending Approval before a click can reach that receiver.
+  // This rejects stale/historical controls and never falls back to free text.
+  if (expectedApprovalId !== undefined && expectedApprovalId !== resolution.approval.id) {
+    return {
+      handled: false,
+      actions: [
+        {
+          kind: "reply",
+          target,
+          inReplyToMessageId: message.messageId,
+          text: "この承認操作は現在の承認待ち内容と一致しません。最新の承認操作を使用してください。",
+        },
+      ],
+    };
   }
 
   // 絶対条件(Step7、最重要): approveApproval()/rejectApproval()/

@@ -55,6 +55,17 @@ function makeReplyAction(overrides: Partial<BotAction> & { text?: string; target
   };
 }
 
+function makeApprovalAction(): Extract<BotAction, { kind: "request_approval" }> {
+  return {
+    kind: "request_approval",
+    target: makeTarget({ threadId: "1893456000.000100" }),
+    workId: "work-1",
+    approvalId: "approval-1",
+    summary: "メール返信を送信",
+    options: ["approve", "reject"],
+  };
+}
+
 function makeFakeClient(
   behavior: (params: SlackPostMessageParams, callIndex: number) => SlackPostMessageResult
 ): { client: SlackWebApiClient; calls: SlackPostMessageParams[] } {
@@ -91,6 +102,62 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[A] reply BotAction(短文)はpostMessageを正確に1回呼び、ok:trueを返す",
         calls.length === 1 && result.ok === true && result.actionKind === "reply"
+      )
+    );
+  }
+
+  // The proposal is a normal reply, followed by the generic Approval UI. Its
+  // canonical recipient/subject/body text must not be replaced by the UI.
+  {
+    const { client, calls } = makeFakeClient(alwaysOk());
+    const adapter = createSlackChannelAdapter({ client });
+    const proposalText = "返信案を作成しました。\nTo: tanaka@example.com\n件名: Re: 契約について\n本文:\n確認しました。";
+    await adapter.executeAction(makeReplyAction({ text: proposalText }));
+    await adapter.executeAction(makeApprovalAction());
+
+    results.push(
+      check(
+        "[GMAIL-P1 display] exact recipient, subject, and body remain in the proposal reply while generic Approval controls render separately",
+        calls[0]?.text === proposalText &&
+          calls[1]?.blocks?.some((block) => block.type === "actions") === true
+      )
+    );
+  }
+
+  // ---- Generic Approval UI: provider-neutral request_approval -> Block Kit ----
+  {
+    const { client, calls } = makeFakeClient(alwaysOk());
+    const adapter = createSlackChannelAdapter({ client });
+    const result = await adapter.executeAction(makeApprovalAction());
+    const blocks = calls[0]?.blocks;
+    const controls = blocks?.find((block) => block.type === "actions");
+
+    results.push(
+      check(
+        "[Approval UI] request_approvalは既存の汎用BotActionからSlack Block Kit controlsとして配送される",
+        result.ok === true && result.actionKind === "request_approval" && calls.length === 1 && Array.isArray(blocks)
+      )
+    );
+
+    results.push(
+      check(
+        "[Approval UI] 承認/却下 controlsは同一のcanonical Approval IDを参照する",
+        controls?.type === "actions" &&
+          controls.elements.length === 2 &&
+          controls.elements[0]?.text.text === "承認" &&
+          controls.elements[0]?.action_id === "tact_approval_approve" &&
+          controls.elements[0]?.value === "approval-1" &&
+          controls.elements[1]?.text.text === "却下" &&
+          controls.elements[1]?.action_id === "tact_approval_reject" &&
+          controls.elements[1]?.value === "approval-1"
+      )
+    );
+
+    results.push(
+      check(
+        "[Approval UI] rendererはGmail固有fieldを持たず、任意のcanonical Approvalを描画する",
+        !JSON.stringify(blocks).toLowerCase().includes("gmail") &&
+          !JSON.stringify(blocks).includes("work-1")
       )
     );
   }

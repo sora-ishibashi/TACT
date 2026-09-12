@@ -38,7 +38,26 @@ export interface SlackPostMessageParams {
 
   threadTs?: string;
 
+  // Narrow Block Kit shape used by the provider-neutral request_approval
+  // BotAction. Keeping this at the Slack boundary prevents Slack fields from
+  // leaking into the canonical BotAction model.
+  blocks?: SlackBlock[];
+
 }
+
+export type SlackBlock =
+  | { type: "section"; text: { type: "mrkdwn" | "plain_text"; text: string } }
+  | {
+      type: "actions";
+      block_id: string;
+      elements: Array<{
+        type: "button";
+        text: { type: "plain_text"; text: string };
+        action_id: string;
+        value: string;
+        style?: "primary" | "danger";
+      }>;
+    };
 
 export interface SlackPostMessageResult {
 
@@ -129,6 +148,7 @@ export function createProductionSlackWebApiClient(token: string): SlackWebApiCli
           channel: params.channel,
           text: params.text,
           ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+          ...(params.blocks ? { blocks: params.blocks } : {}),
         });
 
         return {

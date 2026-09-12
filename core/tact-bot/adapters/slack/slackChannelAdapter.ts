@@ -1,7 +1,7 @@
 import type { BotAction, BotActionDeliveryResult, BotIncomingMessage } from "../../types";
 import type { ChannelAdapter } from "../types";
 import { isAppMentionEventCallback, normalizeSlackAppMentionEvent } from "./normalizeSlackEvent";
-import { getSlackWebApiClient, type SlackWebApiClient } from "./slackClient";
+import { getSlackWebApiClient, type SlackBlock, type SlackPostMessageParams, type SlackWebApiClient } from "./slackClient";
 import { splitSlackMessageText } from "./splitMessageText";
 
 // =========================
@@ -37,6 +37,45 @@ export interface SlackChannelAdapterDeps {
 
 }
 
+export const SLACK_APPROVAL_APPROVE_ACTION_ID = "tact_approval_approve";
+export const SLACK_APPROVAL_REJECT_ACTION_ID = "tact_approval_reject";
+export const SLACK_APPROVAL_BLOCK_ID = "tact_approval_controls";
+
+function approvalBlocks(approvalId: string, summary: string): SlackBlock[] {
+  return [
+    { type: "section", text: { type: "mrkdwn", text: `*承認待ち*\n${summary}` } },
+    {
+      type: "actions",
+      block_id: SLACK_APPROVAL_BLOCK_ID,
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "承認" },
+          action_id: SLACK_APPROVAL_APPROVE_ACTION_ID,
+          value: approvalId,
+          style: "primary",
+        },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "却下" },
+          action_id: SLACK_APPROVAL_REJECT_ACTION_ID,
+          value: approvalId,
+          style: "danger",
+        },
+      ],
+    },
+  ];
+}
+
+function approvalMessage(action: Extract<BotAction, { kind: "request_approval" }>): SlackPostMessageParams {
+  return {
+    channel: action.target.conversation.externalConversationId,
+    text: `承認待ち: ${action.summary}`,
+    threadTs: action.target.conversation.threadId,
+    blocks: approvalBlocks(action.approvalId, action.summary),
+  };
+}
+
 export function createSlackChannelAdapter(
   deps: SlackChannelAdapterDeps = {}
 ): ChannelAdapter {
@@ -59,7 +98,7 @@ export function createSlackChannelAdapter(
 
       // 絶対条件(Section9): 未対応actionはsilent success/business
       // actionへの変換をせず、明示的にunsupportedとして拒否する。
-      if (action.kind !== "reply") {
+      if (action.kind !== "reply" && action.kind !== "request_approval") {
 
         return {
           ok: false,
@@ -86,6 +125,13 @@ export function createSlackChannelAdapter(
       // という概念そのものを再解釈しない(BotActionTarget.conversationの
       // 既存field、externalConversationId/threadIdをそのままSlack API
       // parameterへ変換するだけ)。
+      if (action.kind === "request_approval") {
+        const result = await client.postMessage(approvalMessage(action));
+        return result.ok
+          ? { ok: true, actionKind: action.kind, raw: { sentChunks: 1, totalChunks: 1 } }
+          : { ok: false, actionKind: action.kind, error: "delivery_failed", raw: { sentChunks: 0, totalChunks: 1, providerErrorCode: result.error } };
+      }
+
       const channel = action.target.conversation.externalConversationId;
       const threadTs = action.target.conversation.threadId;
 

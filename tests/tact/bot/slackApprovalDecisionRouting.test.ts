@@ -444,14 +444,12 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     let receiveBotMessageCalls = 0;
     let receiveApprovalDecisionCalls = 0;
-    let capturedDecisionKind: "approve" | "reject" | undefined;
 
     await driveHandler(makeAppMentionEnvelope("承認", "Ev-decision-approve-1"), {
       detectApprovalDecisionText: (text) =>
         text === "承認" ? { matched: true, decision: "approve" } : { matched: false },
-      receiveApprovalDecision: async (_message, decisionKind) => {
+      receiveApprovalDecision: async () => {
         receiveApprovalDecisionCalls += 1;
-        capturedDecisionKind = decisionKind;
         return { handled: true, actions: [] };
       },
       receiveBotMessage: async () => {
@@ -462,8 +460,97 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Case11] 「承認」がdecision textとしてmatchした場合、receiveApprovalDecision()が正確に1回呼ばれ、receiveBotMessage()(通常Conversation/LLM経路)は一切呼ばれない",
-        receiveApprovalDecisionCalls === 1 && receiveBotMessageCalls === 0 && capturedDecisionKind === "approve"
+        "[Plain text] 『承認』本文はApproval decision pathへ入らず、canonical UI clickの代替にならない",
+        receiveApprovalDecisionCalls === 0 && receiveBotMessageCalls === 1
+      )
+    );
+  }
+
+  // ---- Signed generic Block Kit controls enter the existing trusted path ----
+  {
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123EXTERNAL" },
+      team: { id: "T123TEAM" },
+      channel: { id: "C123CHANNEL" },
+      container: { message_ts: "1893456000.000200", thread_ts: "1893456000.000100" },
+      actions: [{ action_id: "tact_approval_approve", value: "approval-1" }],
+    };
+    const rawBody = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const headers = makeHeaders({
+      "x-slack-signature": computeSignature(SIGNING_SECRET, timestamp, rawBody),
+      "x-slack-request-timestamp": timestamp,
+    });
+    let received: { decision?: string; approvalId?: string; threadId?: string } = {};
+    let receiveBotMessageCalls = 0;
+    let scheduledPromise: Promise<void> | undefined;
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, {
+      getSigningSecret: () => SIGNING_SECRET,
+      claimExternalEvent: async () => "claimed",
+      detectApprovalDecisionText: () => ({ matched: false }),
+      receiveApprovalDecision: async (message, decision, approvalId) => {
+        received = { decision, approvalId, threadId: message.conversation.threadId };
+        return { handled: true, actions: [] };
+      },
+      receiveBotMessage: async () => {
+        receiveBotMessageCalls += 1;
+        return { handled: true, actions: [] };
+      },
+      executeBotActions: async () => [],
+      scheduleBackgroundWork: (task) => { scheduledPromise = task(); },
+    });
+    await scheduledPromise;
+
+    results.push(
+      check(
+        "[Block Kit approve] signed control propagates its Approval ID and thread to the existing trusted decision receiver, never to conversation intake",
+        response.status === 200 &&
+          received.decision === "approve" &&
+          received.approvalId === "approval-1" &&
+          received.threadId === "1893456000.000100" &&
+          receiveBotMessageCalls === 0
+      )
+    );
+  }
+
+  {
+    const payload = {
+      type: "block_actions",
+      user: { id: "U123EXTERNAL" },
+      team: { id: "T123TEAM" },
+      channel: { id: "C123CHANNEL" },
+      container: { message_ts: "1893456000.000200", thread_ts: "1893456000.000100" },
+      actions: [{ action_id: "tact_approval_reject", value: "approval-1" }],
+    };
+    const rawBody = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const headers = makeHeaders({
+      "x-slack-signature": computeSignature(SIGNING_SECRET, timestamp, rawBody),
+      "x-slack-request-timestamp": timestamp,
+    });
+    let decision: string | undefined;
+    let scheduledPromise: Promise<void> | undefined;
+
+    await handleSlackWebhookRequest(rawBody, headers, {
+      getSigningSecret: () => SIGNING_SECRET,
+      claimExternalEvent: async () => "claimed",
+      detectApprovalDecisionText: () => ({ matched: false }),
+      receiveApprovalDecision: async (_message, receivedDecision) => {
+        decision = receivedDecision;
+        return { handled: true, actions: [] };
+      },
+      receiveBotMessage: async () => ({ handled: true, actions: [] }),
+      executeBotActions: async () => [],
+      scheduleBackgroundWork: (task) => { scheduledPromise = task(); },
+    });
+    await scheduledPromise;
+
+    results.push(
+      check(
+        "[Block Kit reject] signed reject control routes into the same trusted Approval decision receiver",
+        decision === "reject"
       )
     );
   }
@@ -487,8 +574,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Case12] 「却下」がdecision textとしてmatchした場合も同様に、receiveBotMessage()は一切呼ばれない",
-        receiveApprovalDecisionCalls === 1 && receiveBotMessageCalls === 0
+        "[Plain text] 『却下』本文もApproval decision pathへ入らず、canonical UI clickの代替にならない",
+        receiveApprovalDecisionCalls === 0 && receiveBotMessageCalls === 1
       )
     );
   }
@@ -514,6 +601,23 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Case13] decision textにmatchしない通常messageは、既存のreceiveBotMessage()経路がそのまま使われ、receiveApprovalDecision()は一切呼ばれない",
         receiveBotMessageCalls === 1 && receiveApprovalDecisionCalls === 0
+      )
+    );
+  }
+
+  {
+    const { deps, receiveBotApprovalDecisionCalls } = makeDeps();
+    const result = await receiveSlackBotApprovalDecisionAsTrustedActor(
+      makeMessage(),
+      "approve",
+      deps,
+      "approval-historical"
+    );
+
+    results.push(
+      check(
+        "[Historical control] mismatched Approval ID is rejected before the trusted decision receiver and cannot resume a send",
+        result.handled === false && receiveBotApprovalDecisionCalls.length === 0
       )
     );
   }
