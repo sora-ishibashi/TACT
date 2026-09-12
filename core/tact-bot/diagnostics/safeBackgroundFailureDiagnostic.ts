@@ -16,10 +16,35 @@ export interface SlackBackgroundFailureDiagnostic {
   stage: SlackBackgroundExecutionStage;
   errorName: string;
   message: string;
+  thrownType?: string;
+  thrownValueSummary?: string;
+  name?: string;
+  code?: string;
+  details?: string;
+  hint?: string;
+  status?: string;
+  statusCode?: string;
+  error?: string;
+  type?: string;
+  keys?: string[];
   causeName?: string;
   causeMessage?: string;
   stack?: string;
 }
+
+const SAFE_NON_ERROR_FIELDS = [
+  "name",
+  "message",
+  "code",
+  "details",
+  "hint",
+  "status",
+  "statusCode",
+  "error",
+  "type",
+] as const;
+
+type SafeNonErrorField = typeof SAFE_NON_ERROR_FIELDS[number];
 
 function truncate(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
@@ -61,17 +86,94 @@ function toSafeErrorName(error: Error, knownSensitiveValues: readonly string[]):
   return name || "Error";
 }
 
+function safePrimitiveSummary(value: unknown, knownSensitiveValues: readonly string[]): string {
+  try {
+    return sanitizeDiagnosticText(String(value), knownSensitiveValues);
+  } catch {
+    return "[unprintable]";
+  }
+}
+
+function readSafeScalarField(
+  value: object,
+  key: SafeNonErrorField,
+  knownSensitiveValues: readonly string[]
+): string | undefined {
+  try {
+    const candidate = (value as Record<string, unknown>)[key];
+    if (
+      typeof candidate !== "string" &&
+      typeof candidate !== "number" &&
+      typeof candidate !== "boolean" &&
+      candidate !== null
+    ) {
+      return undefined;
+    }
+    return sanitizeDiagnosticText(String(candidate), knownSensitiveValues);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildSafeNonErrorDiagnostic(
+  error: unknown,
+  stage: SlackBackgroundExecutionStage,
+  knownSensitiveValues: readonly string[]
+): SlackBackgroundFailureDiagnostic {
+  if (error === null) {
+    return {
+      stage,
+      errorName: "NonErrorThrown",
+      message: "A non-Error null value was thrown.",
+      thrownType: "null",
+      thrownValueSummary: "null",
+    };
+  }
+
+  if (typeof error !== "object") {
+    const summary = safePrimitiveSummary(error, knownSensitiveValues);
+    return {
+      stage,
+      errorName: "NonErrorThrown",
+      message: summary || "A non-Error primitive value was thrown.",
+      thrownType: typeof error,
+      thrownValueSummary: summary,
+    };
+  }
+
+  const diagnostic: SlackBackgroundFailureDiagnostic = {
+    stage,
+    errorName: "NonErrorThrown",
+    message: "A non-Error object was thrown.",
+    thrownType: "object",
+  };
+  const keys: string[] = [];
+
+  for (const key of SAFE_NON_ERROR_FIELDS) {
+    const field = readSafeScalarField(error, key, knownSensitiveValues);
+    if (field === undefined) continue;
+    keys.push(key);
+    if (key === "message") {
+      diagnostic.message = field || "A non-Error object was thrown.";
+    } else {
+      diagnostic[key] = field;
+    }
+  }
+
+  diagnostic.thrownValueSummary = keys.length > 0
+    ? `object with diagnostic fields: ${keys.join(", ")}`
+    : "object without supported diagnostic fields";
+  if (keys.length > 0) diagnostic.keys = keys;
+  return diagnostic;
+}
+
 export function buildSafeSlackBackgroundFailureDiagnostic(
   error: unknown,
   stage: SlackBackgroundExecutionStage,
   knownSensitiveValues: readonly string[] = []
 ): SlackBackgroundFailureDiagnostic {
   if (!(error instanceof Error)) {
-    return {
-      stage,
-      errorName: "NonErrorThrown",
-      message: "A non-Error value was thrown.",
-    };
+    return buildSafeNonErrorDiagnostic(error, stage, knownSensitiveValues);
   }
 
   const diagnostic: SlackBackgroundFailureDiagnostic = {

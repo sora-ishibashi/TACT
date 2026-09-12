@@ -28,6 +28,7 @@ import {
 import type { ClaimExternalEventResult } from "../../../core/tact-bot/eventDedup/supabaseEventDedupStore";
 import type { BotIncomingMessage } from "../../../core/tact-bot/types";
 import { triggerOnlySlackConversationEvidence } from "../../../core/tact-bot/adapters/slack/slackConversationContext";
+import { buildSafeSlackBackgroundFailureDiagnostic } from "../../../core/tact-bot/diagnostics/safeBackgroundFailureDiagnostic";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 const SIGNING_SECRET = "fake-signing-secret-for-test-only";
@@ -472,6 +473,70 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           !JSON.stringify(response.body).includes("conversation failed")
       )
     );
+  }
+
+  // ---- Non-Error background diagnostics retain a small, redacted summary ----
+  {
+    const errorDiagnostic = buildSafeSlackBackgroundFailureDiagnostic(
+      new Error("normal failure"),
+      "conversation_intake"
+    );
+    const stringDiagnostic = buildSafeSlackBackgroundFailureDiagnostic(
+      "provider rejected the request",
+      "conversation_intake"
+    );
+    const objectDiagnostic = buildSafeSlackBackgroundFailureDiagnostic({
+      code: "provider_rejected",
+      message: "provider rejected the request",
+      details: "invalid grant",
+      hint: "reconnect the service",
+      ignoredNestedPayload: { access_token: "must-not-be-read" },
+    }, "conversation_intake");
+    const nullDiagnostic = buildSafeSlackBackgroundFailureDiagnostic(null, "conversation_intake");
+    const secretDiagnostic = buildSafeSlackBackgroundFailureDiagnostic({
+      message: "Authorization: Bearer xoxb-secret-value",
+      details: "api_key=sk-secret-value",
+      token: "token-secret-value",
+      apiKey: "api-key-secret-value",
+    }, "conversation_intake", ["token-secret-value", "api-key-secret-value"]);
+    const longDiagnostic = buildSafeSlackBackgroundFailureDiagnostic("x".repeat(2_000), "conversation_intake");
+    const serializedSecretDiagnostic = JSON.stringify(secretDiagnostic);
+
+    results.push(check(
+      "[background failure diagnostics] Error instances preserve their existing Error diagnostic shape",
+      errorDiagnostic.errorName === "Error" &&
+        errorDiagnostic.message === "normal failure" &&
+        !("thrownType" in errorDiagnostic)
+    ));
+
+    results.push(check(
+      "[background failure diagnostics] thrown strings preserve a bounded primitive summary",
+      stringDiagnostic.errorName === "NonErrorThrown" &&
+        stringDiagnostic.thrownType === "string" &&
+        stringDiagnostic.message === "provider rejected the request" &&
+        stringDiagnostic.thrownValueSummary === "provider rejected the request"
+    ));
+
+    results.push(check(
+      "[background failure diagnostics] thrown plain objects expose only allowlisted scalar diagnostic fields",
+      objectDiagnostic.errorName === "NonErrorThrown" &&
+        objectDiagnostic.code === "provider_rejected" &&
+        objectDiagnostic.details === "invalid grant" &&
+        objectDiagnostic.hint === "reconnect the service" &&
+        objectDiagnostic.keys?.join(",") === "message,code,details,hint" &&
+        !JSON.stringify(objectDiagnostic).includes("must-not-be-read")
+    ));
+
+    results.push(check(
+      "[background failure diagnostics] null, secret-shaped, and oversized non-Error values remain explicit, redacted, and bounded",
+      nullDiagnostic.thrownType === "null" && nullDiagnostic.thrownValueSummary === "null" &&
+        !serializedSecretDiagnostic.includes("xoxb-secret-value") &&
+        !serializedSecretDiagnostic.includes("sk-secret-value") &&
+        !serializedSecretDiagnostic.includes("token-secret-value") &&
+        !serializedSecretDiagnostic.includes("api-key-secret-value") &&
+        serializedSecretDiagnostic.includes("[redacted]") &&
+        (longDiagnostic.message.length <= 501) && (longDiagnostic.thrownValueSummary?.length ?? 0) <= 501
+    ));
   }
 
   return summarize("bot/slackWebhookHandler", results);
