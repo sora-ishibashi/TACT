@@ -26,8 +26,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   const fixtureSource = readFileSync("components/research/artifactPreview.ts", "utf8");
   const workspaceSource = readFileSync("components/research/ResearchWorkspace.tsx", "utf8");
+  const hasPreviewMutationGuard = /if \(artifactPreviewActive\) \{\s*return;\s*\}/.test(workspaceSource);
   results.push(check("[Preview] fixture lookup is pure: it has no network, provider, or Cortex execution dependency", !fixtureSource.includes("fetch(") && !fixtureSource.includes("runCortex") && !fixtureSource.includes("runLLM")));
-  results.push(check("[Preview] Workspace resolves the preview before normal loading and blocks preview-side API mutations", workspaceSource.includes("getArtifactPreview(new URLSearchParams(window.location.search).get(\"artifactPreview\"))") && workspaceSource.includes("if (artifactPreviewActive || !user)") && workspaceSource.includes("if (artifactPreviewActive) {\n      return;\n    }")));
+  results.push(check("[Preview] Workspace resolves the preview before normal loading and blocks preview-side API mutations", workspaceSource.includes("getArtifactPreview(new URLSearchParams(window.location.search).get(\"artifactPreview\"))") && workspaceSource.includes("if (artifactPreviewActive || !user)") && hasPreviewMutationGuard));
   results.push(check("[Preview] polished Artifact rendering uses the shared evidence popover and keeps copy output free of internal table columns", workspaceSource.includes("<ArtifactEvidencePopover") && workspaceSource.includes("isInternalArtifactColumn") && workspaceSource.includes("getArtifactTableView")));
 
   // Bug fix regression: the line chart used to render a y-axis max/min <text> label
