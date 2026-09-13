@@ -46,6 +46,21 @@ function replySubject(subject: string | undefined): string | undefined {
   return /^re:/iu.test(normalized) ? normalized : `Re: ${normalized}`;
 }
 
+// proposeGmailReply()/proposeGmailReplyFromReferent()の両方で使う、
+// 完全に決定論的な(捏造の無い)boilerplate本文。message本文自体は
+// 一切読まない(REF-P1: SourceReferentSnapshotにbody/snippetを含めない
+// のと同じ理由——body-independentな下書きであることが、Referent
+// Resolutionが選んだcandidateからも安全に同じ下書きを再構築できる
+// 前提を支えている)。
+function buildReplyBodyText(intent: ResolvedWorkIntent): string {
+  return [
+    "お世話になっております。",
+    "ご連絡いただいた件について確認いたしました。",
+    `${intent.subject}について、内容を確認のうえ対応いたします。`,
+    "よろしくお願いいたします。",
+  ].join("\n\n").slice(0, MAX_DRAFT_BODY_LENGTH);
+}
+
 /**
  * Produces a deliberately conservative text-only proposal. It is not an
  * authorization decision: callers must create an Approval over `action`.
@@ -62,17 +77,50 @@ export function proposeGmailReply(
   const subject = replySubject(message.subject);
   if (!to || !subject) return undefined;
 
-  const bodyText = [
-    "お世話になっております。",
-    "ご連絡いただいた件について確認いたしました。",
-    `${intent.subject}について、内容を確認のうえ対応いたします。`,
-    "よろしくお願いいたします。",
-  ].join("\n\n").slice(0, MAX_DRAFT_BODY_LENGTH);
-
   return {
-    action: { service: "gmail", operation: "send_message", input: { to: [to], subject, bodyText } },
+    action: { service: "gmail", operation: "send_message", input: { to: [to], subject, bodyText: buildReplyBodyText(intent) } },
     reason: "関連する受信メールへの返信案を作成しました。",
     sourceMessageRef: message.messageId,
+  };
+}
+
+// =========================
+// proposeGmailReplyFromReferent (REF-P1f)
+// =========================
+//
+// proposeGmailReply()と同じ保守的な下書き生成ロジックを、Referent
+// Resolver(core/tact-referent/resolve.ts)が選んだ勝者candidate、または
+// Referent Clarificationでpinされたcandidate(core/tact-referent/
+// clarification.tsのCandidateSnapshotEntry)から直接構築できるようにする
+// wrapper。ContextResolutionResult.rawGmailSearch(常に「直近1回の広い
+// 検索」の結果のみ)を経由しないため、狭め検索(narrow re-query)で
+// 見つかったcandidateや、Clarification回答時点で(TOCTOU-safeに)
+// pinされたcandidateからも同じ下書きを再構築できる。
+//
+// 絶対条件: message本文・snippetのいずれも引数に取らない(下書き自体が
+// body-independentであるため、REF-P1のfrozen designと矛盾しない)。
+export interface GmailReferentReplyTarget {
+  sourceMessageRef: string;
+  sender: string;
+  normalizedSubject: string;
+}
+
+export function proposeGmailReplyFromReferent(
+  intent: ResolvedWorkIntent,
+  target: GmailReferentReplyTarget,
+  sourceReferent?: SourceReferentSnapshot
+): GmailReplyProposal | undefined {
+  if (intent.requestType !== "act" && intent.requestType !== "prepare") return undefined;
+
+  const to = parseSingleAddress(target.sender);
+  const subject = replySubject(target.normalizedSubject);
+  if (!to || !subject) return undefined;
+
+  return {
+    action: { service: "gmail", operation: "send_message", input: { to: [to], subject, bodyText: buildReplyBodyText(intent) } },
+    reason: "関連する受信メールへの返信案を作成しました。",
+    sourceMessageRef: target.sourceMessageRef,
+    ...(sourceReferent ? { sourceReferent } : {}),
   };
 }
 

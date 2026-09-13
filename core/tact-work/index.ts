@@ -36,3 +36,6 @@ export * from "./clarification";
 export * from "./audit";
 // Fast Port P6a: Task Resume Foundation。同じbarrel export pattern。
 export * from "./resume";
+// REF-P1f: Gmail Referent Candidate Generation。同じbarrel export
+// pattern(core/tact-integration/core/tact-referent間の変換層)。
+export * from "./gmailReferentCandidates";

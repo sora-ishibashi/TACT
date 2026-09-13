@@ -85,6 +85,7 @@ import { run as runTactConversationClarificationAnswer } from "./conversation/ta
 import { run as runTactConversationResearchCapability } from "./conversation/tactConversationResearchCapability.test";
 import { run as runConnectionResolutionActiveOnly } from "./conversation/connectionResolutionActiveOnly.test";
 import { run as runTaskResumeExecution } from "./conversation/taskResumeExecution.test";
+import { run as runGmailReferentWorkflow } from "./conversation/gmailReferentWorkflow.test";
 import { run as runTactArtifactMutation } from "./artifact/tactArtifactMutation.test";
 import { run as runTactArtifactBlocks } from "./artifact/tactArtifactBlocks.test";
 import { run as runTactArtifactPhase77 } from "./artifact/tactArtifactPhase77.test";
@@ -232,6 +233,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "conversation/tactConversationApi", run: runTactConversationApi },
   { name: "conversation/tactConversationOrchestration", run: runTactConversationOrchestration },
   { name: "conversation/taskResumeExecution", run: runTaskResumeExecution },
+  { name: "conversation/gmailReferentWorkflow", run: runGmailReferentWorkflow },
   { name: "conversation/workLinkRepair", run: runWorkLinkRepair },
   { name: "conversation/integrationReadResult", run: runIntegrationReadResult },
   { name: "context/contextResolution", run: runContextResolution },

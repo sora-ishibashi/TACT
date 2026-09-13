@@ -17,13 +17,25 @@ import {
   requestApproval,
   buildApprovalSubject,
   proposeGmailReply,
+  proposeGmailReplyFromReferent,
   formatGmailReplyProposal,
   emitAuditSafely,
   getApproval,
+  getWork,
   listApprovalsForWork,
   listTasksForWork,
   // Fast Port P6a: Task Resume Foundation。
   evaluateTaskResumeEligibility,
+  // Fast Port P3a / REF-P1d: Human Interaction Foundation + Pinned
+  // Referent Clarification。
+  listClarificationsForWork,
+  updateClarificationStatus,
+  updateWorkStatus,
+  requestReferentClarification,
+  resolveClarification,
+  // REF-P1f: Gmail Referent Candidate Generation。
+  communicationCandidatesFromGmailSearch,
+  MAX_DIRECT_REFERENT_CHOICES,
 } from "../tact-work";
 import type {
   WorkIntakeSource,
@@ -32,6 +44,7 @@ import type {
   ExecuteReadIntegrationAction,
   ExecuteReadIntegrationActionOutcome,
   Approval,
+  Clarification,
   // Fast Port P6a: Task Resume Foundation。
   TaskResumeIntent,
   TaskResumeEligibilityBlockedReasonCode,
@@ -47,7 +60,22 @@ import {
   executeApprovedIntegrationAction,
   evaluatePolicyDecision,
 } from "../tact-integration";
-import type { IntegrationService, IntegrationActionExecutionOutcome } from "../tact-integration";
+import type { IntegrationService, IntegrationActionExecutionOutcome, GmailSearchMessagesResult } from "../tact-integration";
+// REF-P1f: Referent Resolution primitives(REF-P1a〜P1d、既存frozen
+// module)。ここが唯一の実配線点——core/tact-referent/*自体は一切
+// importする側(core/tact-work/core/tact-integration/core/tact-bot)へ
+// 依存しない一方向のまま(frozen Dependency Rule)。
+import { reconstructDiscourseFocus, currentTopicLabel } from "../tact-referent/discourse";
+import { extractReferentSignals } from "../tact-referent/signals";
+import { resolveReferent } from "../tact-referent/resolve";
+import { assessSearchCompleteness } from "../tact-referent/types";
+import type {
+  CommunicationCandidate,
+  SourceReferentSnapshot,
+  ReferentSignal,
+  ReferentResolution,
+} from "../tact-referent/types";
+import { buildCandidateSnapshot, buildSourceReferentSnapshot } from "../tact-referent/clarification";
 // Fast Port P5c: Trigger.dev routingの有効性(feature flag + config)を
 // 決定する唯一のchokepoint。このimport経由でのみ@trigger.dev/sdkへの
 // 依存がこのfileへ間接的に伝播する(orchestration.tsはwiring層のため
@@ -485,6 +513,28 @@ export async function runConversationOrchestration(
   conversationEvidence?: ConversationEvidence
 ): Promise<ConversationTurnResult> {
 
+  // REF-P1f: Work-level referent Clarification(candidate_snapshot付き、
+  // core/tact-work/clarification.tsのrequestReferentClarification())は
+  // Conversation-level pendingClarificationMessageId(Phase68、resend-to-
+  // Orchestrator方式)とは完全に独立したstate machineである。この判定を
+  // 必ず先に行う——"1"のような数値回答をConversation-levelの通常の
+  // Clarification再実行(Orchestratorへの再送、fresh candidateの混入
+  // リスク)へ誤って合流させない(CLARIFICATION RESPONSE絶対条件)。
+  if (conversation.workId) {
+
+    const workId = conversation.workId;
+
+    const pendingReferentClarification = await atConversationIntakeStage(
+      "conversation_intake.clarification_lookup",
+      () => findPendingReferentClarification(workId, conversation.userId, accessToken)
+    );
+
+    if (pendingReferentClarification) {
+      return runReferentClarificationAnswerTurn(conversation, accessToken, userInput, pendingReferentClarification);
+    }
+
+  }
+
   const pending = await atConversationIntakeStage(
     "conversation_intake.clarification_lookup",
     () => getPendingClarification(conversation, accessToken)
@@ -495,6 +545,38 @@ export async function runConversationOrchestration(
   }
 
   return runNormalTurn(conversation, accessToken, userInput, attachmentIds, attachmentEvidence, workspaceEvidence, source, conversationEvidence);
+
+}
+
+// =========================
+// findPendingReferentClarification (REF-P1f)
+// =========================
+//
+// candidateSnapshot/candidateSnapshotHashの両方を持つ、status="pending"の
+// Clarificationを1件返す(referent-selection Clarificationかどうかの
+// 唯一の判別子、core/tact-work/types.tsのClarification.candidateSnapshot
+// コメント参照)。既存の自由記述Clarification(Fast Port P3a)はこの
+// 判定に一切引っかからない(後方互換性)。
+//
+// 絶対条件(STALE CLARIFICATION): staleになったClarificationは
+// runReferentClarificationAnswerTurn()側でstatus="expired"へ遷移させる
+// ——このfunction自身は「pendingのまま残っている」ものを機械的に返す
+// だけで、期限切れかどうかの判定はresolveClarification()(canonical
+// resolveReferentClarificationSelection())へ一本化する。
+async function findPendingReferentClarification(
+  workId: string,
+  userId: string,
+  accessToken: string
+): Promise<Clarification | undefined> {
+
+  const clarifications = await listClarificationsForWork(workId, userId, accessToken);
+
+  return clarifications.find(
+    (clarification) =>
+      clarification.status === "pending" &&
+      !!clarification.candidateSnapshot &&
+      !!clarification.candidateSnapshotHash
+  );
 
 }
 
@@ -2620,49 +2702,346 @@ export async function resolveAndRunWork(
 
 }
 
-async function prepareGmailReplyApproval(params: {
+// =========================
+// REF-P1f: Referent-Aware Gmail Work Wiring
+// =========================
+//
+// REF-P1以前のprepareGmailReplyApproval()は、broadなContext
+// Resolution検索が返したGmailメールがちょうど1件の場合にのみ
+// proposeGmailReply()でApprovalを作る素朴な経路であり、Referent
+// Resolver(core/tact-referent/*, REF-P1a〜P1d)を一切経由していな
+// かった。以下はその経路を、既存のResolver/Clarification primitiveへ
+// 実際に接続する(REF-P1f PRIMARY GOAL)。合わせて、REF-P1e完了報告で
+// 判明していたpre-existing gap(prepareGmailReplyApproval()が
+// Approval.payload.action.metadataへconnectionIdを含めておらず、
+// extractIntegrationActionFromApproval()がinvalid_actionになり得る
+// 問題)をここで修正する——connectionIdを、Approval Subject
+// (整合性検証用)だけでなく実際にProviderが読むmetadataへも必ず含める。
+
+// core/tact-integration/providers/composio/mappings/gmail.tsの
+// GMAIL_SEARCH_DEFAULT_MAX_RESULTSと同じ値。このfileはProvider
+// mapping実装(core/tact-integration/providers配下)を一切importしない
+// 既存方針を保つため、値だけを独立に再宣言する(core/tact-work/
+// execution.tsのExecuteReadIntegrationActionOutcomeが既に使っている
+// 「値だけ再宣言」パターンと同じ)。
+const GMAIL_SEARCH_DEFAULT_MAX_RESULTS = 10;
+
+function isGmailSearchMessagesResult(value: unknown): value is GmailSearchMessagesResult {
+  return !!value && typeof value === "object" && Array.isArray((value as GmailSearchMessagesResult).messages);
+}
+
+// =========================
+// GmailReferentWorkflowDeps (LIVE-READINESS TEST)
+// =========================
+//
+// Fast Port P6bのExecutePreparedTaskResumeDepsと同じDIパターン:
+// 実I/O(Supabase/Composio)だけをテストで差し替え可能にする——
+// buildApprovalSubject()/verifyApprovalIntegrity()相当のcanonical
+// ロジック自体は一切迂回できない(実DBだけがmockに置き換わる)。
+// 既定値は実配線済みの既存関数そのまま(挙動変更なし)。
+export interface GmailReferentWorkflowDeps {
+
+  listApprovalsForWork: typeof listApprovalsForWork;
+
+  listClarificationsForWork: typeof listClarificationsForWork;
+
+  resolveIntegrationConnection: ResolveIntegrationConnection;
+
+  createTask: typeof createTask;
+
+  executeReadIntegrationAction: ExecuteReadIntegrationAction;
+
+  buildApprovalSubject: typeof buildApprovalSubject;
+
+  requestApproval: typeof requestApproval;
+
+  requestReferentClarification: typeof requestReferentClarification;
+
+}
+
+export const defaultGmailReferentWorkflowDeps: GmailReferentWorkflowDeps = {
+  listApprovalsForWork,
+  listClarificationsForWork,
+  resolveIntegrationConnection: resolveIntegrationConnectionViaTactIntegration,
+  createTask,
+  executeReadIntegrationAction: executeReadIntegrationActionWithRuntimeRouting,
+  buildApprovalSubject,
+  requestApproval,
+  requestReferentClarification,
+};
+
+// =========================
+// executeNarrowGmailSearch (SEARCH COMPLETENESS: exactly-one narrow
+// re-query)
+// =========================
+//
+// Fast Port P6bのexecutePreparedTaskResume()と同じ「ad-hoc read
+// execution」pattern(Orchestrator Task decomposition経由ではなく、
+// 新しいWorkTaskを1件作って既存executeReadIntegrationActionWithRuntime
+// Routing()へ直接委譲する)を再利用する。新しいexecution boundaryは
+// 作らない(STOP CONDITION回避: 既存Orchestrator/decomposerを変更
+// しない)。
+async function executeNarrowGmailSearch(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  connectionId: string,
+  query: string,
+  deps: GmailReferentWorkflowDeps
+): Promise<GmailSearchMessagesResult | undefined> {
+
+  const task = await deps.createTask(workId, userId, accessToken, {
+    description: "Narrow Gmail search for referent resolution",
+    assignedCapability: "integration.gmail.search_messages",
+  });
+
+  if (!task) return undefined;
+
+  const outcome = await deps.executeReadIntegrationAction({
+    workId,
+    userId,
+    accessToken,
+    taskId: task.id,
+    connectionId,
+    action: {
+      kind: "integration_action",
+      summary: "referent resolution narrow search",
+      metadata: {
+        service: "gmail",
+        operation: "search_messages",
+        input: { query, maxResults: GMAIL_SEARCH_DEFAULT_MAX_RESULTS },
+        connectionId,
+      },
+    },
+  });
+
+  if (outcome.status !== "completed" || !outcome.resultOutput) {
+    return undefined;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(outcome.resultOutput);
+    return isGmailSearchMessagesResult(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+
+}
+
+// usableな明示的sender/subject signalを1件だけ選ぶ(frozen rule:
+// narrow re-queryは「ちょうど1回」のみ)。優先順位: sender → subject。
+// directness==="direct"のみを対象とする(inferred signalで絞り込まない
+// ——時刻signal等の推測値をnarrow queryの根拠にしない)。
+//
+// 絶対条件(このphaseの明示的判断): provenance.kind==="work_subject"の
+// subject signal(extractReferentSignals()がWork.subjectから常に無条件に
+// 生成する)は対象から除外する——これはbroad searchのquery自体が既に
+// 使っているWork固有の値であり、「usableな明示的signal」ではない
+// (act系Workは常にsubjectを持つため、これを含めるとnarrow re-query自体
+// が実質常時発火してしまい、「usableな明示的sender/subject signalが
+// ある場合のみ」というfrozen ruleの意味が失われる)。ここでのexplicitは
+// 「今回の会話で実際に述べられた」signal(current_trigger/
+// slack_message_ref由来)のみを指す。
+function isExplicitMessageSignal(signal: ReferentSignal): boolean {
+  return signal.directness === "direct" &&
+    (signal.provenance.kind === "current_trigger" || signal.provenance.kind === "slack_message_ref");
+}
+
+function selectNarrowingSignal(signals: readonly ReferentSignal[]): ReferentSignal | undefined {
+
+  return (
+    signals.find((signal) => signal.kind === "sender" && isExplicitMessageSignal(signal)) ??
+    signals.find((signal) => signal.kind === "subject" && isExplicitMessageSignal(signal))
+  );
+
+}
+
+function buildNarrowGmailQuery(signal: ReferentSignal): string {
+  return signal.kind === "sender" ? `from:${signal.value}` : `subject:"${signal.value}"`;
+}
+
+// =========================
+// resolveGmailReferent (REF-P1f PART B: production referent input)
+// =========================
+//
+// PRIMARY GOALのステップ(DiscourseFocus再構築 → ReferentSignal抽出 →
+// Gmail candidate生成 → search completeness評価 → P1c resolver)を
+// 1箇所へ集約する。P1c resolver(core/tact-referent/resolve.ts)自体は
+// 一切変更しない(絶対条件、NO LARGE-CANDIDATE REDESIGN)。
+async function resolveGmailReferent(params: {
   workId: string;
   userId: string;
   accessToken: string;
   intent: ResolvedWorkIntent;
   contextResolution: ContextResolutionResult;
-}): Promise<{ approval?: Approval; proposalText?: string; unavailable?: boolean }> {
-  if (params.intent.requestType !== "act") return {};
+  conversationEvidence?: ConversationEvidence;
+  currentTriggerText: string;
+  connectionId: string;
+}, deps: GmailReferentWorkflowDeps): Promise<ReferentResolution> {
+
+  if (params.contextResolution.sources.gmail !== "available") {
+    // broad searchが未実行、または該当が無かった(既存Context
+    // Resolutionの判定をそのまま踏襲する)。絞り込む母集団自体が無い
+    // ため、resolverへは進まず安全にunavailable扱いとする。
+    return { state: "unavailable", reasonCode: "no_broad_search" };
+  }
+
+  const priorMessages = params.conversationEvidence?.messages.filter(
+    (message) => message.relationship !== "trigger"
+  ) ?? [];
+
+  const discourseFocus = reconstructDiscourseFocus(priorMessages, params.currentTriggerText);
+
+  const signals = extractReferentSignals({
+    priorMessages,
+    currentTriggerText: params.currentTriggerText,
+    workSubject: params.intent.subject,
+    requestType: params.intent.requestType,
+    referenceTime: new Date(),
+  });
+
+  const broadCandidates = communicationCandidatesFromGmailSearch(params.contextResolution.rawGmailSearch);
+
+  let candidates: readonly CommunicationCandidate[] = broadCandidates;
+  let searchCompleteness = assessSearchCompleteness({
+    mode: "broad",
+    resultCount: broadCandidates.length,
+    ceilingHit: broadCandidates.length >= GMAIL_SEARCH_DEFAULT_MAX_RESULTS,
+  });
+
+  const narrowingSignal = selectNarrowingSignal(signals);
+
+  if (narrowingSignal) {
+
+    const narrowResult = await executeNarrowGmailSearch(
+      params.workId,
+      params.userId,
+      params.accessToken,
+      params.connectionId,
+      buildNarrowGmailQuery(narrowingSignal),
+      deps
+    );
+
+    if (narrowResult) {
+
+      candidates = communicationCandidatesFromGmailSearch(narrowResult);
+
+      searchCompleteness = assessSearchCompleteness({
+        mode: "narrowed",
+        resultCount: candidates.length,
+        ceilingHit: candidates.length >= GMAIL_SEARCH_DEFAULT_MAX_RESULTS,
+        narrowedBy: narrowingSignal.kind === "sender" ? "candidate.sender" : "candidate.subject",
+      });
+
+    }
+
+    // 絶対条件(NO BROAD FALLBACK AFTER FAILED NARROW SEARCH): narrow
+    // re-queryがproviderエラー等で失敗した場合、candidates/searchCompleteness
+    // を書き換えない——broad(mode:"broad", proven:false)のまま進む。
+
+  }
+
+  return resolveReferent({
+    candidates,
+    signals,
+    searchCompleteness,
+    requestType: params.intent.requestType,
+    workSubject: params.intent.subject,
+    discourseFocusTop: currentTopicLabel(discourseFocus),
+  });
+
+}
+
+// =========================
+// buildReferentClarificationQuestion (AMBIGUOUS CASE)
+// =========================
+//
+// 絶対条件: 内部message ID・Composio ID・provider payload・hashのいずれも
+// 露出しない(CommunicationCandidate自体にそれらのfieldが無いため
+// 構造的に保証される)。
+function shortDateLabel(observedAt: string | undefined): string | undefined {
+  if (!observedAt) return undefined;
+  const parsed = new Date(observedAt);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return `${parsed.getMonth() + 1}/${parsed.getDate()}`;
+}
+
+function buildReferentClarificationQuestion(candidates: readonly CommunicationCandidate[]): string {
+
+  const lines = candidates.map((candidate, index) => {
+    const date = shortDateLabel(candidate.observedAt) ?? "日付不明";
+    const sender = candidate.sender ?? "送信者不明";
+    const subject = candidate.normalizedSubject ?? "件名不明";
+    return `${index + 1}. ${date} ${sender} — ${subject}`;
+  });
+
+  return `対象のメールを特定できませんでした。\n\n${lines.join("\n")}\n\n番号で選んでください。`;
+
+}
+
+// =========================
+// createGmailReferentApproval (RESOLVED CASE / CLARIFICATION RESPONSE)
+// =========================
+//
+// resolveReferent()が直接resolvedを返した場合と、pinされたClarification
+// candidateが選択された場合の両方から共通で呼ぶ、唯一のApproval構築
+// 経路。Part A修正(connectionId round trip)をここに集約する。
+export async function createGmailReferentApproval(params: {
+  workId: string;
+  userId: string;
+  accessToken: string;
+  intent: ResolvedWorkIntent;
+  referent: SourceReferentSnapshot;
+}, deps: GmailReferentWorkflowDeps = defaultGmailReferentWorkflowDeps): Promise<{ approval?: Approval; proposalText?: string; unavailable?: boolean }> {
 
   // Retries of the same Conversation turn must surface the already-pending
   // proposal rather than create a second protected action.
-  const existing = await listApprovalsForWork(params.workId, params.userId, params.accessToken);
+  const existing = await deps.listApprovalsForWork(params.workId, params.userId, params.accessToken);
   const pending = existing.find((approval) => approval.status === "pending" &&
     (approval.payload.action as { metadata?: { service?: unknown; operation?: unknown } } | undefined)?.metadata?.service === "gmail" &&
     (approval.payload.action as { metadata?: { operation?: unknown } } | undefined)?.metadata?.operation === "send_message");
   if (pending) return { approval: pending };
 
-  const proposal = proposeGmailReply(params.intent, params.contextResolution);
-  if (!proposal) return {};
-
-  const connection = await resolveIntegrationConnectionViaTactIntegration({
+  const connection = await deps.resolveIntegrationConnection({
     service: "gmail", userId: params.userId, accessToken: params.accessToken,
   });
   if (connection.status !== "single") return { unavailable: true };
 
-  const task = await createTask(params.workId, params.userId, params.accessToken, {
+  const proposal = proposeGmailReplyFromReferent(
+    params.intent,
+    {
+      sourceMessageRef: params.referent.sourceMessageRef,
+      sender: params.referent.sender,
+      normalizedSubject: params.referent.normalizedSubject,
+    },
+    params.referent
+  );
+  if (!proposal) return {};
+
+  const task = await deps.createTask(params.workId, params.userId, params.accessToken, {
     description: "Prepare approved customer email response",
     assignedCapability: "integration.gmail.send_message",
   });
   if (!task) return {};
 
-  const subject = buildApprovalSubject({
+  const subject = deps.buildApprovalSubject({
     workId: params.workId,
     taskId: task.id,
     service: proposal.action.service,
     operation: proposal.action.operation,
     input: proposal.action.input,
+    // Part A(REF-P1f最優先修正): connectionIdはApproval Subjectの
+    // 整合性検証だけでなく、下のmetadataにも必ず含める——
+    // extractIntegrationActionFromApproval()(core/tact-integration/
+    // execution.ts)はmetadata.connectionIdを要求するため、Subjectだけに
+    // 置いても実行時にinvalid_actionとなるpre-existing gapがあった。
     connectionId: connection.connectionId,
     riskClassSnapshot: "write",
+    sourceReferent: params.referent,
   });
   if (!subject.ok) return {};
 
-  const approval = await requestApproval({
+  const approval = await deps.requestApproval({
     workId: params.workId,
     taskId: task.id,
     scope: "task",
@@ -2672,12 +3051,144 @@ async function prepareGmailReplyApproval(params: {
     action: {
       kind: "external_message",
       summary: "メール返信を送信",
-      metadata: proposal.action,
+      metadata: {
+        ...proposal.action,
+        connectionId: connection.connectionId,
+        sourceReferent: params.referent,
+      },
     },
     subject: subject.subject,
   }, params.userId, params.accessToken);
 
   return approval ? { approval, proposalText: formatGmailReplyProposal(proposal) } : {};
+}
+
+// =========================
+// prepareGmailWorkAction (PRIMARY GOAL entry point)
+// =========================
+//
+// runNormalTurn()のact-intent分岐から呼ばれる、唯一の入口。resolved/
+// ambiguous/insufficient_evidence/conflicting_evidence/unavailableの
+// いずれの状態も、ここでuser-facingな安全なoutcomeへ写像する
+// (内部reasonCodeをuser-facing文言へ露出しない)。
+export type GmailWorkActionOutcome =
+  | { kind: "approval"; approval: Approval; proposalText?: string }
+  | { kind: "unavailable" }
+  | { kind: "clarification_pending"; question: string }
+  | { kind: "clarification_too_large" }
+  | { kind: "fail_closed"; reasonCode: string };
+
+export async function prepareGmailWorkAction(params: {
+  workId: string;
+  userId: string;
+  accessToken: string;
+  intent: ResolvedWorkIntent;
+  contextResolution: ContextResolutionResult;
+  conversationEvidence?: ConversationEvidence;
+  currentTriggerText: string;
+}, deps: GmailReferentWorkflowDeps = defaultGmailReferentWorkflowDeps): Promise<GmailWorkActionOutcome> {
+
+  if (params.intent.requestType !== "act") {
+    return { kind: "fail_closed", reasonCode: "not_act" };
+  }
+
+  // Retries of the same Conversation turn must surface the already-pending
+  // proposal/Clarification rather than create a second one(PENDING
+  // CLARIFICATION絶対条件: 既存Work/Clarificationが安全に再利用できる
+  // 場合は重複生成しない)。
+  const existingApprovals = await deps.listApprovalsForWork(params.workId, params.userId, params.accessToken);
+  const pendingApproval = existingApprovals.find((approval) => approval.status === "pending" &&
+    (approval.payload.action as { metadata?: { service?: unknown; operation?: unknown } } | undefined)?.metadata?.service === "gmail" &&
+    (approval.payload.action as { metadata?: { operation?: unknown } } | undefined)?.metadata?.operation === "send_message");
+  if (pendingApproval) {
+    return { kind: "approval", approval: pendingApproval };
+  }
+
+  const existingClarifications = await deps.listClarificationsForWork(params.workId, params.userId, params.accessToken);
+  const existingReferentClarification = existingClarifications.find(
+    (clarification) => clarification.status === "pending" && !!clarification.candidateSnapshot && !!clarification.candidateSnapshotHash
+  );
+  if (existingReferentClarification) {
+    return { kind: "clarification_pending", question: existingReferentClarification.question };
+  }
+
+  const connection = await deps.resolveIntegrationConnection({
+    service: "gmail", userId: params.userId, accessToken: params.accessToken,
+  });
+  if (connection.status !== "single") {
+    return { kind: "unavailable" };
+  }
+
+  const resolution = await resolveGmailReferent({
+    workId: params.workId,
+    userId: params.userId,
+    accessToken: params.accessToken,
+    intent: params.intent,
+    contextResolution: params.contextResolution,
+    conversationEvidence: params.conversationEvidence,
+    currentTriggerText: params.currentTriggerText,
+    connectionId: connection.connectionId,
+  }, deps);
+
+  if (resolution.state === "resolved") {
+
+    const [entry] = buildCandidateSnapshot([resolution.winner]);
+    const referent = entry ? buildSourceReferentSnapshot(entry) : undefined;
+
+    if (!referent) {
+      return { kind: "fail_closed", reasonCode: "recipient_unresolved" };
+    }
+
+    const created = await createGmailReferentApproval({
+      workId: params.workId,
+      userId: params.userId,
+      accessToken: params.accessToken,
+      intent: params.intent,
+      referent,
+    }, deps);
+
+    if (created.approval) {
+      return { kind: "approval", approval: created.approval, proposalText: created.proposalText };
+    }
+
+    if (created.unavailable) {
+      return { kind: "unavailable" };
+    }
+
+    return { kind: "fail_closed", reasonCode: "recipient_unresolved" };
+
+  }
+
+  if (resolution.state === "ambiguous") {
+
+    // CLARIFICATION SIZE LIMIT: 直接選択肢として提示してよい件数の
+    // 安全な上限を超える場合、番号付き選択肢を一切生成しない
+    // (REF-P2のLarge Candidate Set Reductionはこのphaseのscope外)。
+    if (resolution.candidates.length > MAX_DIRECT_REFERENT_CHOICES) {
+      return { kind: "clarification_too_large" };
+    }
+
+    const question = buildReferentClarificationQuestion(resolution.candidates);
+
+    const clarification = await deps.requestReferentClarification({
+      workId: params.workId,
+      requestedByActor: { kind: "ai", id: "gmail-work" },
+      question,
+      candidates: resolution.candidates,
+    }, params.userId, params.accessToken);
+
+    return clarification
+      ? { kind: "clarification_pending", question }
+      : { kind: "fail_closed", reasonCode: "clarification_failed" };
+
+  }
+
+  // insufficient_evidence / conflicting_evidence / unavailable / stale
+  // (staleはこの初回resolutionでは通常到達しない、staleReferentを渡して
+  // いないため)。いずれも安全にfail closedし、user-facingな文言は
+  // 呼び出し元(runNormalTurn())の既存汎用メッセージへ委ねる。
+  return { kind: "fail_closed", reasonCode: resolution.state };
+
 }
 
 async function runNormalTurn(
@@ -2804,25 +3315,31 @@ async function runNormalTurn(
   }
 
   if (resolvedWorkIntent?.requestType === "act" && result.contextResolution && conversation.workId) {
-    const prepared = await prepareGmailReplyApproval({
+    const gmailAction = await prepareGmailWorkAction({
       workId: conversation.workId,
       userId: conversation.userId,
       accessToken,
       intent: resolvedWorkIntent,
       contextResolution: result.contextResolution,
+      conversationEvidence,
+      currentTriggerText: orchestrationInput,
     });
-    if (prepared.approval) {
+    if (gmailAction.kind === "approval") {
       result = {
         ...result,
         pendingApproval: {
-          approvalId: prepared.approval.id,
+          approvalId: gmailAction.approval.id,
           summary: "メール返信を送信",
           reason: "返信案を確認してください。",
         },
-        ...(prepared.proposalText ? { answer: prepared.proposalText } : {}),
+        ...(gmailAction.proposalText ? { answer: gmailAction.proposalText } : {}),
       };
-    } else if (prepared.unavailable) {
+    } else if (gmailAction.kind === "unavailable") {
       result = { ...result, answer: "メール送信の接続を確認できないため、返信案は作成しましたが送信提案はできませんでした。" };
+    } else if (gmailAction.kind === "clarification_pending") {
+      result = { ...result, answer: gmailAction.question };
+    } else if (gmailAction.kind === "clarification_too_large") {
+      result = { ...result, answer: "候補が多いため、まだ対象を特定できません。\n送信者・件名・時期など、もう少し条件を教えてください。" };
     } else {
       result = { ...result, answer: "返信対象のメールまたは送信先を一意に確認できませんでした。対象を指定してください。" };
     }
@@ -3043,5 +3560,172 @@ async function runClarificationAnswerTurn(
   const pendingApproval = await resolvePendingApproval(result, conversation, accessToken);
 
   return { conversation, userMessage, message, executionRecord, pendingApproval };
+
+}
+
+// =========================
+// runReferentClarificationAnswerTurn (REF-P1f)
+// =========================
+//
+// runConversationOrchestration()が、conversation.workId配下に
+// candidate_snapshot付きのpending Clarification(Work-level、
+// core/tact-work/clarification.tsのrequestReferentClarification())を
+// 見つけた場合にのみ呼ばれる。runClarificationAnswerTurn()(Phase68、
+// Conversation-level pendingClarificationMessageId方式)とは完全に別の
+// state machineであり、Orchestratorの再実行は一切行わない
+// (CLARIFICATION RESPONSE絶対条件: 「1」はSTORED candidate_snapshotの
+// みから解決し、fresh Gmail検索と一切混ぜない)。
+//
+// 絶対条件(IMPORTANT: CLARIFICATION SELECTION != APPROVAL): この関数は
+// Approvalを作るところまでは行うが、Approve/Reject自体はここでは
+// 一切判断しない——既存の信頼済みApproval decision receiver
+// (core/tact-bot/gateway/receiveApprovalDecision.ts)だけがそれを行う。
+async function runReferentClarificationAnswerTurn(
+  conversation: Conversation,
+  accessToken: string,
+  answerInput: string,
+  clarification: Clarification
+): Promise<ConversationTurnResult> {
+
+  const userMessage = await recordClarificationAnswer(conversation, accessToken, answerInput);
+
+  const workId = conversation.workId;
+
+  // 理論上到達しない(このClarification自体がconversation.workId経由で
+  // 見つかっている)が、防御的にfail closedする。
+  if (!workId) {
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant",
+      "対象を確認できませんでした。もう一度お試しください。"
+    );
+    return { conversation, userMessage, message };
+  }
+
+  const outcome = await resolveClarification(
+    workId,
+    conversation.userId,
+    accessToken,
+    clarification.id,
+    { kind: "user", id: conversation.userId },
+    answerInput
+  );
+
+  if (outcome.status === "invalid_referent_selection") {
+
+    const selection = outcome.selection;
+
+    // STALE CLARIFICATION / HASH-INTEGRITY FAILURE(絶対条件、
+    // fail closed): 古いselectionを受理しない・candidateを再生成
+    // しない・free-text fallbackしない。Clarificationをここで終端
+    // (expired/cancelled)へ進め、次のfindPendingReferentClarification()
+    // が同じ期限切れ/改ざんされたClarificationへ永遠に再マッチし
+    // 続けないようにする(新しいResolution FlowはWorkが"running"へ
+    // 戻った後、通常のact-intent Turnとして自然に始まる)。
+    if (selection.status === "stale" || selection.status === "integrity_error") {
+
+      await updateClarificationStatus(
+        workId, conversation.userId, accessToken, clarification.id,
+        selection.status === "stale" ? "expired" : "cancelled",
+        { response: answerInput, respondedByActorKind: "user", respondedByActorId: conversation.userId }
+      );
+
+      const remaining = await listClarificationsForWork(workId, conversation.userId, accessToken);
+      if (!remaining.some((c) => c.id !== clarification.id && c.status === "pending")) {
+        await updateWorkStatus(workId, conversation.userId, accessToken, "running");
+      }
+
+      const text = selection.status === "stale"
+        ? "この選択肢は期限切れのため無効です。もう一度対象を確認しますので、あらためてご依頼内容をお送りください。"
+        : "この選択肢を安全に確認できなかったため、無効にしました。もう一度対象を確認しますので、あらためてご依頼内容をお送りください。";
+
+      const message = await appendConversationMessage(conversation, accessToken, "assistant", text);
+      return { conversation, userMessage, message };
+
+    }
+
+    // invalid_selection(範囲外/非数値等): Clarification自体はpendingの
+    // まま(同じcandidate_snapshotに対して再回答できる)。
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant", "有効な番号で選んでください。"
+    );
+    return { conversation, userMessage, message };
+
+  }
+
+  if (outcome.status !== "answered" || !outcome.referentSelection) {
+
+    // already_resolved / invalid_transition / responder_not_allowed /
+    // work_not_resumable / not_found: 内部reasonをuser-facing文言へ
+    // 露出しない、安全な一般的fallback。
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant",
+      "この確認は既に処理済み、または対応できませんでした。"
+    );
+    return { conversation, userMessage, message };
+
+  }
+
+  // PINNED SELECTION → SourceReferentSnapshot(P1d → P1e mapping、
+  // TOCTOU-safe: outcome.referentSelectionは常にstored candidate_snapshot
+  // 由来であり、fresh Gmail候補を一切混入させない)。
+  const referent = buildSourceReferentSnapshot(outcome.referentSelection);
+
+  if (!referent) {
+    // NO INVENTED RECIPIENTS: 選択されたcandidateにsender/subjectが
+    // 欠けている場合、fail closed(送信先を捏造しない)。
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant",
+      "送信先を一意に確認できませんでした。対象を指定してください。"
+    );
+    return { conversation, userMessage, message };
+  }
+
+  // 元のResolvedWorkIntent(act)を、永続化されたWork自身から復元する
+  // (NO HISTORICAL AUTHORIZATION: 数値回答"1"自体は権限を持たず、
+  // 既存の認証済みWorkの属性だけを読む)。
+  const work = await getWork(workId, conversation.userId, accessToken);
+
+  if (!work || !work.requestType) {
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant",
+      "対象を確認できませんでした。もう一度お試しください。"
+    );
+    return { conversation, userMessage, message };
+  }
+
+  const intent: ResolvedWorkIntent = {
+    subject: work.subject ?? "",
+    objective: work.objective ?? work.subject ?? "",
+    title: work.title ?? work.subject ?? "",
+    requestType: work.requestType,
+    completionConditions: work.completionConditions ?? [],
+    requiredCapabilities: work.requiredCapabilities ?? [],
+  };
+
+  const created = await createGmailReferentApproval({
+    workId, userId: conversation.userId, accessToken, intent, referent,
+  });
+
+  if (created.approval) {
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant",
+      created.proposalText ?? "返信案を確認してください。"
+    );
+    return { conversation, userMessage, message, pendingApproval: created.approval };
+  }
+
+  if (created.unavailable) {
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant",
+      "メール送信の接続を確認できないため、送信提案はできませんでした。"
+    );
+    return { conversation, userMessage, message };
+  }
+
+  const message = await appendConversationMessage(
+    conversation, accessToken, "assistant",
+    "送信先を一意に確認できませんでした。対象を指定してください。"
+  );
+  return { conversation, userMessage, message };
 
 }
