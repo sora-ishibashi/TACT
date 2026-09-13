@@ -85,3 +85,56 @@ export function communicationCandidatesFromGmailSearch(
   return result.messages.map(toCommunicationCandidate);
 
 }
+
+// =========================
+// extractSafeSenderEmail (REF-P1 LIVE FIX 1)
+// =========================
+//
+// LIVE Root Cause: core/tact-referent/signals.tsのReferentSignal(kind:
+// "sender")は、明示的な「から」を伴う会社名・氏名ラベル(例:
+// "TACTテスト商事"・"田中さん")も正当なsender signalとして生成する
+// (P1b frozen、discourse/signals層の責務——人間が読む会話としては
+// 正しい)。しかしGmailのfrom:検索はemail address前提のprovider
+// semanticsであり、会社名・氏名ラベルをそのままfrom:へ渡しても
+// technicalには成功する(providerがエラーを返さない)が、意味的には
+// 何にも一致しない0件検索になる——production incidentの実際の原因
+// (REF-P1 LIVE Diagnostic 1で確認済み)。
+//
+// 絶対条件(このphaseの明示的指示):
+//   - contact resolution(会社名/氏名→email推測)は一切行わない。
+//   - fuzzy parsingをしない——決定論的・provider API呼び出し無し。
+//   - 値全体に含まれるemail address相当のtoken数を数え、正確に1件
+//     以外(0件または2件以上)は安全ではないとしてfail closedする
+//     (「表示名 <email> の外側にも別のemailが紛れている」ような
+//     曖昧な入力も、angle-bracket内だけを見て見逃さない)。
+//
+// 許容する形: bare email(例: "tanaka@example.com")、または
+// 「表示名 <email>」形式(例: "田中 <tanaka@example.com>")。
+// 拒否する形: 会社名・氏名ラベル(email token自体が無い)、
+// カンマ/空白区切りの複数email、angle-bracket内外にemailが分散する形。
+export function extractSafeSenderEmail(value: string): string | undefined {
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return undefined;
+  }
+
+  // "@"の総出現数で複数email混入を検出する(bare/angle-bracketいずれの
+  // 形でも、値全体に"@"が2個以上あれば安全ではないと判断する)。
+  const atCount = (trimmed.match(/@/gu) ?? []).length;
+
+  if (atCount !== 1) {
+    return undefined;
+  }
+
+  const angleBracketMatch = trimmed.match(/<([^<>\s,;]+@[^<>\s,;]+)>/u);
+  const candidate = (angleBracketMatch ? angleBracketMatch[1] : trimmed).trim();
+
+  const normalized = candidate.toLowerCase();
+
+  return /^[^\s@<>(),;]+@[^\s@<>(),;]+\.[^\s@<>(),;]+$/u.test(normalized)
+    ? normalized
+    : undefined;
+
+}

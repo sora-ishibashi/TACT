@@ -35,6 +35,7 @@ import {
   resolveClarification,
   // REF-P1f: Gmail Referent Candidate Generation。
   communicationCandidatesFromGmailSearch,
+  extractSafeSenderEmail,
   MAX_DIRECT_REFERENT_CHOICES,
 } from "../tact-work";
 import type {
@@ -2829,9 +2830,9 @@ async function executeNarrowGmailSearch(
 }
 
 // usableな明示的sender/subject signalを1件だけ選ぶ(frozen rule:
-// narrow re-queryは「ちょうど1回」のみ)。優先順位: sender → subject。
-// directness==="direct"のみを対象とする(inferred signalで絞り込まない
-// ——時刻signal等の推測値をnarrow queryの根拠にしない)。
+// narrow re-queryは「ちょうど1回」のみ)。directness==="direct"のみを
+// 対象とする(inferred signalで絞り込まない——時刻signal等の推測値を
+// narrow queryの根拠にしない)。
 //
 // 絶対条件(このphaseの明示的判断): provenance.kind==="work_subject"の
 // subject signal(extractReferentSignals()がWork.subjectから常に無条件に
@@ -2847,17 +2848,61 @@ function isExplicitMessageSignal(signal: ReferentSignal): boolean {
     (signal.provenance.kind === "current_trigger" || signal.provenance.kind === "slack_message_ref");
 }
 
-function selectNarrowingSignal(signals: readonly ReferentSignal[]): ReferentSignal | undefined {
-
-  return (
-    signals.find((signal) => signal.kind === "sender" && isExplicitMessageSignal(signal)) ??
-    signals.find((signal) => signal.kind === "subject" && isExplicitMessageSignal(signal))
-  );
-
+// =========================
+// selectNarrowingSignal (REF-P1 LIVE FIX 1)
+// =========================
+//
+// LIVE Root Cause(REF-P1 LIVE Diagnostic 1で確認済み): 以前はsender
+// signalを最優先していたが、ReferentSignal(kind:"sender")は
+// "TACTテスト商事から"のような会社名/氏名ラベルも生成する
+// (core/tact-referent/signals.tsのfrozen設計、正しい)。これを
+// そのままGmailの`from:`検索へ渡すと、providerはエラーを返さず
+// technicalには成功しつつ意味的に0件を返す——search completenessが
+// 「narrowed」かつ「resultCount=0」という、実質usableでない状態を
+// 作ってしまっていた。
+//
+// 優先順位(このphaseの明示的指示): 1. 安全なsubject signal
+// (subject narrow queryはfree-text matchでありprovider-resolvability
+// の問題を持たない) 2. 安全なsender signal(=extractSafeSenderEmail()が
+// 正確に1件のemail addressを返せる場合のみ) 3. どちらも無ければ
+// narrow queryを一切行わない(company/person名でfrom:検索しない、
+// fail closed)。
+//
+// 絶対条件: contact resolution・company/person名からのemail推測は
+// 一切行わない(extractSafeSenderEmail()はfuzzy parsingをしない
+// 決定論的関数)。
+interface NarrowingSelection {
+  kind: "subject" | "sender";
+  query: string;
 }
 
-function buildNarrowGmailQuery(signal: ReferentSignal): string {
-  return signal.kind === "sender" ? `from:${signal.value}` : `subject:"${signal.value}"`;
+function selectNarrowingSignal(signals: readonly ReferentSignal[]): NarrowingSelection | undefined {
+
+  const subjectSignal = signals.find((signal) => signal.kind === "subject" && isExplicitMessageSignal(signal));
+
+  if (subjectSignal) {
+    return { kind: "subject", query: `subject:"${subjectSignal.value}"` };
+  }
+
+  const senderSignal = signals.find((signal) => signal.kind === "sender" && isExplicitMessageSignal(signal));
+
+  if (senderSignal) {
+
+    const safeEmail = extractSafeSenderEmail(senderSignal.value);
+
+    if (safeEmail) {
+      return { kind: "sender", query: `from:${safeEmail}` };
+    }
+
+    // 会社名/氏名ラベル等、provider-resolvableでないsender signal。
+    // ここでfrom:検索を組み立てない(絶対条件、fail closed)——
+    // subject signalも無ければ、呼び出し元はnarrow queryを一切行わず
+    // broad(mode:"broad", proven:false)のまま進む。
+
+  }
+
+  return undefined;
+
 }
 
 // =========================
@@ -2927,18 +2972,18 @@ async function resolveGmailReferent(params: {
     ceilingHit: broadCandidates.length >= GMAIL_SEARCH_DEFAULT_MAX_RESULTS,
   });
 
-  const narrowingSignal = selectNarrowingSignal(signals);
+  const narrowingSelection = selectNarrowingSignal(signals);
 
-  if (narrowingSignal) {
+  if (narrowingSelection) {
 
-    logRefLive("narrow_search_start", { narrowedBy: narrowingSignal.kind });
+    logRefLive("narrow_search_start", { narrowedBy: narrowingSelection.kind });
 
     const narrowResult = await executeNarrowGmailSearch(
       params.workId,
       params.userId,
       params.accessToken,
       params.connectionId,
-      buildNarrowGmailQuery(narrowingSignal),
+      narrowingSelection.query,
       deps
     );
 
@@ -2952,7 +2997,7 @@ async function resolveGmailReferent(params: {
         mode: "narrowed",
         resultCount: candidates.length,
         ceilingHit: candidates.length >= GMAIL_SEARCH_DEFAULT_MAX_RESULTS,
-        narrowedBy: narrowingSignal.kind === "sender" ? "candidate.sender" : "candidate.subject",
+        narrowedBy: narrowingSelection.kind === "sender" ? "candidate.sender" : "candidate.subject",
       });
 
     }

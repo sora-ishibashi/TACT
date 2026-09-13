@@ -179,6 +179,7 @@ import { run as runReferentResolve } from "./referent/resolve.test";
 import { run as runReferentWiredEvaluation } from "./referent/wiredEvaluation.test";
 import { run as runReferentClarification } from "./referent/clarification.test";
 import { run as runWorkReferentClarification } from "./work/referentClarification.test";
+import { run as runWorkGmailReferentCandidates } from "./work/gmailReferentCandidates.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -333,6 +334,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "referent/wiredEvaluation", run: runReferentWiredEvaluation },
   { name: "referent/clarification", run: runReferentClarification },
   { name: "work/referentClarification", run: runWorkReferentClarification },
+  { name: "work/gmailReferentCandidates", run: runWorkGmailReferentCandidates },
 ];
 
 async function main() {

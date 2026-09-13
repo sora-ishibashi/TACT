@@ -560,6 +560,111 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
+  // ---- 16. LIVE FIX 1: company-name sender + explicit subject ->
+  // narrows by subject, NOT by the unsafe company-name sender.
+  // (REF-P1 LIVE Diagnostic 1で確認されたroot causeの再発防止) ----
+  {
+    const narrowMessage = gmailMessage({
+      messageId: "m1", from: "tanaka@example.com", subject: "更新案件について", date: "2026-09-12T00:00:00.000Z",
+    });
+
+    let capturedQuery: string | undefined;
+
+    const { deps, calls } = makeDeps({
+      executeReadIntegrationAction: async (execParams) => {
+        calls.executeReadIntegrationActionCalls += 1;
+        const metadata = execParams.action.metadata as { input?: { query?: string } } | undefined;
+        capturedQuery = metadata?.input?.query;
+        return { status: "completed", resultOutput: JSON.stringify({ messages: [narrowMessage] }) };
+      },
+    });
+
+    const outcome = await prepareGmailWorkAction({
+      workId: WORK_ID, userId: OWNER_USER_ID, accessToken: "token",
+      intent: makeIntent(),
+      contextResolution: contextResolutionWithGmail([
+        gmailMessage({ messageId: "m1", from: "tanaka@example.com", subject: "更新案件について" }),
+        gmailMessage({ messageId: "m2", from: "sato@example.com", subject: "別件について" }),
+      ]),
+      // 会社名sender("TACTテスト商事から")と、明示的なsubject signal
+      // (「更新案件について」+"メール")の両方が同一メッセージに含まれる。
+      // narrowMessageのnormalizedSubjectと完全一致させ、Tier A
+      // (subject_exact_unique)経由でresolvedになる組み合わせにする。
+      currentTriggerText: "TACTテスト商事から「更新案件について」のメールに対応して",
+    }, deps);
+
+    results.push(check(
+      "[REF-P1 LIVE FIX 1] 16. 会社名senderと明示subjectが両方ある場合、narrow queryはsubjectを使い、company-nameをfrom:へ渡さない",
+      calls.executeReadIntegrationActionCalls === 1 &&
+        capturedQuery === 'subject:"更新案件について"' &&
+        !capturedQuery?.startsWith("from:")
+    ));
+
+    results.push(check(
+      "[REF-P1 LIVE FIX 1] 16b. subjectでのnarrow re-queryが一意なcandidateへ絞り込めればresolvedとなりApprovalが作られる",
+      outcome.kind === "approval"
+    ));
+  }
+
+  // ---- 17. LIVE FIX 1(live scenarioそのもの): 明示subjectが無く、
+  // company-name senderのみ -> narrow queryを一切行わず、WRITEは
+  // fail closedのまま(不正なfrom:検索を実行しない) ----
+  {
+    const broadMessages = [
+      gmailMessage({ messageId: "m1", from: "tanaka@example.com", subject: "更新案件について" }),
+      gmailMessage({ messageId: "m2", from: "sato@example.com", subject: "別件について" }),
+      gmailMessage({ messageId: "m3", from: "suzuki@example.com", subject: "更新案件の追加確認" }),
+      gmailMessage({ messageId: "m4", from: "yamada@example.com", subject: "定例連絡" }),
+    ];
+
+    const { deps, calls } = makeDeps();
+
+    const outcome = await prepareGmailWorkAction({
+      workId: WORK_ID, userId: OWNER_USER_ID, accessToken: "token",
+      intent: makeIntent(),
+      contextResolution: contextResolutionWithGmail(broadMessages),
+      // REF-P1 LIVE Diagnostic 1で実際に観測された、そのままの発話。
+      // 引用「」を含まないため明示subject signalは無く、"から"を伴う
+      // 会社名senderのみが検出される。
+      currentTriggerText: "TACTテスト商事から更新案件のメール来てる",
+    }, deps);
+
+    results.push(check(
+      "[REF-P1 LIVE FIX 1] 17. 明示subjectが無く会社名senderのみの場合、narrow re-query自体を一切試みない(不正なfrom:検索を実行しない)",
+      calls.executeReadIntegrationActionCalls === 0
+    ));
+
+    results.push(check(
+      "[REF-P1 LIVE FIX 1] 17b. narrow queryを行わないままWRITEはfail closedのまま(broad universeから自動解決しない)",
+      outcome.kind === "fail_closed" && calls.requestApprovalCalls === 0
+    ));
+  }
+
+  // ---- 18. 安全なemail sender signalでのnarrow re-queryが失敗しても、
+  // broad universeへフォールバックしてWRITE解決しない ----
+  {
+    const { deps, calls } = makeDeps({
+      executeReadIntegrationAction: async () => {
+        calls.executeReadIntegrationActionCalls += 1;
+        return { status: "failed" };
+      },
+    });
+
+    const outcome = await prepareGmailWorkAction({
+      workId: WORK_ID, userId: OWNER_USER_ID, accessToken: "token",
+      intent: makeIntent(),
+      contextResolution: contextResolutionWithGmail([
+        gmailMessage({ messageId: "m1", from: "tanaka@example.com", subject: "更新案件について" }),
+      ]),
+      currentTriggerText: "tanaka@example.comから更新案件の連絡あり、対応して",
+    }, deps);
+
+    results.push(check(
+      "[REF-P1 LIVE FIX 1] 18. 安全なemail sender signalでもnarrow re-query失敗後はbroadへフォールバックせずfail closedのまま",
+      calls.executeReadIntegrationActionCalls === 1 && outcome.kind === "fail_closed" && calls.requestApprovalCalls === 0
+    ));
+  }
+
   return summarize("conversation/gmailReferentWorkflow", results);
 
 }
