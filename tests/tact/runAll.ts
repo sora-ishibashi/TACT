@@ -180,6 +180,7 @@ import { run as runReferentWiredEvaluation } from "./referent/wiredEvaluation.te
 import { run as runReferentClarification } from "./referent/clarification.test";
 import { run as runWorkReferentClarification } from "./work/referentClarification.test";
 import { run as runWorkGmailReferentCandidates } from "./work/gmailReferentCandidates.test";
+import { run as runWorkExecutionPreview } from "./work/executionPreview.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -335,6 +336,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "referent/clarification", run: runReferentClarification },
   { name: "work/referentClarification", run: runWorkReferentClarification },
   { name: "work/gmailReferentCandidates", run: runWorkGmailReferentCandidates },
+  { name: "work/executionPreview", run: runWorkExecutionPreview },
 ];
 
 async function main() {

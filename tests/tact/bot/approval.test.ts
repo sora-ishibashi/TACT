@@ -31,6 +31,27 @@ function makeApproval(overrides: Partial<Approval> = {}): Approval {
   };
 }
 
+// APPROVAL-P2: Execution Previewを構築できる、実際のprotected write
+// (gmail.send_message)と同じ形のpayloadを持つfixture。
+function makeGmailApproval(overrides: Partial<Approval> = {}): Approval {
+  return makeApproval({
+    payload: {
+      scope: "task",
+      action: {
+        kind: "external_message",
+        summary: "メール返信を送信",
+        metadata: {
+          service: "gmail",
+          operation: "send_message",
+          input: { to: ["tanaka@example.com"], subject: "Re: 更新案件について", bodyText: "本文" },
+          connectionId: "conn-1",
+        },
+      },
+    },
+    ...overrides,
+  });
+}
+
 const target: BotActionTarget = {
   channel: "slack",
   conversation: { externalConversationId: "C1", type: "channel" },
@@ -70,8 +91,38 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[基本] optionsはapprove/rejectの2択",
+        "[APPROVAL-P2] previewを構築できないAction(payload.actionが無い等)はoptionsが空になる(fail closed、承認ボタンを出さない判断の根拠)",
+        JSON.stringify(action.options) === JSON.stringify([])
+      )
+    );
+  }
+
+  // ---- APPROVAL-P2: previewを構築できる実際のprotected write(gmail.
+  // send_message)は、これまで通りoptionsがapprove/rejectの2択になる ----
+  {
+    const action = toBotRequestApprovalAction(makeGmailApproval(), target);
+
+    results.push(
+      check(
+        "[APPROVAL-P2] previewを構築できるActionはoptionsがapprove/rejectの2択のまま",
         JSON.stringify(action.options) === JSON.stringify(["approve", "reject"])
+      )
+    );
+
+    results.push(
+      check(
+        "[APPROVAL-P2] previewが構築され、frozen actionの値(送信先/件名/本文)がそのまま含まれる",
+        action.preview !== undefined &&
+          action.preview.fields.some((f) => f.value === "tanaka@example.com") &&
+          action.preview.fields.some((f) => f.value === "Re: 更新案件について") &&
+          action.preview.fields.some((f) => f.value === "本文")
+      )
+    );
+
+    results.push(
+      check(
+        "[APPROVAL-P2] previewのconnectionIdは一切含まれない",
+        !JSON.stringify(action.preview).includes("conn-1")
       )
     );
   }

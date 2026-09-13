@@ -34,6 +34,7 @@ import type {
   SlackWebApiClient,
 } from "../../../core/tact-bot/adapters/slack/slackClient";
 import type { BotAction, BotActionTarget } from "../../../core/tact-bot/types";
+import type { ExecutionPreview } from "../../../core/tact-work/executionPreview";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function makeTarget(overrides: Partial<BotActionTarget["conversation"]> = {}): BotActionTarget {
@@ -55,14 +56,76 @@ function makeReplyAction(overrides: Partial<BotAction> & { text?: string; target
   };
 }
 
-function makeApprovalAction(): Extract<BotAction, { kind: "request_approval" }> {
+// APPROVAL-P2: 実際のcore/tact-work/gmailExecutionPreview.tsの
+// buildGmailSendPreview()が生成するのと同じ形のExecutionPreview
+// fixture。toBotRequestApprovalAction()を経由せず直接BotActionを
+// 組み立てるこのtest fileの既存styleに合わせ、previewもここで
+// 手組みする(rendererはExecutionPreviewの中身だけを見るため、
+// 実際にbuilderを呼ぶ必要はない)。
+function makeGmailPreview(overrides: Partial<ExecutionPreview> = {}): ExecutionPreview {
+  return {
+    version: 1,
+    actionLabel: "メールを1通送信",
+    service: "gmail",
+    operation: "send_message",
+    target: { label: "tanaka@example.com" },
+    summary: "Gmailでメールを1通送信します。",
+    fields: [
+      { label: "送信先", value: "tanaka@example.com" },
+      { label: "件名", value: "Re: 契約について" },
+      { label: "本文", value: "確認しました。" },
+      { label: "添付ファイル", value: "添付ファイルなし" },
+    ],
+    effects: {
+      externalCommunication: true,
+      externalWrite: true,
+      notification: true,
+      destructive: false,
+      irreversible: true,
+    },
+    warnings: ["送信後の取り消しはTACTからはできません。"],
+    ...overrides,
+  };
+}
+
+// 将来Providerの例として、Gmailと全く異なるfield構成のpreviewでも
+// 同じrendererが特別扱い無しに描画できることを示すためのfixture
+// (Slack send previewと同じ形、core/tact-work/slackExecutionPreview.ts
+// 参照)。
+function makeSlackSendPreview(): ExecutionPreview {
+  return {
+    version: 1,
+    actionLabel: "メッセージを1件送信",
+    service: "slack",
+    operation: "send_message",
+    target: { label: "#general" },
+    summary: "Slackの「#general」へメッセージを送信します。",
+    fields: [
+      { label: "送信先チャンネル", value: "#general" },
+      { label: "本文", value: "定例のリマインドです。" },
+    ],
+    effects: {
+      externalCommunication: true,
+      externalWrite: true,
+      notification: true,
+      destructive: false,
+      irreversible: true,
+    },
+    warnings: ["送信後の取り消しはTACTからはできません。"],
+  };
+}
+
+function makeApprovalAction(
+  preview: ExecutionPreview | undefined = makeGmailPreview()
+): Extract<BotAction, { kind: "request_approval" }> {
   return {
     kind: "request_approval",
     target: makeTarget({ threadId: "1893456000.000100" }),
     workId: "work-1",
     approvalId: "approval-1",
-    summary: "メール返信を送信",
-    options: ["approve", "reject"],
+    summary: preview?.summary ?? "メール返信を送信",
+    options: preview ? ["approve", "reject"] : [],
+    preview,
   };
 }
 
@@ -106,8 +169,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
-  // The proposal is a normal reply, followed by the generic Approval UI. Its
-  // canonical recipient/subject/body text must not be replaced by the UI.
+  // APPROVAL-P2: The proposal remains a normal reply (backward compatible),
+  // and the generic Approval UI now ALSO carries the exact frozen
+  // recipient/subject/body via ExecutionPreview (not just a bare summary).
   {
     const { client, calls } = makeFakeClient(alwaysOk());
     const adapter = createSlackChannelAdapter({ client });
@@ -115,11 +179,16 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     await adapter.executeAction(makeReplyAction({ text: proposalText }));
     await adapter.executeAction(makeApprovalAction());
 
+    const approvalBlocksJson = JSON.stringify(calls[1]?.blocks);
+
     results.push(
       check(
-        "[GMAIL-P1 display] exact recipient, subject, and body remain in the proposal reply while generic Approval controls render separately",
+        "[GMAIL-P1 display] proposal replyのexact recipient/subject/bodyは変わらず、Approval UI自体にも同じ値が含まれ、actions controlsも描画される",
         calls[0]?.text === proposalText &&
-          calls[1]?.blocks?.some((block) => block.type === "actions") === true
+          calls[1]?.blocks?.some((block) => block.type === "actions") === true &&
+          approvalBlocksJson.includes("tanaka@example.com") &&
+          approvalBlocksJson.includes("Re: 契約について") &&
+          approvalBlocksJson.includes("確認しました。")
       )
     );
   }
@@ -155,9 +224,56 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Approval UI] rendererはGmail固有fieldを持たず、任意のcanonical Approvalを描画する",
-        !JSON.stringify(blocks).toLowerCase().includes("gmail") &&
-          !JSON.stringify(blocks).includes("work-1")
+        "[Approval UI] rendererはinternal workId(canonical DB識別子)を一切描画しない",
+        !JSON.stringify(blocks).includes("work-1")
+      )
+    );
+  }
+
+  // ---- APPROVAL-P2: rendererはservice固有分岐を持たない(provider-neutral) ----
+  // 全く異なるfield構成(Gmail vs Slack)のExecutionPreviewを同じ
+  // approvalBlocks()経路へ通し、いずれも特別扱い無く自身のfieldを
+  // そのまま描画できることを示す(if(service==="gmail")のような分岐が
+  // renderer側に無いことの間接的な証拠)。
+  {
+    const { client, calls } = makeFakeClient(alwaysOk());
+    const adapter = createSlackChannelAdapter({ client });
+    await adapter.executeAction(makeApprovalAction(makeSlackSendPreview()));
+
+    const blocks = calls[0]?.blocks;
+    const blocksJson = JSON.stringify(blocks);
+
+    results.push(
+      check(
+        "[APPROVAL-P2] Gmail用ExecutionPreviewと全く異なる形のSlack用ExecutionPreviewも、同じrendererでそのまま描画される",
+        blocksJson.includes("#general") &&
+          blocksJson.includes("定例のリマインドです。") &&
+          blocks?.some((block) => block.type === "actions") === true
+      )
+    );
+  }
+
+  // ---- APPROVAL-P2: PREVIEW / ACTION MISMATCH — previewが無いActionは
+  // 承認ボタンを一切描画しない(fail closed) ----
+  {
+    const { client, calls } = makeFakeClient(alwaysOk());
+    const adapter = createSlackChannelAdapter({ client });
+    const noPreviewAction: Extract<BotAction, { kind: "request_approval" }> = {
+      ...makeApprovalAction(),
+      options: [],
+      preview: undefined,
+    };
+    const result = await adapter.executeAction(noPreviewAction);
+
+    const blocks = calls[0]?.blocks;
+
+    results.push(
+      check(
+        "[APPROVAL-P2] previewを構築できないActionは、postMessage自体は成功しつつ承認/却下ボタンを一切描画しない(fail closed、blind approveを防ぐ)",
+        result.ok === true &&
+          Array.isArray(blocks) &&
+          blocks.every((block) => block.type !== "actions") &&
+          JSON.stringify(blocks).includes("承認内容を安全に表示できません")
       )
     );
   }

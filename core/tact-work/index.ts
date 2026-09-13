@@ -39,3 +39,11 @@ export * from "./resume";
 // REF-P1f: Gmail Referent Candidate Generation。同じbarrel export
 // pattern(core/tact-integration/core/tact-referent間の変換層)。
 export * from "./gmailReferentCandidates";
+// APPROVAL-P2: Canonical Execution Preview。同じbarrel export
+// pattern。gmailExecutionPreview.ts/slackExecutionPreview.tsの
+// Provider固有builder関数はここでは意図的にexportしない
+// (executionPreview.tsの内部実装のみ——barrelを通じて呼び出し元へ
+// 直接晒さない)。呼び出し元は常にbuildExecutionPreview()/
+// buildExecutionPreviewFromApprovalPayload()というservice非依存の
+// 入口だけを使う。
+export * from "./executionPreview";

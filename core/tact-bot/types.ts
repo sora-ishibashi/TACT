@@ -21,6 +21,13 @@
 // core/tact-bot自身が独自のPlanner/Agent orchestration/LLM reasoningを
 // 持つことは禁止する。
 
+// APPROVAL-P2: BotRequestApprovalAction.previewのためのcanonical型
+// のみをimportする(core/tact-work/executionPreview.ts、provider非
+// 依存)。core/tact-bot/approval.tsが既にcore/tact-work/types.tsの
+// Approvalをimportしている既存の依存方向(core/tact-bot →
+// core/tact-work)と同じであり、新しい循環依存を作らない。
+import type { ExecutionPreview } from "../tact-work/executionPreview";
+
 // =========================
 // Channel / Actor / Conversation (Bot -> Core, 正規化された入力)
 // =========================
@@ -149,6 +156,13 @@ export interface BotRequestApprovalAction extends BotActionBase {
   approvalId: string;
   summary: string;
   options?: string[];
+  // APPROVAL-P2: frozen Approval Actionから決定論的に導出した
+  // Canonical Execution Preview(core/tact-work/executionPreview.ts、
+  // provider非依存)。undefinedの場合(preview builder未登録/frozen
+  // Actionの形が想定と一致しない)、ChannelAdapterはPREVIEW / ACTION
+  // MISMATCHの絶対条件に従いfail closedで描画する(承認ボタンを
+  // 出さない)——このfield自体はProvider固有のデータを一切持たない。
+  preview?: ExecutionPreview;
 }
 
 // =========================

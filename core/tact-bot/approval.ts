@@ -1,4 +1,5 @@
 import type { Approval } from "../tact-work/types";
+import { buildExecutionPreviewFromApprovalPayload } from "../tact-work/executionPreview";
 import type { BotActionTarget, BotRequestApprovalAction } from "./types";
 
 // =========================
@@ -52,6 +53,15 @@ export function toBotRequestApprovalAction(
   inReplyToMessageId?: string
 ): BotRequestApprovalAction {
 
+  // APPROVAL-P2: frozen Approval.payload(Approval Integrityが検証する
+  // 同じsource of truth)から、決定論的にExecution Previewを再構築する
+  // (別途永続化しない、CORE SAFETY PRINCIPLE)。builderが登録されて
+  // いない/frozen actionの形が想定と一致しない場合はundefinedのまま
+  // ——このfile自身は「previewがある前提」の分岐を持たず、単に
+  // BotRequestApprovalAction.previewへ橋渡しするだけ(fail closed
+  // 判断はChannelAdapter側、PREVIEW / ACTION MISMATCH参照)。
+  const preview = buildExecutionPreviewFromApprovalPayload(approval.payload);
+
   return {
 
     kind: "request_approval",
@@ -69,11 +79,18 @@ export function toBotRequestApprovalAction(
 
     approvalId: approval.id,
 
-    // action.summary(提案されたaction自体の説明)があればそちらを
-    // 優先し、無ければreason(なぜ承認が必要か)を表示する。
-    summary: extractActionSummary(approval.payload) ?? approval.reason,
+    // previewがあればその要約(preview.summary、frozen actionから
+    // 導出済み)を優先する。無ければ既存のaction.summary/reasonへ
+    // fall backする(後方互換、旧Approval描画を壊さない)。
+    summary: preview?.summary ?? extractActionSummary(approval.payload) ?? approval.reason,
 
-    options: ["approve", "reject"],
+    // PREVIEW / ACTION MISMATCH(絶対条件、fail closed): previewを
+    // 安全に構築できない場合、optionsを空にする——ChannelAdapter側で
+    // 承認ボタンを描画しない判断の根拠として使う(No protected write
+    // should silently bypass Execution Preview)。
+    options: preview ? ["approve", "reject"] : [],
+
+    preview,
 
   };
 

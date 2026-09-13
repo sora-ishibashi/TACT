@@ -1,4 +1,5 @@
 import type { BotAction, BotActionDeliveryResult, BotIncomingMessage } from "../../types";
+import type { ExecutionPreview, ExecutionPreviewEffects } from "../../../tact-work/executionPreview";
 import type { ChannelAdapter } from "../types";
 import { isAppMentionEventCallback, normalizeSlackAppMentionEvent } from "./normalizeSlackEvent";
 import { getSlackWebApiClient, type SlackBlock, type SlackPostMessageParams, type SlackWebApiClient } from "./slackClient";
@@ -41,9 +42,123 @@ export const SLACK_APPROVAL_APPROVE_ACTION_ID = "tact_approval_approve";
 export const SLACK_APPROVAL_REJECT_ACTION_ID = "tact_approval_reject";
 export const SLACK_APPROVAL_BLOCK_ID = "tact_approval_controls";
 
-function approvalBlocks(approvalId: string, summary: string): SlackBlock[] {
+// =========================
+// APPROVAL-P2: Canonical Execution Preview rendering
+// =========================
+//
+// 絶対条件(REGISTRY / ADAPTER DESIGN、最重要): このrendererは
+// service/operationごとのif/elseを一切持たない——core/tact-work/
+// executionPreview.tsが既にfrozen Actionから決定論的に構築した
+// ExecutionPreview(provider非依存のcanonical metadata)だけを消費する。
+// Gmail/Slack固有のinput schemaはこのfileへ一切持ち込まない。
+//
+// Slack Block Kitのsection.text.text上限(3000文字、公式ドキュメント
+// docs.slack.dev/reference/block-kit/blocks#section)に対しては、
+// 既存のsplitSlackMessageText()(段落/行/code point境界を優先する
+// 既存chunking実装、S1c)をそのまま再利用する——新しいtruncateロジック
+// を作らない・本文を要約しない(EXACT BODY絶対条件)。
+const SLACK_SECTION_TEXT_MAX_LENGTH = 2900;
+
+// EFFECT SEMANTICS: booleanから決定論的に導出する、provider非依存の
+// 定型文。個別Providerの言い回し(例: 「メールが送信されます」)は
+// builder側のsummary/actionLabelが既に担っており、ここでは汎用的な
+// 「何が起きるか」の事実だけを列挙する(絶対条件: rendererがProvider
+// 固有語彙を持たない)。
+function describeEffectBullets(effects: ExecutionPreviewEffects): string[] {
+
+  const bullets: string[] = [];
+
+  if (effects.externalCommunication) {
+    bullets.push("外部ユーザーへ連絡が送信されます");
+  }
+
+  if (effects.notification) {
+    bullets.push("送信通知が発生します");
+  }
+
+  // externalCommunicationと重複しない場合のみ「データ変更」を明示する
+  // (Gmail送信のように既にcommunication bulletがある場合、同じ事実を
+  // 二重に述べない)。
+  if (effects.externalWrite && !effects.externalCommunication) {
+    bullets.push("外部サービスのデータが変更されます");
+  }
+
+  if (effects.destructive) {
+    bullets.push("既存のデータが削除される可能性があります");
+  }
+
+  return bullets;
+
+}
+
+// CORE SAFETY PRINCIPLE: ここで表示するfield/summary/effectsはすべて
+// ExecutionPreview(=frozen Actionからの決定論的projection)由来であり、
+// このfile自身が新しい説明文を作ることはない。
+function formatExecutionPreviewMarkdown(preview: ExecutionPreview): string {
+
+  const sections: string[] = [`*実行内容*\n${preview.summary}`];
+
+  for (const field of preview.fields) {
+    sections.push(`*${field.label}*\n${field.value}`);
+  }
+
+  if (preview.changes && preview.changes.length > 0) {
+    const changeLines = preview.changes.map(
+      (change) => `${change.field}: ${change.before ?? "(未設定)"} → ${change.after ?? "(未設定)"}`
+    );
+    sections.push(`*変更内容*\n${changeLines.join("\n")}`);
+  }
+
+  const impactBullets = [...describeEffectBullets(preview.effects), ...(preview.warnings ?? [])];
+
+  if (impactBullets.length > 0) {
+    sections.push(`*影響*\n${impactBullets.map((line) => `・${line}`).join("\n")}`);
+  }
+
+  sections.push("この内容で実行しますか？");
+
+  return sections.join("\n\n");
+
+}
+
+// PREVIEW / ACTION MISMATCH(絶対条件、最重要): previewを安全に構築
+// できなかったActionは、汎用的な「この操作を実行します」のような
+// 当たり障りのない文言で誤魔化して承認ボタンを出さない——承認可能な
+// 操作の内容が確認できないことを明示し、承認/却下ボタン自体を描画
+// しない(fail closed)。この状態のApproval行自体はDB上pendingの
+// ままであり、既存のgetApproval()/resolveApproval()等の経路からは
+// 引き続き扱える(このrendererだけがSlack上でblind approveを防ぐ)。
+function unsupportedApprovalBlocks(): SlackBlock[] {
   return [
-    { type: "section", text: { type: "mrkdwn", text: `*承認待ち*\n${summary}` } },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*承認内容を安全に表示できません*\nこの操作の内容を確認できないため、承認を保留しています。管理者にお問い合わせください。",
+      },
+    },
+  ];
+}
+
+function approvalBlocks(
+  approvalId: string,
+  preview: ExecutionPreview | undefined
+): SlackBlock[] {
+
+  if (!preview) {
+    return unsupportedApprovalBlocks();
+  }
+
+  const previewText = formatExecutionPreviewMarkdown(preview);
+  const chunks = splitSlackMessageText(previewText, SLACK_SECTION_TEXT_MAX_LENGTH);
+
+  const previewBlocks: SlackBlock[] = chunks.map((chunk) => ({
+    type: "section",
+    text: { type: "mrkdwn", text: chunk },
+  }));
+
+  return [
+    ...previewBlocks,
     {
       type: "actions",
       block_id: SLACK_APPROVAL_BLOCK_ID,
@@ -65,6 +180,7 @@ function approvalBlocks(approvalId: string, summary: string): SlackBlock[] {
       ],
     },
   ];
+
 }
 
 function approvalMessage(action: Extract<BotAction, { kind: "request_approval" }>): SlackPostMessageParams {
@@ -72,7 +188,7 @@ function approvalMessage(action: Extract<BotAction, { kind: "request_approval" }
     channel: action.target.conversation.externalConversationId,
     text: `承認待ち: ${action.summary}`,
     threadTs: action.target.conversation.threadId,
-    blocks: approvalBlocks(action.approvalId, action.summary),
+    blocks: approvalBlocks(action.approvalId, action.preview),
   };
 }
 
