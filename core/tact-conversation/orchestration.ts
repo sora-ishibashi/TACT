@@ -2868,6 +2868,19 @@ function buildNarrowGmailQuery(signal: ReferentSignal): string {
 // Gmail candidate生成 → search completeness評価 → P1c resolver)を
 // 1箇所へ集約する。P1c resolver(core/tact-referent/resolve.ts)自体は
 // 一切変更しない(絶対条件、NO LARGE-CANDIDATE REDESIGN)。
+// =========================
+// TACT-REF-LIVE-1 (REF-P1 LIVE Diagnostic 1、temporary)
+// =========================
+//
+// 最小限の構造化診断ログ。email本文・snippet・OAuth/connection secret・
+// 生provider payload・完全なuser contentのいずれも一切出さない
+// (候補件数・resolver state・reasonCode等のsafeな値のみ)。安全に
+// 削除可能、または運用診断としてそのまま残してよい(指示書で明示的に
+// 許容)。
+function logRefLive(event: string, fields: Record<string, unknown> = {}): void {
+  console.log(`[tact-ref-live] ${event}`, JSON.stringify(fields));
+}
+
 async function resolveGmailReferent(params: {
   workId: string;
   userId: string;
@@ -2879,10 +2892,13 @@ async function resolveGmailReferent(params: {
   connectionId: string;
 }, deps: GmailReferentWorkflowDeps): Promise<ReferentResolution> {
 
+  logRefLive("gmail_referent_enter", { sourcesGmail: params.contextResolution.sources.gmail ?? null });
+
   if (params.contextResolution.sources.gmail !== "available") {
     // broad searchが未実行、または該当が無かった(既存Context
     // Resolutionの判定をそのまま踏襲する)。絞り込む母集団自体が無い
     // ため、resolverへは進まず安全にunavailable扱いとする。
+    logRefLive("referent_exit", { reason: "no_broad_search", sourcesGmail: params.contextResolution.sources.gmail ?? null });
     return { state: "unavailable", reasonCode: "no_broad_search" };
   }
 
@@ -2902,6 +2918,8 @@ async function resolveGmailReferent(params: {
 
   const broadCandidates = communicationCandidatesFromGmailSearch(params.contextResolution.rawGmailSearch);
 
+  logRefLive("broad_search_result", { candidateCount: broadCandidates.length });
+
   let candidates: readonly CommunicationCandidate[] = broadCandidates;
   let searchCompleteness = assessSearchCompleteness({
     mode: "broad",
@@ -2913,6 +2931,8 @@ async function resolveGmailReferent(params: {
 
   if (narrowingSignal) {
 
+    logRefLive("narrow_search_start", { narrowedBy: narrowingSignal.kind });
+
     const narrowResult = await executeNarrowGmailSearch(
       params.workId,
       params.userId,
@@ -2921,6 +2941,8 @@ async function resolveGmailReferent(params: {
       buildNarrowGmailQuery(narrowingSignal),
       deps
     );
+
+    logRefLive("narrow_search_result", { succeeded: !!narrowResult, candidateCount: narrowResult?.messages.length ?? null });
 
     if (narrowResult) {
 
@@ -2941,7 +2963,7 @@ async function resolveGmailReferent(params: {
 
   }
 
-  return resolveReferent({
+  const resolution = resolveReferent({
     candidates,
     signals,
     searchCompleteness,
@@ -2949,6 +2971,18 @@ async function resolveGmailReferent(params: {
     workSubject: params.intent.subject,
     discourseFocusTop: currentTopicLabel(discourseFocus),
   });
+
+  logRefLive("resolver_result", {
+    state: resolution.state,
+    candidateCount:
+      resolution.state === "ambiguous" || resolution.state === "conflicting_evidence"
+        ? resolution.candidates.length
+        : resolution.state === "insufficient_evidence"
+          ? resolution.candidateCount
+          : undefined,
+  });
+
+  return resolution;
 
 }
 
@@ -3088,6 +3122,8 @@ export async function prepareGmailWorkAction(params: {
   currentTriggerText: string;
 }, deps: GmailReferentWorkflowDeps = defaultGmailReferentWorkflowDeps): Promise<GmailWorkActionOutcome> {
 
+  logRefLive("gmail_work_action_enter", { requestType: params.intent.requestType });
+
   if (params.intent.requestType !== "act") {
     return { kind: "fail_closed", reasonCode: "not_act" };
   }
@@ -3101,6 +3137,7 @@ export async function prepareGmailWorkAction(params: {
     (approval.payload.action as { metadata?: { service?: unknown; operation?: unknown } } | undefined)?.metadata?.service === "gmail" &&
     (approval.payload.action as { metadata?: { operation?: unknown } } | undefined)?.metadata?.operation === "send_message");
   if (pendingApproval) {
+    logRefLive("referent_exit", { reason: "existing_pending_approval" });
     return { kind: "approval", approval: pendingApproval };
   }
 
@@ -3109,13 +3146,21 @@ export async function prepareGmailWorkAction(params: {
     (clarification) => clarification.status === "pending" && !!clarification.candidateSnapshot && !!clarification.candidateSnapshotHash
   );
   if (existingReferentClarification) {
+    logRefLive("referent_exit", { reason: "existing_pending_clarification" });
     return { kind: "clarification_pending", question: existingReferentClarification.question };
   }
 
   const connection = await deps.resolveIntegrationConnection({
     service: "gmail", userId: params.userId, accessToken: params.accessToken,
   });
+
+  logRefLive("connection_check", {
+    status: connection.status,
+    count: connection.status === "multiple" ? connection.count : undefined,
+  });
+
   if (connection.status !== "single") {
+    logRefLive("referent_exit", { reason: "connection_unavailable", connectionStatus: connection.status });
     return { kind: "unavailable" };
   }
 
@@ -3136,6 +3181,7 @@ export async function prepareGmailWorkAction(params: {
     const referent = entry ? buildSourceReferentSnapshot(entry) : undefined;
 
     if (!referent) {
+      logRefLive("referent_exit", { reason: "resolved_but_recipient_unresolved" });
       return { kind: "fail_closed", reasonCode: "recipient_unresolved" };
     }
 
@@ -3148,13 +3194,16 @@ export async function prepareGmailWorkAction(params: {
     }, deps);
 
     if (created.approval) {
+      logRefLive("referent_exit", { reason: "approval_created" });
       return { kind: "approval", approval: created.approval, proposalText: created.proposalText };
     }
 
     if (created.unavailable) {
+      logRefLive("referent_exit", { reason: "approval_connection_unavailable" });
       return { kind: "unavailable" };
     }
 
+    logRefLive("referent_exit", { reason: "approval_build_failed" });
     return { kind: "fail_closed", reasonCode: "recipient_unresolved" };
 
   }
@@ -3165,6 +3214,7 @@ export async function prepareGmailWorkAction(params: {
     // 安全な上限を超える場合、番号付き選択肢を一切生成しない
     // (REF-P2のLarge Candidate Set Reductionはこのphaseのscope外)。
     if (resolution.candidates.length > MAX_DIRECT_REFERENT_CHOICES) {
+      logRefLive("referent_exit", { reason: "clarification_too_large", candidateCount: resolution.candidates.length });
       return { kind: "clarification_too_large" };
     }
 
@@ -3177,9 +3227,13 @@ export async function prepareGmailWorkAction(params: {
       candidates: resolution.candidates,
     }, params.userId, params.accessToken);
 
-    return clarification
-      ? { kind: "clarification_pending", question }
-      : { kind: "fail_closed", reasonCode: "clarification_failed" };
+    if (clarification) {
+      logRefLive("clarification_created", { candidateCount: resolution.candidates.length });
+      return { kind: "clarification_pending", question };
+    }
+
+    logRefLive("referent_exit", { reason: "clarification_creation_failed" });
+    return { kind: "fail_closed", reasonCode: "clarification_failed" };
 
   }
 
@@ -3187,6 +3241,7 @@ export async function prepareGmailWorkAction(params: {
   // (staleはこの初回resolutionでは通常到達しない、staleReferentを渡して
   // いないため)。いずれも安全にfail closedし、user-facingな文言は
   // 呼び出し元(runNormalTurn())の既存汎用メッセージへ委ねる。
+  logRefLive("referent_exit", { reason: resolution.state });
   return { kind: "fail_closed", reasonCode: resolution.state };
 
 }

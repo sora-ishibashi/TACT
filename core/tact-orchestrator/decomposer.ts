@@ -108,6 +108,16 @@ export function decomposeTask(
 
   const contextPlan = request.contextResolutionPlan;
   if (contextPlan?.kind === "ready") {
+
+    // TACT-REF-LIVE-1(REF-P1 LIVE Diagnostic 1、temporary): このTurnの
+    // Context Resolution Planが実際にどのsourceを含んでいたかの最小限の
+    // 診断ログ(query文字列自体・request textは出さない)。安全に削除
+    // 可能、または運用診断として残してよい。
+    console.log("[tact-ref-live] decompose_context_ready", JSON.stringify({
+      hasNotion: !!contextPlan.sources.notion,
+      hasGmail: !!contextPlan.sources.gmail,
+    }));
+
     const tasks: Task[] = [];
 
     if (contextPlan.sources.notion) {

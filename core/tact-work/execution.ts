@@ -486,6 +486,20 @@ export async function runWorkTurn(
         return;
       }
 
+      // TACT-REF-LIVE-1(REF-P1 LIVE Diagnostic 1、temporary):
+      // gmail/notion integration TaskがOrchestrator実行を終えた時点の
+      // 最小限の構造化診断ログ。email本文・snippet・secret・生payload
+      // のいずれも含めない(capability名・完了status・
+      // integrationRequirementの有無のみ)。安全に削除可能、または
+      // 運用診断として残してよい(指示書の明示的許容)。
+      if (task.assignedCapability === "integration.gmail.search_messages" || task.assignedCapability?.startsWith("integration.notion.")) {
+        console.log("[tact-ref-live] integration_task_finished", JSON.stringify({
+          capability: task.assignedCapability,
+          status: summary.status,
+          hasIntegrationRequirement: !!summary.integrationRequirement,
+        }));
+      }
+
       // Architecture Migration Phase C2.1c-a(絶対条件、最重要):
       // Approvalは「Task completionの後に付随するレビュー」ではなく
       // 「Task completionそのものの前提となるgate」である(既存の
@@ -560,6 +574,17 @@ export async function runWorkTurn(
           userId,
           accessToken,
         });
+
+        // TACT-REF-LIVE-1(temporary): connectionIdそのものは出さない
+        // (安全なstatus/countのみ)。
+        if (service === "gmail" || service === "notion") {
+          console.log("[tact-ref-live] connection_resolved", JSON.stringify({
+            service,
+            operation,
+            status: connectionResolution.status,
+            count: connectionResolution.status === "multiple" ? connectionResolution.count : undefined,
+          }));
+        }
 
         if (connectionResolution.status !== "single") {
 
@@ -946,6 +971,19 @@ export async function runWorkTurn(
         connectionId,
         action,
       });
+
+      // TACT-REF-LIVE-1(temporary): 実際にComposio dispatchへ到達した
+      // read Taskの結果status(resultOutput自体は出さない)。
+      {
+        const diagMetadata = action.metadata as { service?: unknown; operation?: unknown } | undefined;
+        if (diagMetadata?.service === "gmail" || diagMetadata?.service === "notion") {
+          console.log("[tact-ref-live] read_execution_outcome", JSON.stringify({
+            service: diagMetadata.service,
+            operation: diagMetadata.operation,
+            status: executionOutcome.status,
+          }));
+        }
+      }
 
       const metadata = action.metadata as { service?: unknown; operation?: unknown } | undefined;
       const contextService = metadata?.service === "notion" || metadata?.service === "gmail"
