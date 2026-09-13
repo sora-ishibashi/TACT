@@ -252,6 +252,48 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- REF-P1 LIVE FIX 2: pinned referent Clarificationへの数値回答
+  // ("2"のような短い純粋数値)でも、mention tokenが正しく剥がれる
+  // ことを明示的に固定する(この形の入力に対する既存回帰テストが
+  // 無かったため追加)。 ----
+  {
+    const bareNumeric = normalizeSlackAppMentionEvent(makeEnvelope({
+      event: { type: "app_mention", user: "U123USER", text: "<@U999TACTBOT> 2", ts: "1893456200.000300", channel: "C123CHANNEL" },
+    }));
+
+    results.push(check(
+      "[REF-P1 LIVE FIX 2] 1. 生のSlack mention付き数値回答(\"<@BOTID> 2\")はmention token除去後に厳密に\"2\"になる",
+      bareNumeric?.text === "2"
+    ));
+
+    const extraWhitespace = normalizeSlackAppMentionEvent(makeEnvelope({
+      event: { type: "app_mention", user: "U123USER", text: "<@U999TACTBOT>    2", ts: "1893456200.000300", channel: "C123CHANNEL" },
+    }));
+
+    results.push(check(
+      "[REF-P1 LIVE FIX 2] 2. mention token直後に複数の空白があっても\"2\"になる",
+      extraWhitespace?.text === "2"
+    ));
+
+    const withColon = normalizeSlackAppMentionEvent(makeEnvelope({
+      event: { type: "app_mention", user: "U123USER", text: "<@U999TACTBOT>: 2", ts: "1893456200.000300", channel: "C123CHANNEL" },
+    }));
+
+    results.push(check(
+      "[REF-P1 LIVE FIX 2] 3. mention token直後にコロンがあっても\"2\"になる",
+      withColon?.text === "2"
+    ));
+
+    const trailingWhitespaceOnly = normalizeSlackAppMentionEvent(makeEnvelope({
+      event: { type: "app_mention", user: "U123USER", text: "<@U999TACTBOT> 2 ", ts: "1893456200.000300", channel: "C123CHANNEL" },
+    }));
+
+    results.push(check(
+      "[REF-P1 LIVE FIX 2] 4. 末尾の空白もtrimされ厳密に\"2\"になる(前後の空白が数値parserを壊さない)",
+      trailingWhitespaceOnly?.text === "2"
+    ));
+  }
+
   return summarize("bot/slackNormalizeEvent", results);
 
 }

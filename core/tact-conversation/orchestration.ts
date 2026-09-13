@@ -76,7 +76,7 @@ import type {
   ReferentSignal,
   ReferentResolution,
 } from "../tact-referent/types";
-import { buildCandidateSnapshot, buildSourceReferentSnapshot } from "../tact-referent/clarification";
+import { buildCandidateSnapshot, buildSourceReferentSnapshot, parseNumericSelection } from "../tact-referent/clarification";
 // Fast Port P5c: Trigger.dev routingの有効性(feature flag + config)を
 // 決定する唯一のchokepoint。このimport経由でのみ@trigger.dev/sdkへの
 // 依存がこのfileへ間接的に伝播する(orchestration.tsはwiring層のため
@@ -525,14 +525,31 @@ export async function runConversationOrchestration(
 
     const workId = conversation.workId;
 
-    const pendingReferentClarification = await atConversationIntakeStage(
+    const referentClarificationLookup = await atConversationIntakeStage(
       "conversation_intake.clarification_lookup",
       () => findPendingReferentClarification(workId, conversation.userId, accessToken)
     );
 
-    if (pendingReferentClarification) {
-      return runReferentClarificationAnswerTurn(conversation, accessToken, userInput, pendingReferentClarification);
+    // TACT-REF-LIVE-2(REF-P1 LIVE Diagnostic 2、temporary): このturnが
+    // Work-level referent Clarification routingへ実際に到達したか、
+    // その時点で既存のreferent Clarification(pending以外を含む)が
+    // 何件・どのstatusで存在するかを記録する。candidate件数以外の
+    // 内容(sender/subject/message ID等)は一切出さない。
+    logRefLive("clarification_answer_route", {
+      hasWorkId: true,
+      pendingFound: !!referentClarificationLookup.pending,
+      referentClarificationCount: referentClarificationLookup.totalReferentCount,
+      referentClarificationStatuses: referentClarificationLookup.statuses,
+      candidateCount: referentClarificationLookup.pending?.candidateSnapshot?.length ?? null,
+    });
+
+    if (referentClarificationLookup.pending) {
+      return runReferentClarificationAnswerTurn(conversation, accessToken, userInput, referentClarificationLookup.pending);
     }
+
+  } else {
+
+    logRefLive("clarification_answer_route", { hasWorkId: false });
 
   }
 
@@ -564,20 +581,37 @@ export async function runConversationOrchestration(
 // ——このfunction自身は「pendingのまま残っている」ものを機械的に返す
 // だけで、期限切れかどうかの判定はresolveClarification()(canonical
 // resolveReferentClarificationSelection())へ一本化する。
+interface ReferentClarificationLookup {
+
+  pending?: Clarification;
+
+  // TACT-REF-LIVE-2診断用: pendingかどうかに関わらず、このWorkに
+  // 存在するreferent-selection Clarification(candidateSnapshot付き)の
+  // 総数とstatus一覧。1回のlistClarificationsForWork()呼び出しの結果を
+  // 再利用するだけで、追加のDB問い合わせは発生しない。
+  totalReferentCount: number;
+
+  statuses: readonly string[];
+
+}
+
 async function findPendingReferentClarification(
   workId: string,
   userId: string,
   accessToken: string
-): Promise<Clarification | undefined> {
+): Promise<ReferentClarificationLookup> {
 
   const clarifications = await listClarificationsForWork(workId, userId, accessToken);
 
-  return clarifications.find(
-    (clarification) =>
-      clarification.status === "pending" &&
-      !!clarification.candidateSnapshot &&
-      !!clarification.candidateSnapshotHash
+  const referentOnes = clarifications.filter(
+    (clarification) => !!clarification.candidateSnapshot && !!clarification.candidateSnapshotHash
   );
+
+  return {
+    pending: referentOnes.find((clarification) => clarification.status === "pending"),
+    totalReferentCount: referentOnes.length,
+    statuses: referentOnes.map((clarification) => clarification.status),
+  };
 
 }
 
@@ -3687,6 +3721,18 @@ async function runReferentClarificationAnswerTurn(
   clarification: Clarification
 ): Promise<ConversationTurnResult> {
 
+  // TACT-REF-LIVE-2(temporary): raw user textそのものは一切出さず、
+  // 決定論的なparseNumericSelection()(P1d、既存)の判定結果だけを
+  // 記録する——mention除去等のtransport正規化が、domain parserに届く
+  // 前の時点で本当に「数値だけの文字列」まで剥がせているかを、生の
+  // 入力を1文字もログに残さずに確認できるようにする。
+  const diagnosticParse = parseNumericSelection(answerInput);
+  logRefLive("clarification_answer_input", {
+    rawLength: answerInput.length,
+    normalizedSelectionParsed: diagnosticParse.ok,
+    parsedIndex: diagnosticParse.ok ? diagnosticParse.index : null,
+  });
+
   const userMessage = await recordClarificationAnswer(conversation, accessToken, answerInput);
 
   const workId = conversation.workId;
@@ -3709,6 +3755,14 @@ async function runReferentClarificationAnswerTurn(
     { kind: "user", id: conversation.userId },
     answerInput
   );
+
+  // TACT-REF-LIVE-2(temporary): resolveClarification()自体の判定結果
+  // (status、invalid時はselection.statusまで)を記録する。response本文・
+  // candidate内容は一切含めない。
+  logRefLive("clarification_answer_result", {
+    status: outcome.status,
+    selectionStatus: outcome.status === "invalid_referent_selection" ? outcome.selection.status : null,
+  });
 
   if (outcome.status === "invalid_referent_selection") {
 

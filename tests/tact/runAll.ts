@@ -133,6 +133,7 @@ import { run as runBotTrustedApprovalDecision } from "./bot/trustedApprovalDecis
 import { run as runBotReceiveApprovalDecision } from "./bot/receiveApprovalDecision.test";
 import { run as runBotSlackVerifySignature } from "./bot/slackVerifySignature.test";
 import { run as runBotSlackNormalizeEvent } from "./bot/slackNormalizeEvent.test";
+import { run as runBotReferentSelectionMentionChain } from "./bot/referentSelectionMentionChain.test";
 import { run as runBotSlackConversationContext } from "./bot/slackConversationContext.test";
 import { run as runBotEventDedupStore } from "./bot/eventDedupStore.test";
 import { run as runBotSlackWebhookHandler } from "./bot/slackWebhookHandler.test";
@@ -289,6 +290,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "bot/receiveApprovalDecision", run: runBotReceiveApprovalDecision },
   { name: "bot/slackVerifySignature", run: runBotSlackVerifySignature },
   { name: "bot/slackNormalizeEvent", run: runBotSlackNormalizeEvent },
+  { name: "bot/referentSelectionMentionChain", run: runBotReferentSelectionMentionChain },
   { name: "bot/slackConversationContext", run: runBotSlackConversationContext },
   { name: "bot/eventDedupStore", run: runBotEventDedupStore },
   { name: "bot/slackWebhookHandler", run: runBotSlackWebhookHandler },
