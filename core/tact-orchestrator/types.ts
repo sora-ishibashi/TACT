@@ -431,6 +431,13 @@ export interface OrchestrationResult {
   // 後方互換性を優先した設計)。
   clarification?: ClarificationRequest;
 
+  // Created by a canonical Work-level clarification boundary. The
+  // conversation layer renders this question without creating a second,
+  // conversation-owned clarification record.
+  workClarification?: {
+    question: string;
+  };
+
   // Architecture Migration Phase C2.1c-b: 設定されている場合、この
   // Turnで新規にApprovalが作成され、Workがwaiting_for_approvalへ
   // 進んだことを示す(core/tact-work/execution.tsのrunWorkTurn()が、

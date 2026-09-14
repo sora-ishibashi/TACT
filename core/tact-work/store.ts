@@ -776,6 +776,28 @@ export async function updateWorkStatus(
 // Task
 // =========================
 
+// Narrow metadata update used for durable, provider-neutral request facts.
+// Callers provide the complete merged object; lifecycle fields are untouched.
+export async function updateWorkMetadata(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  metadata: Record<string, unknown>,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<boolean> {
+  const work = await deps.getWork(workId, userId, accessToken);
+  if (!work) return false;
+
+  const client = createRequestScopedClient(accessToken);
+  const { error } = await client
+    .from("tact_works")
+    .update({ metadata, updated_at: new Date().toISOString() })
+    .eq("id", workId)
+    .eq("user_id", userId);
+  if (error) throw error;
+  return true;
+}
+
 export interface CreateWorkTaskParams {
   description: string;
   parentTaskId?: string | null;

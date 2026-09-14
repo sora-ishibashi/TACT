@@ -31,12 +31,23 @@ import {
   listClarificationsForWork,
   updateClarificationStatus,
   updateWorkStatus,
+  updateWorkMetadata,
+  requestClarification,
   requestReferentClarification,
   resolveClarification,
   // REF-P1f: Gmail Referent Candidate Generation。
   communicationCandidatesFromGmailSearch,
   extractSafeSenderEmail,
   MAX_DIRECT_REFERENT_CHOICES,
+} from "../tact-work";
+import {
+  extractTemporalRequirement,
+  mergeTemporalRequirements,
+  deriveTemporalRequirementPolicy,
+  findMissingTemporalRequirements,
+  buildTemporalClarificationQuestion,
+  toTemporalRequirementMetadata,
+  readTemporalRequirementMetadata,
 } from "../tact-work";
 import type {
   WorkIntakeSource,
@@ -287,6 +298,10 @@ export type ConversationOrchestrationPlan =
       question: string;
     }
   | {
+      kind: "work_clarification";
+      question: string;
+    }
+  | {
       kind: "normal";
       executionId: string;
       status: ExecutionStatus;
@@ -311,6 +326,10 @@ export type ConversationOrchestrationPlan =
 export function planConversationTurn(
   result: OrchestrationResult
 ): ConversationOrchestrationPlan {
+
+  if (result.workClarification) {
+    return { kind: "work_clarification", question: result.workClarification.question };
+  }
 
   // Phase15の既存設計上、clarificationが設定されている場合は
   // tasks=[]・executionIdはOrchestrator内部でのみ生成される
@@ -525,6 +544,15 @@ export async function runConversationOrchestration(
 
     const workId = conversation.workId;
 
+    const temporalClarificationLookup = await findPendingTemporalClarification(
+      workId, conversation.userId, accessToken
+    );
+    if (temporalClarificationLookup.pending && temporalClarificationLookup.metadata) {
+      return runTemporalClarificationAnswerTurn(
+        conversation, accessToken, userInput, temporalClarificationLookup.pending, temporalClarificationLookup.metadata
+      );
+    }
+
     const referentClarificationLookup = await atConversationIntakeStage(
       "conversation_intake.clarification_lookup",
       () => findPendingReferentClarification(workId, conversation.userId, accessToken)
@@ -564,6 +592,26 @@ export async function runConversationOrchestration(
 
   return runNormalTurn(conversation, accessToken, userInput, attachmentIds, attachmentEvidence, workspaceEvidence, source, conversationEvidence);
 
+}
+
+interface TemporalClarificationLookup {
+  pending?: Clarification;
+  metadata?: ReturnType<typeof readTemporalRequirementMetadata>;
+}
+
+async function findPendingTemporalClarification(
+  workId: string,
+  userId: string,
+  accessToken: string
+): Promise<TemporalClarificationLookup> {
+  const work = await getWork(workId, userId, accessToken);
+  const metadata = readTemporalRequirementMetadata(work?.metadata);
+  if (!metadata?.activeClarificationId) return {};
+  const clarifications = await listClarificationsForWork(workId, userId, accessToken);
+  const pending = clarifications.find(
+    (clarification) => clarification.id === metadata.activeClarificationId && clarification.status === "pending"
+  );
+  return pending ? { pending, metadata } : {};
 }
 
 // =========================
@@ -1856,6 +1904,20 @@ const defaultResolveAndRunWorkDeps: ResolveAndRunWorkDeps = {
   runWorkTurn,
 };
 
+function makeTemporalClarificationResult(question: string): OrchestrationResult {
+  return {
+    answer: question,
+    executionId: crypto.randomUUID(),
+    tasks: [],
+    memoryUsed: [],
+    toolsUsed: [],
+    memoryWrites: [],
+    learningSignals: ["clarification_required"],
+    metadata: { executionMode: "temporal-clarification" },
+    workClarification: { question },
+  };
+}
+
 // =========================
 // resolveIntegrationConnectionViaTactIntegration
 // (Architecture Migration Phase C2.1b)
@@ -2667,6 +2729,10 @@ export async function resolveAndRunWork(
 ): Promise<OrchestrationResult> {
 
   const requestedByActor: ActorReference = { kind: "user", id: conversation.userId };
+  const extractedTemporalRequirement = extractTemporalRequirement(content);
+  const extractedTemporalPolicy = deriveTemporalRequirementPolicy(content);
+  const shouldPersistExtractedTemporalRequirement =
+    extractedTemporalPolicy.kind !== "none" || Object.keys(extractedTemporalRequirement).length > 0;
 
   const work = await deps.resolveWork(
     {
@@ -2676,6 +2742,9 @@ export async function resolveAndRunWork(
       source,
       conversationId: conversation.id,
       existingWorkId: conversation.workId ?? null,
+      ...(shouldPersistExtractedTemporalRequirement
+        ? { metadata: { temporalRequirement: toTemporalRequirementMetadata(extractedTemporalRequirement, extractedTemporalPolicy) } }
+        : {}),
       ...(orchestrationRequest.resolvedWorkIntent
         ? { resolvedIntent: orchestrationRequest.resolvedWorkIntent }
         : {}),
@@ -2695,6 +2764,49 @@ export async function resolveAndRunWork(
     // 更新する(DBへは既にlinkConversationWork()で反映済み)。
     conversation.workId = work.id;
 
+  }
+
+  // TIME-P1b: normalized request constraints live in Work metadata. The
+  // deterministic policy runs before planning and never writes TIME-P1a state.
+  const storedTemporal = readTemporalRequirementMetadata(work.metadata);
+  const temporalPolicy = storedTemporal && storedTemporal.policy.kind !== "none"
+    ? storedTemporal.policy
+    : extractedTemporalPolicy;
+  const temporalRequirement = mergeTemporalRequirements(storedTemporal?.requirement, extractedTemporalRequirement);
+  const missingTemporal = findMissingTemporalRequirements(temporalRequirement, temporalPolicy);
+
+  if (temporalPolicy.kind !== "none" || Object.keys(temporalRequirement).length > 0) {
+    const existingMetadata = { ...(work.metadata ?? {}) };
+    const activeTemporalClarificationId = storedTemporal?.activeClarificationId;
+    const existingPending = activeTemporalClarificationId
+      ? (await listClarificationsForWork(work.id, conversation.userId, accessToken)).find(
+          (clarification) => clarification.id === activeTemporalClarificationId && clarification.status === "pending"
+        )
+      : undefined;
+
+    if (existingPending) return makeTemporalClarificationResult(existingPending.question);
+
+    if (missingTemporal.length > 0) {
+      const question = buildTemporalClarificationQuestion(missingTemporal[0]);
+      const clarification = await requestClarification({
+        workId: work.id,
+        requestedByActor: { kind: "ai", id: "temporal-understanding" },
+        reasonCode: "missing_required_input",
+        question,
+      }, conversation.userId, accessToken);
+      if (clarification) {
+        await updateWorkMetadata(work.id, conversation.userId, accessToken, {
+          ...existingMetadata,
+          temporalRequirement: toTemporalRequirementMetadata(temporalRequirement, temporalPolicy, clarification.id),
+        });
+        return makeTemporalClarificationResult(question);
+      }
+    } else {
+      await updateWorkMetadata(work.id, conversation.userId, accessToken, {
+        ...existingMetadata,
+        temporalRequirement: toTemporalRequirementMetadata(temporalRequirement, temporalPolicy),
+      });
+    }
   }
 
   if (orchestrationRequest.resolvedWorkIntent) {
@@ -3488,6 +3600,13 @@ async function runNormalTurn(
 
   const plan = planConversationTurn(result);
 
+  if (plan.kind === "work_clarification") {
+
+    const message = await appendConversationMessage(conversation, accessToken, "assistant", plan.question);
+    return { conversation, userMessage, message };
+
+  }
+
   if (plan.kind === "clarification") {
 
     const message = await recordClarificationQuestion(
@@ -3640,6 +3759,13 @@ async function runClarificationAnswerTurn(
 
   const plan = planConversationTurn(result);
 
+  if (plan.kind === "work_clarification") {
+
+    const message = await appendConversationMessage(conversation, accessToken, "assistant", plan.question);
+    return { conversation, userMessage, message };
+
+  }
+
   if (plan.kind === "clarification") {
 
     // 再実行してもなお曖昧だった場合。新しいClarification Questionとして
@@ -3695,6 +3821,71 @@ async function runClarificationAnswerTurn(
 
   return { conversation, userMessage, message, executionRecord, pendingApproval };
 
+}
+
+// TIME-P1b uses the same canonical Work clarification entity as REF-P1. The
+// answer only resolves/records the temporal requirement; it never calls a
+// provider or treats temporal completeness as Approval.
+async function runTemporalClarificationAnswerTurn(
+  conversation: Conversation,
+  accessToken: string,
+  answerInput: string,
+  clarification: Clarification,
+  metadata: NonNullable<ReturnType<typeof readTemporalRequirementMetadata>>
+): Promise<ConversationTurnResult> {
+  const userMessage = await appendConversationMessage(conversation, accessToken, "user", answerInput);
+  const outcome = await resolveClarification(
+    clarification.workId,
+    conversation.userId,
+    accessToken,
+    clarification.id,
+    { kind: "user", id: conversation.userId },
+    answerInput
+  );
+
+  if (outcome.status !== "answered") {
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant", "時間条件を安全に更新できませんでした。もう一度お試しください。"
+    );
+    return { conversation, userMessage, message };
+  }
+
+  const requirement = mergeTemporalRequirements(metadata.requirement, extractTemporalRequirement(answerInput));
+  const missing = findMissingTemporalRequirements(requirement, metadata.policy);
+  const work = await getWork(clarification.workId, conversation.userId, accessToken);
+  const workMetadata = { ...(work?.metadata ?? {}) };
+
+  if (missing.length > 0) {
+    const question = buildTemporalClarificationQuestion(missing[0]);
+    const next = await requestClarification({
+      workId: clarification.workId,
+      requestedByActor: { kind: "ai", id: "temporal-understanding" },
+      reasonCode: "missing_required_input",
+      question,
+    }, conversation.userId, accessToken);
+    if (next) {
+      await updateWorkMetadata(clarification.workId, conversation.userId, accessToken, {
+        ...workMetadata,
+        temporalRequirement: toTemporalRequirementMetadata(requirement, metadata.policy, next.id),
+      });
+      const message = await appendConversationMessage(conversation, accessToken, "assistant", question);
+      return { conversation, userMessage, message };
+    }
+
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant", "時間条件を安全に更新できませんでした。もう一度お試しください。"
+    );
+    return { conversation, userMessage, message };
+  }
+
+  await updateWorkMetadata(clarification.workId, conversation.userId, accessToken, {
+    ...workMetadata,
+    temporalRequirement: toTemporalRequirementMetadata(requirement, metadata.policy),
+  });
+  const message = await appendConversationMessage(
+    conversation, accessToken, "assistant", "時間条件を記録しました。必要な情報がそろいました。"
+  );
+  return { conversation, userMessage, message };
 }
 
 // =========================
