@@ -7,6 +7,7 @@ import {
   readCandidateSlotSnapshotMetadata,
 } from "../../../core/tact-work/candidateSchedule";
 import { createFakeCalendarAvailabilityProvider } from "../../../core/tact-work/calendarAvailability";
+import { CANDIDATE_SLOT_GRANULARITY_MINUTES } from "../../../core/tact-work/slotEngine";
 import type { TemporalRequirement } from "../../../core/tact-work/temporalRequirements";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -164,6 +165,68 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   results.push(check("[schedule] a fully-booked range is \"no_availability\", distinguished from a provider failure", !noAvailability.success && noAvailability.error.code === "no_availability"));
 
   // =========================
+  // TIME-P1c HARDENING (Blocker F): provider-neutral fail-closed
+  // validation. These use bypassNormalization so the Fake provider returns
+  // hostile data exactly as given, without sanitizing it first — proving
+  // candidateSchedule.ts's own independent validation catches it, not just
+  // the provider's own good behavior.
+  // =========================
+
+  const malformedInterval = await generateCandidateSchedule({
+    requirement: baseRequirement,
+    referenceInstantUtc: REFERENCE,
+    provider: createFakeCalendarAvailabilityProvider({
+      bypassNormalization: true,
+      busyIntervals: [{ startUtc: "not-a-real-timestamp", endUtc: "2026-09-21T01:00:00.000Z" }],
+    }),
+  });
+  results.push(check(
+    "[schedule HARDENING Blocker F] a malformed provider busy interval fails the WHOLE result as malformed_response, never silently dropped to create false availability",
+    !malformedInterval.success && malformedInterval.error.code === "malformed_response"
+  ));
+
+  const reversedInterval = await generateCandidateSchedule({
+    requirement: baseRequirement,
+    referenceInstantUtc: REFERENCE,
+    provider: createFakeCalendarAvailabilityProvider({
+      bypassNormalization: true,
+      busyIntervals: [{ startUtc: "2026-09-21T02:00:00.000Z", endUtc: "2026-09-21T01:00:00.000Z" }], // end before start
+    }),
+  });
+  results.push(check(
+    "[schedule HARDENING Blocker F] a reversed (end-before-start) busy interval fails the whole result, never treated as zero-duration-and-ignorable",
+    !reversedInterval.success && reversedInterval.error.code === "malformed_response"
+  ));
+
+  const invalidSourceScope = await generateCandidateSchedule({
+    requirement: baseRequirement,
+    referenceInstantUtc: REFERENCE,
+    provider: createFakeCalendarAvailabilityProvider({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately constructing a runtime-invalid sourceScope the compile-time union forbids, to prove runtime validation doesn't just trust the type
+      sourceScope: "attendee_calendar" as any,
+    }),
+  });
+  results.push(check(
+    "[schedule HARDENING Blocker F] an unsupported sourceScope is rejected at runtime, never trusted just because TypeScript's type says it's fine",
+    !invalidSourceScope.success && invalidSourceScope.error.code === "malformed_response"
+  ));
+
+  // Hostile Reality case (Section 15): a DST-invalid temporal request, run
+  // through the full generateCandidateSchedule() pipeline (not just
+  // resolveTemporalDateRange() directly — see work/temporalHardening.test.ts
+  // for that lower-level coverage). America/Santiago's 2026-09-06 00:00
+  // local midnight is a real, verified DST spring-forward gap.
+  const dstInvalidRequest = await generateCandidateSchedule({
+    requirement: { ...baseRequirement, date: { kind: "date", date: "2026-09-06" }, timezone: "America/Santiago" },
+    referenceInstantUtc: "2026-09-01T00:00:00Z",
+    provider: createFakeCalendarAvailabilityProvider({}),
+  });
+  results.push(check(
+    "[schedule HARDENING Blocker D hostile case] a requested date whose local midnight is a real DST gap fails closed end-to-end, never fabricating a range or candidates",
+    !dstInvalidRequest.success && dstInvalidRequest.error.code === "dst_invalid_local_time"
+  ));
+
+  // =========================
   // Reality Test (Section 26): "来週、30分の打ち合わせ候補を3つ出して",
   // given an explicit reference time, explicit timezone, and fake busy
   // intervals — end to end, deterministic, no provider write, no Approval.
@@ -203,7 +266,16 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // =========================
 
   if (reality.success) {
-    const snapshot = toCandidateSlotSnapshotMetadata(reality.candidates, REFERENCE, "own_calendar");
+    const snapshot = toCandidateSlotSnapshotMetadata({
+      candidates: reality.candidates,
+      generatedAtUtc: REFERENCE,
+      sourceScope: "own_calendar",
+      resolvedRange: { startUtc: reality.resolvedRange.startUtc, endUtc: reality.resolvedRange.endUtc },
+      timezone: realityRequirement.timezone!,
+      dailyWindow: realityRequirement.dailyWindow!,
+      candidateCount: realityRequirement.candidateCount!,
+      slotGranularityMinutes: CANDIDATE_SLOT_GRANULARITY_MINUTES,
+    });
     const roundTripped = readCandidateSlotSnapshotMetadata({ unrelatedKey: "kept", calendarCandidateSnapshot: snapshot });
     results.push(check(
       "[snapshot] a generated candidate set round-trips through Work.metadata with stable indices",

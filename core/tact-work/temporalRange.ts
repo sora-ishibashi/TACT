@@ -16,7 +16,7 @@
 // so a later audit can see why a given range was chosen.
 
 import type { TemporalDateConstraint } from "./temporalRequirements";
-import { getZonedParts, isKnownTimeZone, zonedWallTimeToUtcMs } from "./timezone";
+import { getZonedParts, isExplicitUtcInstant, isKnownTimeZone, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "./timezone";
 
 export interface ResolvedTemporalRange {
   readonly startUtc: string;
@@ -28,7 +28,15 @@ export interface ResolvedTemporalRange {
 export type TemporalRangeResolutionErrorCode =
   | "timezone_missing"
   | "timezone_unrecognized"
-  | "temporal_requirement_incomplete";
+  // TIME-P1c HARDENING (Blocker C): the reference instant lacked an
+  // explicit "Z"/offset marker — resolving it would otherwise depend on
+  // Date.parse()'s host-timezone interpretation of a naive datetime.
+  | "reference_instant_invalid"
+  | "temporal_requirement_incomplete"
+  // TIME-P1c HARDENING (Blocker D): a required local wall-clock boundary
+  // (e.g. local midnight of the resolved date) does not exist or is
+  // ambiguous due to a DST transition on that specific day.
+  | "dst_invalid_local_time";
 
 export type TemporalRangeResolution =
   | { readonly success: true; readonly range: ResolvedTemporalRange }
@@ -149,11 +157,42 @@ export function resolveTemporalDateRange(
     return { success: false, code: "temporal_requirement_incomplete" };
   }
 
+  // TIME-P1c HARDENING (Blocker C, absolute condition): reject a naive
+  // reference instant (no "Z", no explicit ±HH:MM offset) before it can
+  // ever reach Date.parse(), which would otherwise interpret it using the
+  // host/process timezone — exactly the implicit-timezone dependency this
+  // phase exists to eliminate.
+  if (!isExplicitUtcInstant(referenceInstantUtc)) {
+    return { success: false, code: "reference_instant_invalid" };
+  }
+
   const referenceEpochMs = Date.parse(referenceInstantUtc);
 
   if (!Number.isFinite(referenceEpochMs)) {
     return { success: false, code: "temporal_requirement_incomplete" };
   }
+
+  try {
+    return resolveExplicitlyValidatedDateRange(date, referenceEpochMs, timezone);
+  } catch (error) {
+    if (error instanceof InvalidLocalWallTimeError) {
+      return { success: false, code: "dst_invalid_local_time" };
+    }
+    throw error;
+  }
+
+}
+
+// TIME-P1c HARDENING (Blocker D): isolated so the single try/catch above
+// covers every zonedWallTimeToUtcMs() call this resolution path can reach
+// (directly, or transitively via startOfLocalDayUtc/addLocalDays/
+// singleDayRange/resolveExplicitDateToLocalParts) without scattering a
+// try/catch at each call site.
+function resolveExplicitlyValidatedDateRange(
+  date: TemporalDateConstraint,
+  referenceEpochMs: number,
+  timezone: string
+): TemporalRangeResolution {
 
   const referenceParts = getZonedParts(referenceEpochMs, timezone);
 

@@ -67,6 +67,8 @@ import { run as runWorkTaskRunReconciliation } from "./work/taskRunReconciliatio
 import { run as runWorkTemporal } from "./work/temporal.test";
 import { run as runWorkTemporalPersistence } from "./work/temporalPersistence.test";
 import { run as runWorkTemporalRequirements } from "./work/temporalRequirements.test";
+import { run as runWorkTemporalHardening } from "./work/temporalHardening.test";
+import { run as runWorkCandidateSnapshotIntegrity } from "./work/candidateSnapshotIntegrity.test";
 import { run as runGenerateLLMAnswerRetry } from "./research/generateLLMAnswerRetry.test";
 import { run as runEvaluateTaskExecution } from "./evaluation/evaluateTaskExecution.test";
 import { run as runLearningSignalsWiring } from "./evaluation/learningSignalsWiring.test";
@@ -233,6 +235,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/temporal", run: runWorkTemporal },
   { name: "work/temporalPersistence", run: runWorkTemporalPersistence },
   { name: "work/temporalRequirements", run: runWorkTemporalRequirements },
+  { name: "work/temporalHardening", run: runWorkTemporalHardening },
+  { name: "work/candidateSnapshotIntegrity", run: runWorkCandidateSnapshotIntegrity },
   { name: "research/generateLLMAnswerRetry", run: runGenerateLLMAnswerRetry },
   { name: "evaluation/evaluateTaskExecution", run: runEvaluateTaskExecution },
   { name: "evaluation/learningSignalsWiring", run: runLearningSignalsWiring },

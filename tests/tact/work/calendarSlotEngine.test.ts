@@ -183,6 +183,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // =========================
   // A daily window that crosses local midnight (endMinuteOfDay >= 1440)
   // =========================
+  //
+  // TIME-P1c HARDENING (Blocker B): a range starting inside the carry-over
+  // portion of the PREVIOUS local day's overnight window must include that
+  // carry-over — the scan now seeds one local day before rangeStart's own
+  // day for exactly this reason. Where a range starts exactly at a local
+  // day's midnight (as it does here), that midnight instant sits inside the
+  // tail of the previous day's 22:00-02:00 window, so the correct first
+  // candidate is the earliest point in that carry-over (00:00 local),
+  // not the next full 22:00 window.
 
   const crossMidnightWindow = generateCandidateSlots({
     rangeStartUtc: "2026-09-13T15:00:00.000Z", // 2026-09-14T00:00 JST
@@ -194,13 +203,56 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     candidateCount: 100,
   });
   results.push(check(
-    "[slots] a daily window spanning local midnight starts at the right instant (granularity: " + CANDIDATE_SLOT_GRANULARITY_MINUTES + "min)",
-    crossMidnightWindow[0]?.startUtc === "2026-09-14T13:00:00.000Z" // 22:00 JST day1 = 13:00 UTC
+    "[slots HARDENING Blocker B] a range starting exactly at local midnight includes the previous day's overnight carry-over as the first candidate",
+    crossMidnightWindow[0]?.startUtc === "2026-09-13T15:00:00.000Z" // 00:00 JST (carry-over tail of the prior day's 22:00-02:00 window)
+  ));
+  results.push(check(
+    "[slots HARDENING Blocker B] the carry-over window still clips correctly at its own 02:00 local end",
+    crossMidnightWindow.some((slot) => slot.startUtc === "2026-09-13T16:30:00.000Z") && // 01:30 JST, last 30-min slot fitting before 02:00
+      !crossMidnightWindow.some((slot) => slot.startUtc === "2026-09-13T16:45:00.000Z") // would end at 02:15 JST, past the window
+  ));
+  results.push(check(
+    "[slots] a full (non-carry-over) overnight window on a later day still starts at the right instant (granularity: " + CANDIDATE_SLOT_GRANULARITY_MINUTES + "min)",
+    crossMidnightWindow.some((slot) => slot.startUtc === "2026-09-14T13:00:00.000Z") // 22:00 JST day1 = 13:00 UTC
   ));
   results.push(check(
     "[slots] a daily window spanning local midnight ends at the right instant, not at local midnight (regression: end-of-window overflow minutes were previously dropped)",
     crossMidnightWindow.some((slot) => slot.startUtc === "2026-09-14T16:30:00.000Z") && // last slot fitting before 02:00 JST
       !crossMidnightWindow.some((slot) => slot.startUtc === "2026-09-14T16:45:00.000Z") // would end at 02:15 JST, past the window
+  ));
+
+  // Required test: "requested range starting 00:30 includes prior-day
+  // carry-over" — a range that starts mid-carry-over (not at a clean
+  // midnight boundary) must offer that exact grid-aligned instant.
+  const rangeStartsMidCarryOver = generateCandidateSlots({
+    rangeStartUtc: "2026-09-13T15:30:00.000Z", // 2026-09-14T00:30 JST — 30 min into the carry-over
+    rangeEndUtc: "2026-09-16T15:00:00.000Z",
+    timezone: "Asia/Tokyo",
+    dailyWindow: { startMinuteOfDay: 22 * 60, endMinuteOfDay: 26 * 60 },
+    durationMinutes: 30,
+    busyIntervals: [],
+    candidateCount: 1,
+  });
+  results.push(check(
+    "[slots HARDENING Blocker B] a range starting at 00:30 (mid carry-over, already grid-aligned) offers exactly that instant",
+    rangeStartsMidCarryOver[0]?.startUtc === "2026-09-13T15:30:00.000Z"
+  ));
+
+  // Required test: a narrow 23:45-00:15 overnight window.
+  const narrowOvernightWindow = generateCandidateSlots({
+    rangeStartUtc: "2026-09-13T14:45:00.000Z", // 2026-09-13T23:45 JST
+    rangeEndUtc: "2026-09-15T15:00:00.000Z",
+    timezone: "Asia/Tokyo",
+    dailyWindow: { startMinuteOfDay: 23 * 60 + 45, endMinuteOfDay: 24 * 60 + 15 }, // 23:45-00:15
+    durationMinutes: 15,
+    busyIntervals: [],
+    candidateCount: 2,
+  });
+  results.push(check(
+    "[slots] a narrow 23:45-00:15 overnight window offers exactly its two 15-minute-fitting starts (23:45 and 00:00)",
+    narrowOvernightWindow.length === 2 &&
+      narrowOvernightWindow[0].startUtc === "2026-09-13T14:45:00.000Z" && // 23:45 JST
+      narrowOvernightWindow[1].startUtc === "2026-09-13T15:00:00.000Z" // 00:00 JST
   ));
 
   const crossMidnightBusy = generateCandidateSlots({
@@ -220,6 +272,53 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   results.push(check(
     "[slots] a busy interval crossing local midnight blocks candidates spanning both calendar-day iterations",
     !withinCrossMidnightBusy && crossMidnightBusy.some((slot) => slot.startUtc === "2026-09-14T16:00:00.000Z")
+  ));
+
+  // =========================
+  // Grid alignment (TIME-P1c HARDENING, Blocker A)
+  // =========================
+
+  const gridBase = {
+    rangeEndUtc: "2026-09-15T15:00:00.000Z",
+    timezone: "Asia/Tokyo",
+    dailyWindow: { startMinuteOfDay: 9 * 60, endMinuteOfDay: 18 * 60 },
+    durationMinutes: 30,
+    busyIntervals: [],
+    candidateCount: 1,
+  };
+
+  const gridSevenPast = generateCandidateSlots({ ...gridBase, rangeStartUtc: "2026-09-14T00:07:00.000Z" }); // 09:07 JST
+  results.push(check(
+    "[slots HARDENING Blocker A] 09:07 rounds up to the next 15-minute grid boundary, 09:15",
+    gridSevenPast[0]?.startUtc === "2026-09-14T00:15:00.000Z" // 09:15 JST
+  ));
+
+  const gridAlreadyAligned = generateCandidateSlots({ ...gridBase, rangeStartUtc: "2026-09-14T00:15:00.000Z" }); // 09:15 JST exactly
+  results.push(check(
+    "[slots HARDENING Blocker A] an already grid-aligned 09:15 start remains 09:15, unchanged",
+    gridAlreadyAligned[0]?.startUtc === "2026-09-14T00:15:00.000Z"
+  ));
+
+  const gridFiftyNine = generateCandidateSlots({ ...gridBase, rangeStartUtc: "2026-09-14T00:59:00.000Z" }); // 09:59 JST
+  results.push(check(
+    "[slots HARDENING Blocker A] 09:59 rounds up across the hour boundary to 10:00",
+    gridFiftyNine[0]?.startUtc === "2026-09-14T01:00:00.000Z" // 10:00 JST
+  ));
+
+  const gridExactBoundaryAtNine = generateCandidateSlots({ ...gridBase, rangeStartUtc: "2026-09-14T00:00:00.000Z" }); // 09:00 JST exactly
+  results.push(check(
+    "[slots HARDENING Blocker A] an exact 09:00 boundary remains 09:00",
+    gridExactBoundaryAtNine[0]?.startUtc === "2026-09-14T00:00:00.000Z"
+  ));
+
+  const gridAfterBusyBoundary = generateCandidateSlots({
+    ...gridBase,
+    rangeStartUtc: "2026-09-14T00:00:00.000Z",
+    busyIntervals: [{ startUtc: "2026-09-14T00:00:00.000Z", endUtc: "2026-09-14T00:45:00.000Z" }], // 09:00-09:45 JST busy
+  });
+  results.push(check(
+    "[slots HARDENING Blocker A] the exact grid-aligned boundary immediately after a busy interval is still offered, never skipped",
+    gridAfterBusyBoundary[0]?.startUtc === "2026-09-14T00:45:00.000Z" // 09:45 JST, exactly busy.end, grid-aligned
   ));
 
   return summarize("work/calendarSlotEngine", results);

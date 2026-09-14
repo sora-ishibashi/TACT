@@ -17,7 +17,7 @@
 //     enforces no business-hours opinion of its own.
 
 import type { BusyInterval } from "./calendarAvailability";
-import { getZonedParts, zonedWallTimeToUtcMs } from "./timezone";
+import { getZonedParts, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "./timezone";
 
 export const CANDIDATE_SLOT_GRANULARITY_MINUTES = 15;
 export const DEFAULT_CANDIDATE_COUNT = 3;
@@ -59,18 +59,62 @@ function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): b
   return aStart < bEnd && bStart < aEnd;
 }
 
+// TIME-P1c HARDENING FIX (Blocker A, grid alignment): candidate starts must
+// land on absolute local-clock boundaries (:00/:15/:30/:45 for the default
+// 15-minute grid) in the scheduling timezone — not merely at whatever
+// instant a window/range happens to start at. Rounds UP to the nearest such
+// boundary strictly at-or-after `instantMs` (a value already exactly on a
+// boundary, with no sub-minute remainder, is returned unchanged).
+//
+// Ceiling to the next whole minute first (via instantMs, not the
+// timezone-derived `second` field, since seconds-within-a-minute are
+// timezone-invariant) defensively covers a busy interval or range boundary
+// that happens to carry sub-minute precision — the grid itself is always
+// minute-granular.
+function alignUpToLocalGrid(instantMs: number, timezone: string, granularityMinutes: number): number {
+
+  const wholeMinuteMs = Math.ceil(instantMs / 60_000) * 60_000;
+  const parts = getZonedParts(wholeMinuteMs, timezone);
+  const minuteOfDay = parts.hour * 60 + parts.minute;
+  const remainder = minuteOfDay % granularityMinutes;
+  const minutesToAdd = remainder === 0 ? 0 : granularityMinutes - remainder;
+
+  return wholeMinuteMs + minutesToAdd * 60_000;
+
+}
+
 // JS's Date.UTC (which zonedWallTimeToUtcMs is built on) normalizes an
 // out-of-range day (e.g. day=31 in a 30-day month) into the following
 // month, so passing day+1 here correctly lands on the next calendar day's
 // local midnight even across a month/year boundary.
-function windowBoundUtcMs(year: number, month: number, day: number, minuteOfDay: number, timezone: string): number {
+//
+// TIME-P1c HARDENING (Blocker D): returns undefined, rather than throwing
+// or silently normalizing, when this specific day's window boundary falls
+// on a DST gap/ambiguity. The caller treats an undefined boundary as "this
+// day's window cannot be safely resolved" and skips generating any
+// candidates for that one day — it does not abort scanning the rest of the
+// requested range, since a DST quirk on one day should not hide otherwise
+// valid candidates on other days.
+function windowBoundUtcMs(year: number, month: number, day: number, minuteOfDay: number, timezone: string): number | undefined {
 
-  if (minuteOfDay >= 1440) {
-    const overflowMinute = minuteOfDay - 1440;
-    return zonedWallTimeToUtcMs(year, month, day + 1, Math.floor(overflowMinute / 60), overflowMinute % 60, timezone);
+  try {
+
+    if (minuteOfDay >= 1440) {
+      const overflowMinute = minuteOfDay - 1440;
+      return zonedWallTimeToUtcMs(year, month, day + 1, Math.floor(overflowMinute / 60), overflowMinute % 60, timezone);
+    }
+
+    return zonedWallTimeToUtcMs(year, month, day, Math.floor(minuteOfDay / 60), minuteOfDay % 60, timezone);
+
+  } catch (error) {
+
+    if (error instanceof InvalidLocalWallTimeError) {
+      return undefined;
+    }
+
+    throw error;
+
   }
-
-  return zonedWallTimeToUtcMs(year, month, day, Math.floor(minuteOfDay / 60), minuteOfDay % 60, timezone);
 
 }
 
@@ -78,15 +122,15 @@ function windowBoundUtcMs(year: number, month: number, day: number, minuteOfDay:
 // every local calendar day the resolved range touches, in chronological
 // order, stopping as soon as candidateCount valid slots have been found.
 //
-// "Grid-aligned" here means aligned to each day's own effective window
-// start (itself clipped against the overall requested range) — for a
-// window like "9:00-18:00" that is the same thing as absolute :00/:15/:30/
-// :45 boundaries; this file makes no attempt to re-align to those absolute
-// boundaries independently of the window start, since no product
-// requirement calls for that distinction.
+// "Grid-aligned" (TIME-P1c HARDENING, Blocker A) means aligned to absolute
+// local-clock boundaries (:00/:15/:30/:45 in the scheduling timezone) via
+// alignUpToLocalGrid() above — independent of exactly where a window or the
+// requested range happens to start. Duration itself is never required to be
+// a multiple of the grid.
 export function generateCandidateSlots(input: SlotEngineInput): CandidateSlot[] {
 
-  const granularityMs = (input.granularityMinutes ?? CANDIDATE_SLOT_GRANULARITY_MINUTES) * 60_000;
+  const granularityMinutes = input.granularityMinutes ?? CANDIDATE_SLOT_GRANULARITY_MINUTES;
+  const granularityMs = granularityMinutes * 60_000;
   const durationMs = input.durationMinutes * 60_000;
   const rangeStart = Date.parse(input.rangeStartUtc);
   const rangeEnd = Date.parse(input.rangeEndUtc);
@@ -98,7 +142,27 @@ export function generateCandidateSlots(input: SlotEngineInput): CandidateSlot[] 
 
   const candidates: CandidateSlot[] = [];
 
-  let cursor = getZonedParts(rangeStart, input.timezone);
+  // TIME-P1c HARDENING FIX (Blocker B, overnight carry-over): seed the scan
+  // one local calendar day BEFORE the range start's own local day. Without
+  // this, an overnight dailyWindow (e.g. 22:00-02:00) that began the
+  // previous local day and carries into the requested range (e.g. a range
+  // starting at 00:30) was never considered at all — the old code only ever
+  // started scanning from rangeStart's own local day forward. Seeding one
+  // day early is always safe: a day whose window does not actually overlap
+  // [rangeStart, rangeEnd) simply clips to an empty effective window below
+  // (effectiveStart >= effectiveEnd) and contributes zero candidates, same
+  // as any other out-of-range day.
+  const rangeStartLocalParts = getZonedParts(rangeStart, input.timezone);
+  const seedAnchorMs = zonedWallTimeToUtcMs(
+    rangeStartLocalParts.year,
+    rangeStartLocalParts.month,
+    rangeStartLocalParts.day - 1,
+    12,
+    0,
+    input.timezone
+  );
+  let cursor = getZonedParts(seedAnchorMs, input.timezone);
+
   // A generous but finite bound (a bit over a year of days) so a
   // misconfigured range can never spin forever; real usage never
   // approaches this.
@@ -107,42 +171,64 @@ export function generateCandidateSlots(input: SlotEngineInput): CandidateSlot[] 
   for (let scanned = 0; scanned < MAX_DAYS_SCANNED && candidates.length < input.candidateCount; scanned++) {
 
     const dayWindowStart = windowBoundUtcMs(cursor.year, cursor.month, cursor.day, input.dailyWindow.startMinuteOfDay, input.timezone);
+    const dayWindowEnd = dayWindowStart === undefined
+      ? undefined
+      : windowBoundUtcMs(cursor.year, cursor.month, cursor.day, input.dailyWindow.endMinuteOfDay, input.timezone);
 
-    if (dayWindowStart >= rangeEnd) {
-      break;
-    }
+    // TIME-P1c HARDENING (Blocker D): this specific day's window boundary
+    // fell on a DST gap/ambiguity (windowBoundUtcMs() returned undefined).
+    // Never guess/normalize it — skip only this one day's candidate
+    // generation and keep scanning the rest of the range; the loop can
+    // still terminate via the day-count bound below even if a boundary is
+    // unresolvable, since we cannot evaluate the usual "past rangeEnd"
+    // break condition without a resolved instant.
+    if (dayWindowStart !== undefined && dayWindowEnd !== undefined) {
 
-    const dayWindowEnd = windowBoundUtcMs(cursor.year, cursor.month, cursor.day, input.dailyWindow.endMinuteOfDay, input.timezone);
+      if (dayWindowStart >= rangeEnd) {
+        break;
+      }
 
-    const effectiveStart = Math.max(dayWindowStart, rangeStart);
-    const effectiveEnd = Math.min(dayWindowEnd, rangeEnd);
+      const effectiveStart = Math.max(dayWindowStart, rangeStart);
+      const effectiveEnd = Math.min(dayWindowEnd, rangeEnd);
 
-    for (
-      let slotStart = effectiveStart;
-      slotStart + durationMs <= effectiveEnd && candidates.length < input.candidateCount;
-      slotStart += granularityMs
-    ) {
+      if (effectiveStart < effectiveEnd) {
 
-      const slotEnd = slotStart + durationMs;
-      const blocked = busy.some((interval) => overlaps(slotStart, slotEnd, interval.start, interval.end));
+        for (
+          let slotStart = alignUpToLocalGrid(effectiveStart, input.timezone, granularityMinutes);
+          slotStart + durationMs <= effectiveEnd && candidates.length < input.candidateCount;
+          slotStart += granularityMs
+        ) {
 
-      if (!blocked) {
-        candidates.push({
-          index: candidates.length + 1,
-          startUtc: new Date(slotStart).toISOString(),
-          endUtc: new Date(slotEnd).toISOString(),
-          timezone: input.timezone,
-        });
+          const slotEnd = slotStart + durationMs;
+          const blocked = busy.some((interval) => overlaps(slotStart, slotEnd, interval.start, interval.end));
+
+          if (!blocked) {
+            candidates.push({
+              index: candidates.length + 1,
+              startUtc: new Date(slotStart).toISOString(),
+              endUtc: new Date(slotEnd).toISOString(),
+              timezone: input.timezone,
+            });
+          }
+
+        }
+
       }
 
     }
 
-    // Advance the cursor to the next local calendar day. +90 minutes past
-    // the day's own window start keeps this safely inside "the next day"
-    // even across a DST transition that shifts local midnight's UTC
-    // instant by up to an hour.
-    const nextDayProbe = dayWindowStart + 24 * 60 * 60_000 + 90 * 60_000;
-    cursor = getZonedParts(nextDayProbe, input.timezone);
+    // Advance the cursor to the next local calendar day. TIME-P1c HARDENING
+    // FIX (Blocker B follow-up): anchor at local NOON of cursor.day + 1
+    // rather than "+24h+90min past dayWindowStart" — the old probe assumed
+    // a window start time far enough from midnight that adding 90 minutes
+    // would still land within the intended next day, which silently
+    // overshot by a full calendar day whenever dailyWindow.startMinuteOfDay
+    // was close to midnight (e.g. 23:45), skipping that day's window
+    // entirely. Noon is never subject to a spring-forward/fall-back DST gap
+    // or ambiguity, so this is always exactly "cursor's day + 1" regardless
+    // of window timing or DST.
+    const nextDayAnchorMs = zonedWallTimeToUtcMs(cursor.year, cursor.month, cursor.day + 1, 12, 0, input.timezone);
+    cursor = getZonedParts(nextDayAnchorMs, input.timezone);
 
   }
 

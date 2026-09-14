@@ -20,16 +20,19 @@ import type { TemporalRequirement } from "./temporalRequirements";
 import { resolveTemporalDateRange, type ResolvedTemporalRange } from "./temporalRange";
 import {
   normalizeBusyIntervals,
+  validateAvailabilityResult,
   type CalendarAvailabilityProvider,
   type CalendarAvailabilitySourceScope,
 } from "./calendarAvailability";
 import {
   generateCandidateSlots,
   DEFAULT_CANDIDATE_COUNT,
+  CANDIDATE_SLOT_GRANULARITY_MINUTES,
   type CandidateSlot,
   type DailyWindow,
 } from "./slotEngine";
 import { isKnownTimeZone } from "./timezone";
+import { createHash } from "node:crypto";
 
 // =========================
 // Clarification-answer parsers (TIME-P1c only)
@@ -67,7 +70,8 @@ export function extractDailyWindowAnswer(input: string): DailyWindow | undefined
 }
 
 // =========================
-// Candidate snapshot persistence (Section 19/23)
+// Candidate snapshot persistence (Section 19/23; TIME-P1c HARDENING
+// Blocker E: immutability + integrity)
 // =========================
 //
 // Mirrors core/tact-work/temporalRequirements.ts's
@@ -76,34 +80,144 @@ export function extractDailyWindowAnswer(input: string): DailyWindow | undefined
 // Work.metadata key, so a later "2番で" reference resolves against exactly
 // the snapshot originally shown (Section 19 — TOCTOU-safe pinning) rather
 // than a silently recomputed, possibly-different set of candidates.
+//
+// Version 2 (HARDENING): carries every fact needed to audit/reproduce a
+// generation decision (resolved range, timezone, dailyWindow, effective
+// candidateCount/granularity, fetchedAt) plus two deterministic SHA-256
+// integrity hashes — requestHash (the effective scheduling request/policy)
+// and candidateHash (the exact ordered candidate set). Uses Node's built-in
+// crypto module only; no hashing dependency was added. A version-1 snapshot
+// (pre-hardening) fails readCandidateSlotSnapshotMetadata()'s validation
+// below and is treated as absent, never partially trusted.
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Deterministic serialization (Section 10 absolute condition): recursively
+// sorts object keys before stringifying, so the result never depends on
+// property insertion order — plain JSON.stringify() is NOT used for hashing
+// for exactly this reason. Array order is preserved as-is (candidate order
+// is semantically significant and must affect the hash).
+function canonicalStringify(value: unknown): string {
+
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalStringify).join(",")}]`;
+  }
+
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalStringify((value as Record<string, unknown>)[key])}`).join(",")}}`;
+
+}
+
+function sha256Hex(input: string): string {
+  return createHash("sha256").update(input, "utf8").digest("hex");
+}
+
+// Canonical deep copy (Section 9 absolute condition): every nested
+// structure snapshotted here is plain JSON-safe data (strings/numbers), so
+// a JSON round-trip is a complete, safe deep copy — no shared references
+// back to a caller's original objects survive. Deep-freezes the result so
+// an accidental in-process mutation of the stored snapshot throws (or is a
+// silent no-op in non-strict contexts) rather than corrupting pinned data.
+function deepFreezeClone<T>(value: T): T {
+  const clone = JSON.parse(JSON.stringify(value)) as T;
+  deepFreezeInPlace(clone);
+  return clone;
+}
+
+function deepFreezeInPlace(value: unknown): void {
+  if (value && typeof value === "object") {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      deepFreezeInPlace(nested);
+    }
+    Object.freeze(value);
+  }
+}
 
 export interface CandidateSlotSnapshotMetadata {
-  readonly version: 1;
+  readonly version: 2;
   // The referenceInstantUtc this snapshot was generated against — not a
   // freshness guarantee (Section 20: a candidate generated at T1 may no
   // longer be free at T2), just an audit trail of when it was produced.
   readonly generatedAtUtc: string;
+  readonly resolvedRange: { readonly startUtc: string; readonly endUtc: string };
+  readonly timezone: string;
+  readonly dailyWindow: DailyWindow;
+  readonly candidateCount: number;
+  readonly slotGranularityMinutes: number;
   readonly sourceScope: CalendarAvailabilitySourceScope;
   readonly candidates: readonly CandidateSlot[];
+  readonly requestHash: string;
+  readonly candidateHash: string;
+}
+
+export interface ToCandidateSlotSnapshotMetadataParams {
+  readonly candidates: readonly CandidateSlot[];
+  readonly generatedAtUtc: string;
+  readonly sourceScope: CalendarAvailabilitySourceScope;
+  readonly resolvedRange: { readonly startUtc: string; readonly endUtc: string };
+  readonly timezone: string;
+  readonly dailyWindow: DailyWindow;
+  readonly candidateCount: number;
+  readonly slotGranularityMinutes: number;
 }
 
 export function toCandidateSlotSnapshotMetadata(
-  candidates: readonly CandidateSlot[],
-  generatedAtUtc: string,
-  sourceScope: CalendarAvailabilitySourceScope
+  params: ToCandidateSlotSnapshotMetadataParams
 ): CandidateSlotSnapshotMetadata {
-  return { version: 1, generatedAtUtc, sourceScope, candidates };
+
+  // Deep-copy every nested input FIRST: a caller mutating their own
+  // original candidates array/objects after this call must never alter the
+  // stored snapshot (Section 9 absolute condition — verified by dedicated
+  // mutation tests).
+  const candidatesCopy = deepFreezeClone(params.candidates as CandidateSlot[]);
+  const resolvedRangeCopy = deepFreezeClone(params.resolvedRange as { startUtc: string; endUtc: string });
+  const dailyWindowCopy = deepFreezeClone(params.dailyWindow as DailyWindow);
+
+  const requestHash = sha256Hex(canonicalStringify({
+    resolvedRange: resolvedRangeCopy,
+    timezone: params.timezone,
+    dailyWindow: dailyWindowCopy,
+    candidateCount: params.candidateCount,
+    slotGranularityMinutes: params.slotGranularityMinutes,
+    sourceScope: params.sourceScope,
+  }));
+
+  const candidateHash = sha256Hex(canonicalStringify(candidatesCopy));
+
+  return Object.freeze({
+    version: 2 as const,
+    generatedAtUtc: params.generatedAtUtc,
+    resolvedRange: resolvedRangeCopy,
+    timezone: params.timezone,
+    dailyWindow: dailyWindowCopy,
+    candidateCount: params.candidateCount,
+    slotGranularityMinutes: params.slotGranularityMinutes,
+    sourceScope: params.sourceScope,
+    candidates: candidatesCopy,
+    requestHash,
+    candidateHash,
+  });
+
 }
 
 function isCandidateSlot(value: unknown): value is CandidateSlot {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
+  if (!isRecordValue(value)) return false;
   return (
-    typeof candidate.index === "number" &&
-    typeof candidate.startUtc === "string" &&
-    typeof candidate.endUtc === "string" &&
-    typeof candidate.timezone === "string"
+    typeof value.index === "number" &&
+    typeof value.startUtc === "string" &&
+    typeof value.endUtc === "string" &&
+    typeof value.timezone === "string"
   );
+}
+
+function isDailyWindow(value: unknown): value is DailyWindow {
+  return isRecordValue(value) && typeof value.startMinuteOfDay === "number" && typeof value.endMinuteOfDay === "number";
 }
 
 export function readCandidateSlotSnapshotMetadata(
@@ -112,27 +226,41 @@ export function readCandidateSlotSnapshotMetadata(
 
   const value = metadata?.calendarCandidateSnapshot;
 
-  if (!value || typeof value !== "object") {
+  if (!isRecordValue(value)) {
     return undefined;
   }
 
-  const candidate = value as Record<string, unknown>;
-
   if (
-    candidate.version !== 1 ||
-    typeof candidate.generatedAtUtc !== "string" ||
-    candidate.sourceScope !== "own_calendar" ||
-    !Array.isArray(candidate.candidates) ||
-    !candidate.candidates.every(isCandidateSlot)
+    value.version !== 2 ||
+    typeof value.generatedAtUtc !== "string" ||
+    !isRecordValue(value.resolvedRange) ||
+    typeof value.resolvedRange.startUtc !== "string" ||
+    typeof value.resolvedRange.endUtc !== "string" ||
+    typeof value.timezone !== "string" ||
+    !isDailyWindow(value.dailyWindow) ||
+    typeof value.candidateCount !== "number" ||
+    typeof value.slotGranularityMinutes !== "number" ||
+    value.sourceScope !== "own_calendar" ||
+    !Array.isArray(value.candidates) ||
+    !value.candidates.every(isCandidateSlot) ||
+    typeof value.requestHash !== "string" ||
+    typeof value.candidateHash !== "string"
   ) {
     return undefined;
   }
 
   return {
-    version: 1,
-    generatedAtUtc: candidate.generatedAtUtc,
+    version: 2,
+    generatedAtUtc: value.generatedAtUtc,
+    resolvedRange: { startUtc: value.resolvedRange.startUtc, endUtc: value.resolvedRange.endUtc },
+    timezone: value.timezone,
+    dailyWindow: { startMinuteOfDay: value.dailyWindow.startMinuteOfDay, endMinuteOfDay: value.dailyWindow.endMinuteOfDay },
+    candidateCount: value.candidateCount,
+    slotGranularityMinutes: value.slotGranularityMinutes,
     sourceScope: "own_calendar",
-    candidates: candidate.candidates,
+    candidates: value.candidates,
+    requestHash: value.requestHash,
+    candidateHash: value.candidateHash,
   };
 
 }
@@ -144,8 +272,14 @@ export function readCandidateSlotSnapshotMetadata(
 export type GenerateCandidateScheduleErrorCode =
   | "timezone_missing"
   | "timezone_unrecognized"
+  // TIME-P1c HARDENING (Blocker C): the reference instant lacked an
+  // explicit "Z"/offset marker.
+  | "reference_instant_invalid"
   | "daily_window_missing"
   | "temporal_requirement_incomplete"
+  // TIME-P1c HARDENING (Blocker D): the resolved date's local wall-clock
+  // boundaries do not exist or are ambiguous due to a DST transition.
+  | "dst_invalid_local_time"
   | "connection_missing"
   | "permission_denied"
   | "provider_failure"
@@ -208,6 +342,14 @@ export async function generateCandidateSchedule(
       return { success: false, error: { code: "timezone_unrecognized", message: "指定されたタイムゾーンを認識できませんでした。" } };
     }
 
+    if (rangeResolution.code === "reference_instant_invalid") {
+      return { success: false, error: { code: "reference_instant_invalid", message: "基準時刻が明示的なタイムゾーン情報(Zまたは±HH:MM)を含んでいません。" } };
+    }
+
+    if (rangeResolution.code === "dst_invalid_local_time") {
+      return { success: false, error: { code: "dst_invalid_local_time", message: "指定された日時は夏時間の切り替えにより存在しないか、一意に定まりません。" } };
+    }
+
     return { success: false, error: { code: "temporal_requirement_incomplete", message: "候補を探す日程の範囲が確定していません。" } };
 
   }
@@ -226,11 +368,27 @@ export async function generateCandidateSchedule(
 
   const availability = providerResult.result;
 
+  // TIME-P1c HARDENING (Blocker F, Section 7-8): independent, provider-
+  // neutral fail-closed validation — runs BEFORE normalizeBusyIntervals()
+  // below, on the provider's claimed result exactly as received. A single
+  // malformed busy interval, an unsupported sourceScope, or an invalid
+  // range/timezone fails the WHOLE result as malformed_response rather than
+  // silently dropping the offending piece and proceeding as if it were
+  // free time.
+  const validation = validateAvailabilityResult(availability);
+
+  if (!validation.valid) {
+    return { success: false, error: { code: "malformed_response", message: validation.message } };
+  }
+
   const normalizedBusyIntervals = normalizeBusyIntervals(
     availability.busyIntervals,
     availability.rangeStartUtc,
     availability.rangeEndUtc
   );
+
+  const effectiveCandidateCount = requirement.candidateCount ?? DEFAULT_CANDIDATE_COUNT;
+  const effectiveGranularityMinutes = params.granularityMinutes ?? CANDIDATE_SLOT_GRANULARITY_MINUTES;
 
   const candidates = generateCandidateSlots({
     rangeStartUtc: availability.rangeStartUtc,
@@ -239,8 +397,8 @@ export async function generateCandidateSchedule(
     durationMinutes: requirement.durationMinutes,
     busyIntervals: normalizedBusyIntervals,
     dailyWindow: requirement.dailyWindow,
-    candidateCount: requirement.candidateCount ?? DEFAULT_CANDIDATE_COUNT,
-    granularityMinutes: params.granularityMinutes,
+    candidateCount: effectiveCandidateCount,
+    granularityMinutes: effectiveGranularityMinutes,
   });
 
   if (candidates.length === 0) {
@@ -253,7 +411,16 @@ export async function generateCandidateSchedule(
   return {
     success: true,
     candidates,
-    snapshot: toCandidateSlotSnapshotMetadata(candidates, params.referenceInstantUtc, availability.sourceScope),
+    snapshot: toCandidateSlotSnapshotMetadata({
+      candidates,
+      generatedAtUtc: params.referenceInstantUtc,
+      sourceScope: availability.sourceScope,
+      resolvedRange: { startUtc: range.startUtc, endUtc: range.endUtc },
+      timezone: availability.timezone,
+      dailyWindow: requirement.dailyWindow,
+      candidateCount: effectiveCandidateCount,
+      slotGranularityMinutes: effectiveGranularityMinutes,
+    }),
     resolvedRange: range,
     sourceScope: availability.sourceScope,
   };
