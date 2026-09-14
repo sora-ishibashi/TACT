@@ -981,6 +981,7 @@ interface MakeRetryEligibilityDepsOptions {
   work?: Work | null;
   tasks?: WorkTask[];
   runs?: Run[];
+  now?: Date;
 }
 
 function makeRetryEligibilityDeps(options: MakeRetryEligibilityDepsOptions = {}) {
@@ -1020,6 +1021,7 @@ function makeRetryEligibilityDeps(options: MakeRetryEligibilityDepsOptions = {})
     getWork: async () => work,
     listTasksForWork: async () => tasks,
     listRunsForTask: async () => runs,
+    now: () => options.now ?? new Date("2026-09-14T00:00:00.000Z"),
   };
 
   return { deps };
@@ -1148,6 +1150,103 @@ async function testRetryEligibility(results: CheckResult[]): Promise<void> {
         "[RUNS-P1b retry-eligibility 8/9] Work不明はblocked(work_not_found)、Task不明はblocked(task_not_found)(fail closed)",
         workNotFound.status === "blocked" && workNotFound.reasonCode === "work_not_found" &&
           taskNotFound.status === "blocked" && taskNotFound.reasonCode === "task_not_found"
+      )
+    );
+  }
+
+  // =========================
+  // TIME-P1a: evaluateTaskRetryEligibility()への時間的gate統合
+  // =========================
+
+  // ---- [10] Task.nextRetryAtが未来 -> blocked(temporal_gate_not_satisfied)
+  // (他の全条件を満たしていても、時間的gateが未成立ならeligibleにならない) ----
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      tasks: [{
+        id: "task-1", workId: "work-1", description: "test", status: "waiting_for_retry",
+        assignedCapability: "integration.gmail.search_messages",
+        nextRetryAt: "2026-09-15T00:00:00.000Z", // now(makeRetryEligibilityDepsの既定)より未来
+        createdAt: "x", updatedAt: "x",
+      } as WorkTask],
+      now: new Date("2026-09-14T00:00:00.000Z"),
+    });
+
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a retry-eligibility 10] nextRetryAtが未来 -> blocked(temporal_gate_not_satisfied)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "temporal_gate_not_satisfied"
+      )
+    );
+  }
+
+  // ---- [11] Task.nextRetryAtが過去 -> 他の条件も満たしていればeligible ----
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      tasks: [{
+        id: "task-1", workId: "work-1", description: "test", status: "waiting_for_retry",
+        assignedCapability: "integration.gmail.search_messages",
+        nextRetryAt: "2026-09-13T00:00:00.000Z", // now(既定2026-09-14)より過去
+        createdAt: "x", updatedAt: "x",
+      } as WorkTask],
+    });
+
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a retry-eligibility 11] nextRetryAtが過去 -> 時間的gateは満たされ、他の条件も揃っていればeligible",
+        eligibility.status === "eligible"
+      )
+    );
+  }
+
+  // ---- [12] Task.nextRetryAtが未設定(null/undefined) -> Section12の
+  // 明示的preferred default(時間による制約なし)によりeligible
+  // (既に[1]で暗黙にカバーされているが、明示的に確認する) ----
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      tasks: [{
+        id: "task-1", workId: "work-1", description: "test", status: "waiting_for_retry",
+        assignedCapability: "integration.gmail.search_messages",
+        nextRetryAt: null,
+        createdAt: "x", updatedAt: "x",
+      } as WorkTask],
+    });
+
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a retry-eligibility 12] nextRetryAt未設定(null) -> 時間による制約なし、eligible",
+        eligibility.status === "eligible"
+      )
+    );
+  }
+
+  // ---- [13] 判定順序: 時間的gateは非時間的条件より後に評価される
+  // (retryable=falseかつnextRetryAtが未来の場合、
+  // temporal_gate_not_satisfiedではなくlatest_failure_not_retryableが
+  // 返る——非時間的な安全条件を時間で覆い隠さない) ----
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      tasks: [{
+        id: "task-1", workId: "work-1", description: "test", status: "waiting_for_retry",
+        assignedCapability: "integration.gmail.search_messages",
+        nextRetryAt: "2026-09-15T00:00:00.000Z", // 未来(時間的gateも未成立)
+        createdAt: "x", updatedAt: "x",
+      } as WorkTask],
+      runs: [makeRun({ status: "failed", externalRef: { errorCode: "authentication_error", errorRetryable: false } })],
+      now: new Date("2026-09-14T00:00:00.000Z"),
+    });
+
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a retry-eligibility 13] 非retryableな失敗は、nextRetryAtが未来でもlatest_failure_not_retryableとして報告される(非時間的な安全条件が時間的gateより先に評価される、判定順序の確認)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "latest_failure_not_retryable"
       )
     );
   }

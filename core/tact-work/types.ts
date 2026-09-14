@@ -199,6 +199,14 @@ export interface Work {
   // boundary used for Work completion.
   resultDeliveredAt?: string | null;
 
+  // TIME-P1a: 「このWorkはこの時刻までに完了することが期待されている」
+  // という事実の表現。スケジューラのtrigger条件ではない——deadlineが
+  // 過ぎても、このfield自体もcompletion.tsも何も自動的には行わない
+  // (絶対条件Section6: overdue failure policyを発明しない)。
+  // core/tact-work/temporal.tsのisDeadlineExceeded(now, deadline)で
+  // read-onlyに判定できる。
+  deadline?: string | null;
+
   status: WorkStatus;
 
   primaryConversationId?: string | null;
@@ -297,6 +305,25 @@ export interface WorkTask {
   // read-onlyな派生値)。未知のdispatch key・assignedCapability
   //未設定の場合はnull(fail closed、推測で埋めない)。
   canonicalCapabilities?: readonly CanonicalTaskCapability[] | null;
+
+  // TIME-P1a: 「この時刻より前には再開しない」というgating condition。
+  // 「この時刻ちょうどに自動実行する」という意味ではない——単に
+  // isWaitUntilSatisfied(now, waitUntil)で読み取れるgateの状態を
+  // 持つだけであり、実際にいつ再開するかを決めるscheduler/timerは
+  // このphaseでは一切実装しない。未設定(null)は「gateなし」を意味する
+  // (絶対条件: 過去のwaitUntilを"gate already open"として安全側に
+  // 扱う)。
+  waitUntil?: string | null;
+
+  // TIME-P1a: RUNS-P1bのTask.status="waiting_for_retry"と対になる、
+  // 「retryのためのRunを新たにclaimしてよい最短時刻」。
+  // core/tact-work/taskRunReconciliation.tsのevaluateTaskRetryEligibility()
+  // が、既存の非時間的条件(Task状態・active Run有無・直近failureの
+  // retryability)と組み合わせて判定する材料の1つにすぎない——この値
+  // 単体はいかなるprovider実行もauthorizeしない(絶対条件Section19)。
+  // 未設定(null)は「時間による制約なし、他の条件さえ揃えば手動trigger
+  // 可」という既定(Section12の明示的preferred default)。
+  nextRetryAt?: string | null;
 
   tableSchema?: WorkTaskTableSchema | null;
 

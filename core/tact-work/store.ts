@@ -111,6 +111,12 @@ export interface WorkRow {
   metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+  // TIME-P1a(supabase/migrations/20261010000000_add_temporal_state_fields.sql)。
+  // optionalにする理由: ARCH-P1aのsubject_version等と全く同じ
+  // (既存tests/tact/work/mapping.test.tsのWorkRowリテラルがこの列を
+  // 含まずに構築されているため、requiredにすると無関係なregressionを
+  // 起こす)。
+  deadline?: string | null;
 }
 
 export interface WorkTaskRow {
@@ -123,6 +129,11 @@ export interface WorkTaskRow {
   table_schema: WorkTaskTableSchema | null;
   created_at: string;
   updated_at: string;
+  // TIME-P1a(supabase/migrations/20261010000000_add_temporal_state_fields.sql)。
+  // optional(WorkRow.deadlineと同じ理由、既存WorkTaskRowリテラルへの
+  // 無関係なregressionを避けるため)。
+  wait_until?: string | null;
+  next_retry_at?: string | null;
 }
 
 export interface TaskDependencyRow {
@@ -258,6 +269,10 @@ export function toWork(row: WorkRow): Work {
     metadata: row.metadata,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // TIME-P1a。rowに列自体が無い(SELECT対象外・移行前の古いfake row等)
+    // 場合はundefinedのまま、列はあるがNULLの場合はnullをそのまま伝播する
+    // (ARCH-P1aのsubjectVersion等と同じ既存の扱い方)。
+    deadline: row.deadline,
   };
 
 }
@@ -277,6 +292,10 @@ export function toWorkTask(row: WorkTaskRow): WorkTask {
     // dispatch keyに対してundefinedを返した場合はnullへ正規化する
     // ——既存のnull/undefinedの扱いと揃える)。
     canonicalCapabilities: resolveTaskCapabilities(row.assigned_capability) ?? null,
+    // TIME-P1a。WorkRow.deadlineと同じ理由でoptionalなrow列をそのまま
+    // 伝播する。
+    waitUntil: row.wait_until,
+    nextRetryAt: row.next_retry_at,
     tableSchema: row.table_schema,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -403,11 +422,14 @@ export function toAuditEvent(row: AuditEventRow): AuditEvent {
 
 }
 
+// TIME-P1a: deadlineをSELECT対象へ追加(追加しないとtoWork()が常に
+// undefinedしか受け取れない)。
 const WORK_COLUMNS =
-  "id, user_id, organization_id, created_by_actor_kind, created_by_actor_id, title, objective, subject, request_type, completion_conditions, required_capabilities, evidence_refs, result_delivered_at, status, primary_conversation_id, started_at, completed_at, failed_at, cancelled_at, cost_summary, metadata, created_at, updated_at";
+  "id, user_id, organization_id, created_by_actor_kind, created_by_actor_id, title, objective, subject, request_type, completion_conditions, required_capabilities, evidence_refs, result_delivered_at, status, primary_conversation_id, started_at, completed_at, failed_at, cancelled_at, cost_summary, metadata, created_at, updated_at, deadline";
 
+// TIME-P1a: wait_until/next_retry_atをSELECT対象へ追加(同じ理由)。
 const TASK_COLUMNS =
-  "id, work_id, parent_task_id, description, status, assigned_capability, table_schema, created_at, updated_at";
+  "id, work_id, parent_task_id, description, status, assigned_capability, table_schema, created_at, updated_at, wait_until, next_retry_at";
 
 const DEPENDENCY_COLUMNS = "task_id, depends_on_task_id, created_at";
 
@@ -601,6 +623,84 @@ export async function updateWorkEvidenceRefs(
 
 }
 
+// =========================
+// TIME-P1a — Temporal field setters
+// =========================
+//
+// 絶対条件(Section16): 「任意のpatch objectで無関係なfieldまで
+// 動かせてしまう」経路を作らない——1 field専用の、明示的な関数だけを
+// 用意する(updateWorkStatus()等、既存のこのfileの設計方針と同じ)。
+// nullを渡すことで明示的にclearできる(絶対条件Section17: clearは
+// 常にこの専用関数を通した明示的な操作であり、他の操作の副作用として
+// 起きない)。
+export type SetTemporalFieldOutcome =
+  | { status: "set" }
+  | { status: "not_found" }
+  | { status: "invalid_timestamp" };
+
+// 絶対条件(TIME-P1a Section10「Do not persist ambiguous local time
+// strings. Internal canonical time should be absolute.」): 末尾に
+// "Z"または明示的なUTC offset(+HH:MM/-HH:MM)を持たない文字列
+// (例: "2026-10-10 12:00:00"、タイムゾーン無しのlocal-lookingな文字列)
+// を拒否する。JSのnew Date()はタイムゾーン無し文字列を実行環境依存の
+// local timeとして解釈してしまうことがあり、そのまま許容すると
+// 「どの時刻を指しているか」がサーバー環境に依存してしまう
+// (絶対条件: 曖昧な時刻を永続化しない)。
+const HAS_EXPLICIT_TIMEZONE_PATTERN = /(?:Z|[+-]\d{2}:\d{2})$/;
+
+// 絶対条件(Section11「malformed timestamp rejected」): Date.parse()
+// できない値、およびtimezoneが曖昧な値は、この時点で安全に拒否する
+// (DBへの書き込み自体を防ぐ、core/tact-work/temporal.tsの
+// isDeadlineExceeded()等がread側でfail safeするのとは別に、write側でも
+// 不正な値を持ち込ませない)。
+function isValidTimestampOrNull(value: string | null): boolean {
+
+  if (value === null) {
+    return true;
+  }
+
+  return HAS_EXPLICIT_TIMEZONE_PATTERN.test(value) && !Number.isNaN(new Date(value).getTime());
+
+}
+
+// Work.deadline: 「このWorkはこの時刻までに完了することが期待されて
+// いる」という事実を設定するだけ——絶対条件Section6: これを設定した
+// こと自体がWork statusやcompletion判定に一切影響しない(completion.ts
+// はこのfieldを一切参照しない)。
+export async function setWorkDeadline(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  deadline: string | null,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<SetTemporalFieldOutcome> {
+
+  if (!isValidTimestampOrNull(deadline)) {
+    return { status: "invalid_timestamp" };
+  }
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return { status: "not_found" };
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { error } = await client
+    .from("tact_works")
+    .update({ deadline, updated_at: new Date().toISOString() })
+    .eq("id", workId)
+    .eq("user_id", userId);
+
+  if (error) {
+    throw error;
+  }
+
+  return { status: "set" };
+
+}
+
 // This is intentionally called only after the answer has been durably added
 // to the canonical Conversation. It is idempotent so retries cannot rewrite
 // the original delivery timestamp.
@@ -782,6 +882,117 @@ export async function updateTaskStatus(
   if (error) {
     throw error;
   }
+
+}
+
+// TIME-P1a: WorkTask.waitUntil。「この時刻より前には再開しない」という
+// gating condition。updateTaskStatus()と対称的な、1 field専用の
+// 明示的な関数(絶対条件Section16)。Task statusとは独立しており、
+// どのstatusのTaskに対しても設定できる(絶対条件: waitUntilは
+// nextRetryAtと違い、特定のstatusにひも付く既存の永続semanticsが
+// まだ無いため、より汎用的な「いつでも設定できるgate」のまま留める
+// ——将来の呼び出し元がstatus前提を必要とする場合はそちら側で判断する)。
+export async function setTaskWaitUntil(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  taskId: string,
+  waitUntil: string | null,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<SetTemporalFieldOutcome> {
+
+  if (!isValidTimestampOrNull(waitUntil)) {
+    return { status: "invalid_timestamp" };
+  }
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return { status: "not_found" };
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { error } = await client
+    .from("tact_tasks")
+    .update({ wait_until: waitUntil, updated_at: new Date().toISOString() })
+    .eq("id", taskId)
+    .eq("work_id", workId);
+
+  if (error) {
+    throw error;
+  }
+
+  return { status: "set" };
+
+}
+
+export interface SetTaskNextRetryAtDeps extends WorkOwnershipDeps {
+  listTasksForWork: typeof listTasksForWork;
+}
+
+const defaultSetTaskNextRetryAtDeps: SetTaskNextRetryAtDeps = { getWork, listTasksForWork };
+
+export type SetTaskNextRetryAtOutcome =
+  | SetTemporalFieldOutcome
+  | { status: "task_not_found" }
+  | { status: "task_not_waiting_for_retry"; taskStatus: TaskStatus };
+
+// TIME-P1a(絶対条件Section11「nextRetryAtはwaiting_for_retryに対して
+// のみ意味を持つ」): updateTaskStatus()と違い、この関数は書き込み前に
+// Task.statusを再確認し、"waiting_for_retry"以外への設定を拒否する
+// (fail closed——nextRetryAtが「retryのための時間的な制約」以外の
+// 意味を持ってしまうことを防ぐ)。null(clear)は、Task.statusに
+// 関わらず常に許可する——RUNS-P1bのretry開始(waiting_for_retry →
+// running)やTask終了時にnextRetryAtをclearする場合、その時点で既に
+// statusはwaiting_for_retryではなくなっているため。
+export async function setTaskNextRetryAt(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  taskId: string,
+  nextRetryAt: string | null,
+  deps: SetTaskNextRetryAtDeps = defaultSetTaskNextRetryAtDeps
+): Promise<SetTaskNextRetryAtOutcome> {
+
+  if (!isValidTimestampOrNull(nextRetryAt)) {
+    return { status: "invalid_timestamp" };
+  }
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return { status: "not_found" };
+  }
+
+  if (nextRetryAt !== null) {
+
+    const tasks = await deps.listTasksForWork(workId, userId, accessToken);
+    const task = tasks.find((candidate) => candidate.id === taskId);
+
+    if (!task) {
+      return { status: "task_not_found" };
+    }
+
+    if (task.status !== "waiting_for_retry") {
+      return { status: "task_not_waiting_for_retry", taskStatus: task.status };
+    }
+
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { error } = await client
+    .from("tact_tasks")
+    .update({ next_retry_at: nextRetryAt, updated_at: new Date().toISOString() })
+    .eq("id", taskId)
+    .eq("work_id", workId);
+
+  if (error) {
+    throw error;
+  }
+
+  return { status: "set" };
 
 }
 

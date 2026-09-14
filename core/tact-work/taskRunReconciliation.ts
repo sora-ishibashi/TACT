@@ -5,6 +5,10 @@ import {
   updateTaskStatus as defaultUpdateTaskStatus,
 } from "./store";
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "./completion";
+// TIME-P1a: nextRetryAtという時間的なgateを、既存の非時間的なretry
+// eligibility条件(Task状態・active Run有無・直近failureのretryability)
+// と組み合わせるためだけに使う、決定論的なpure function。
+import { isRetryTimeSatisfied } from "./temporal";
 import type { Run } from "./types";
 
 // =========================
@@ -31,7 +35,13 @@ export type TaskRetryEligibilityBlockedReasonCode =
   | "task_not_waiting_for_retry"
   | "active_run_exists"
   | "latest_run_missing_or_not_failed"
-  | "latest_failure_not_retryable";
+  | "latest_failure_not_retryable"
+  // TIME-P1a: WorkTask.nextRetryAtが未来を指しているため、他の全条件
+  // (Task状態・active Run有無・直近failureのretryability)を満たして
+  // いても、まだ時間的にretryが許されていない。nextRetryAt未設定
+  // (null)の場合はこの理由に到達しない(Section12の明示的preferred
+  // default: 時間による制約なし)。
+  | "temporal_gate_not_satisfied";
 
 export type TaskRetryEligibility =
   | { status: "eligible" }
@@ -57,12 +67,18 @@ export interface TaskRetryEligibilityDeps {
 
   listRunsForTask: typeof listRunsForTask;
 
+  // TIME-P1a: core/tact-work/clarification.tsのClarificationRequestDeps.
+  // now(既存パターン)と同じ、注入可能な現在時刻。内部でnew Date()を
+  // 直接呼ばない(絶対条件Section18、決定論的なtest)。
+  now: () => Date;
+
 }
 
 const defaultTaskRetryEligibilityDeps: TaskRetryEligibilityDeps = {
   getWork,
   listTasksForWork,
   listRunsForTask,
+  now: () => new Date(),
 };
 
 // Section12の判定順そのまま: Task status = waiting_for_retry → 現在
@@ -115,6 +131,14 @@ export async function evaluateTaskRetryEligibility(
     // 明示されている場合のみeligible。undefined(不明)・falseの
     // いずれもeligibleにしない——推測でretry可能とみなさない。
     return { status: "blocked", reasonCode: "latest_failure_not_retryable" };
+  }
+
+  // TIME-P1a(Section8/12): 非時間的な全条件を満たした後、最後に時間的
+  // gateを確認する。task.nextRetryAt未設定(null)の場合、
+  // isRetryTimeSatisfied()はtrueを返す(Section12の明示的preferred
+  // default: 時間による制約なし、他の条件さえ揃えば手動trigger可)。
+  if (!isRetryTimeSatisfied(deps.now(), task.nextRetryAt)) {
+    return { status: "blocked", reasonCode: "temporal_gate_not_satisfied" };
   }
 
   return { status: "eligible" };

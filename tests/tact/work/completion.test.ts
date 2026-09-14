@@ -252,6 +252,79 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- TIME-P1a Case A: Work.deadlineが過去(超過)でも、Taskが
+  // 全てterminalでなければWorkは変更されない(deadline超過が自動的な
+  // completed/failedを一切引き起こさない、絶対条件Section6/13) ----
+  {
+    const { deps, calls } = makeDeps(
+      [makeTask({ id: "task-1", status: "completed" }), makeTask({ id: "task-2", status: "pending" })],
+      [],
+      makeWork({ deadline: "2020-01-01T00:00:00.000Z" }) // 大幅に過去
+    );
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[TIME-P1a CaseA] Work.deadlineが大幅に過去でも、Taskが全terminalでなければWorkは変更されない(deadline超過は自動的なcompleted/failedを引き起こさない、completion.ts自体はdeadlineを一切参照しない)",
+        outcome.status === "no_change" &&
+          outcome.reason === "tasks_not_all_terminal" &&
+          calls.updateWorkStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- TIME-P1a Case B: Work.deadlineが過去でも、Taskが全て
+  // completedであれば、deadline超過とは無関係に通常通りWork completed
+  // へ確定する(deadlineがcompletion判定を妨げも早めもしない、
+  // 完全に無視される) ----
+  {
+    const { deps, calls } = makeDeps(
+      [makeTask({ id: "task-1", status: "completed" }), makeTask({ id: "task-2", status: "completed" })],
+      [],
+      makeWork({ deadline: "2020-01-01T00:00:00.000Z" })
+    );
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[TIME-P1a CaseB] Work.deadline超過中でも、全Taskがcompletedであれば通常通りWork completedへ確定する(deadlineの有無・値に関わらず既存判定ロジックは完全に不変)",
+        outcome.status === "reconciled" &&
+          outcome.workStatus === "completed" &&
+          calls.updateWorkStatusCalls[calls.updateWorkStatusCalls.length - 1] === "completed"
+      )
+    );
+  }
+
+  // ---- TIME-P1a Case C: Task.nextRetryAtが未来を指すwaiting_for_retry
+  // Taskは、nextRetryAtの値に関わらずTask.status(非terminal)だけで
+  // Work completionをブロックする(temporal fieldの値自体はcompletion
+  // 判定に一切関与しない、絶対条件Section13) ----
+  {
+    const { deps, calls } = makeDeps([
+      makeTask({ id: "task-1", status: "completed" }),
+      makeTask({
+        id: "task-2",
+        status: "waiting_for_retry",
+        // 十分未来のnextRetryAt(値自体はcompletion.tsに一切影響しない
+        // ことを示すためにあえて設定する)。
+        nextRetryAt: "2099-01-01T00:00:00.000Z",
+      }),
+    ]);
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[TIME-P1a CaseC] nextRetryAtが遠い未来のwaiting_for_retry Taskがあっても、Work completionは(temporal fieldの値を一切見ずに)Task.statusだけでブロックされる",
+        outcome.status === "no_change" &&
+          outcome.reason === "tasks_not_all_terminal" &&
+          calls.updateWorkStatusCalls.length === 0
+      )
+    );
+  }
+
   // ---- Case 5: Task 2件(completed + completed) -> Work completed ----
   {
     const { deps, calls } = makeDeps([
