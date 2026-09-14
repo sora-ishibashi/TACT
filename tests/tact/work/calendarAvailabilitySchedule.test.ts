@@ -90,7 +90,39 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     "[answer] a daily window answer parses start/end minutes",
     JSON.stringify(extractDailyWindowAnswer("9:00〜18:00")) === JSON.stringify({ startMinuteOfDay: 540, endMinuteOfDay: 1080 })
   ));
-  results.push(check("[answer] a nonsensical window (end before start) is rejected", extractDailyWindowAnswer("18:00〜9:00") === undefined));
+  // TIME-P1c HARDENING FIX (final-blocker round, Blocker 4): "18:00〜9:00"
+  // is no longer nonsensical — it is now correctly interpreted as an
+  // ordinary overnight window (18:00 today to 9:00 the next local day),
+  // matching how a person actually reads it (see extractDailyWindowAnswer()'s
+  // own comment). Only a genuinely zero-length window ("22:00-22:00") still
+  // fails closed, since silently treating that as a 24-hour window would be
+  // a hidden business-hours assumption this module must never make.
+  results.push(check(
+    "[answer HARDENING Blocker 4] \"18:00〜9:00\" is accepted as an overnight window, not rejected",
+    JSON.stringify(extractDailyWindowAnswer("18:00〜9:00")) === JSON.stringify({ startMinuteOfDay: 1080, endMinuteOfDay: 1980 })
+  ));
+  results.push(check(
+    "[answer HARDENING Blocker 4] a genuinely zero-length window (\"22:00-22:00\") still fails closed, never silently treated as 24 hours",
+    extractDailyWindowAnswer("22:00-22:00") === undefined
+  ));
+
+  // Required cases (Section 10)
+  results.push(check(
+    "[answer HARDENING Blocker 4] \"22:00-02:00\" -> overnight {1320, 1560}",
+    JSON.stringify(extractDailyWindowAnswer("22:00-02:00")) === JSON.stringify({ startMinuteOfDay: 1320, endMinuteOfDay: 1560 })
+  ));
+  results.push(check(
+    "[answer HARDENING Blocker 4] \"22:00〜02:00\" (Japanese fullwidth tilde separator) -> overnight {1320, 1560}",
+    JSON.stringify(extractDailyWindowAnswer("22:00〜02:00")) === JSON.stringify({ startMinuteOfDay: 1320, endMinuteOfDay: 1560 })
+  ));
+  results.push(check(
+    "[answer HARDENING Blocker 4] \"23:45-00:15\" -> overnight {1425, 1455}",
+    JSON.stringify(extractDailyWindowAnswer("23:45-00:15")) === JSON.stringify({ startMinuteOfDay: 1425, endMinuteOfDay: 1455 })
+  ));
+  results.push(check(
+    "[answer HARDENING Blocker 4] \"09:00-18:00\" -> normal same-day {540, 1080}, unaffected by the overnight fix",
+    JSON.stringify(extractDailyWindowAnswer("09:00-18:00")) === JSON.stringify({ startMinuteOfDay: 540, endMinuteOfDay: 1080 })
+  ));
 
   // =========================
   // generateCandidateSchedule — error taxonomy (Section 21: these must stay
@@ -259,6 +291,50 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       reality.candidates[0].startUtc === "2026-09-21T01:00:00.000Z" && // first free slot right after the busy interval
       reality.sourceScope === "own_calendar"
   ));
+
+  // =========================
+  // HARDENING (final-blocker round, Blocker 4 end-to-end, Section 10):
+  // proves the full path — a normal conversational overnight clarification
+  // answer parses, feeds candidateSchedule.ts, and correctly surfaces the
+  // previous-day carry-over as a valid candidate — not just the parser in
+  // isolation.
+  // =========================
+
+  const overnightDailyWindow = extractDailyWindowAnswer("22:00-02:00");
+
+  if (overnightDailyWindow) {
+
+    const overnightRequirement: TemporalRequirement = {
+      durationMinutes: 30,
+      date: { kind: "relative", value: "today" },
+      candidateCount: 1,
+      timezone: "Asia/Tokyo",
+      dailyWindow: overnightDailyWindow,
+    };
+
+    // REFERENCE is 2026-09-14T00:00 UTC = 09:00 JST Monday — "today" resolves
+    // to [2026-09-14T00:00 JST, 2026-09-15T00:00 JST), whose start instant
+    // sits exactly inside the PREVIOUS day's (Sept 13) 22:00-02:00 overnight
+    // window — the same carry-over mechanism proven directly at the slot
+    // engine level in calendarSlotEngine.test.ts's Blocker B tests.
+    const overnightResult = await generateCandidateSchedule({
+      requirement: overnightRequirement,
+      referenceInstantUtc: REFERENCE,
+      provider: createFakeCalendarAvailabilityProvider({}),
+    });
+
+    results.push(check(
+      "[Blocker 4 end-to-end] a user's overnight answer (\"22:00-02:00\") flows through extractDailyWindowAnswer() -> candidateSchedule.ts -> previous-day carry-over -> a valid candidate at local midnight",
+      overnightResult.success &&
+        overnightResult.candidates.length === 1 &&
+        overnightResult.candidates[0].startUtc === "2026-09-13T15:00:00.000Z" // 00:00 JST today, carried over from the prior day's window
+    ));
+
+  } else {
+
+    results.push(check("[Blocker 4 end-to-end] a user's overnight answer flows through to a valid candidate", false, "extractDailyWindowAnswer(\"22:00-02:00\") itself failed"));
+
+  }
 
   // =========================
   // Candidate snapshot pinning (Section 19) round-trips through the same

@@ -97,28 +97,55 @@ function wallTimeMatches(
   return parts.year === year && parts.month === month && parts.day === day && parts.hour === hour && parts.minute === minute;
 }
 
+// The UTC offset (in minutes, local-minus-UTC — so e.g. JST is +540) that
+// `timeZone` has in effect AT a given UTC instant. Built from the same
+// primitive (getZonedParts + Date.UTC) already used elsewhere in this file.
+function getUtcOffsetMinutesAt(epochMs: number, timeZone: string): number {
+  const parts = getZonedParts(epochMs, timeZone);
+  const asIfUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  return (asIfUtc - epochMs) / 60_000;
+}
+
 // Converts an explicit wall-clock date/time in an explicit IANA timezone
-// into a UTC epoch instant. Handles DST correctly by iteratively correcting
-// an initial guess against how that guess actually renders in the target
-// zone (the same technique used by date-fns-tz's zonedTimeToUtc / Temporal
-// polyfills) — two correction passes are sufficient because a timezone
-// offset only ever changes by whole hours at DST boundaries.
+// into a UTC epoch instant.
 //
-// TIME-P1c HARDENING (Blocker D, absolute condition): after computing a
-// candidate instant, this round-trips it back through getZonedParts() in
-// the SAME timezone and confirms it reproduces exactly the requested
-// wall-clock components — the naive correction above can otherwise land on
-// a plausible-looking but wrong instant when the requested local time falls
-// inside a DST spring-forward gap (nonexistent) or fall-back repeat
-// (ambiguous). V1 policy (documented, matches Section 6): a nonexistent
-// local time always throws; an ambiguous one always throws too, since no
-// caller in this codebase currently supplies an explicit UTC offset capable
-// of disambiguating which occurrence was meant — this function never
-// silently normalizes 02:30 to 03:30, and never arbitrarily picks one of
-// two repeated occurrences. Known limitation: assumes DST transitions shift
-// the offset by a whole number of hours, which covers the overwhelming
-// majority of real IANA zones (a small number of historical/exotic
-// half-hour DST shifts, e.g. Lord Howe Island, are out of scope for v1).
+// TIME-P1c HARDENING FIX (final-blocker round, Blocker 3 — Codex-reproduced
+// non-1-hour DST fold, e.g. Australia/Lord_Howe's 30-minute transition):
+// the previous implementation iteratively corrected a naive guess and then
+// only ever probed exactly ±60 minutes to detect a fall-back ambiguity —
+// which silently missed (and would have silently, arbitrarily resolved) an
+// ambiguous wall time in any zone whose DST offset change is not exactly
+// one hour. This is now offset-discovery based instead of hour-hardcoded:
+//
+//   1. Sample the zone's actual UTC offset at two probe instants 24 hours
+//      before and 24 hours after the naive (wall-clock-as-UTC) target — a
+//      margin comfortably wider than any single real-world DST transition's
+//      window, so it reliably lands on ordinary (non-transitioning) ground
+//      on each side of whatever transition might be nearby. If a timezone
+//      ever changed its DST rule twice within 48 hours (essentially
+//      unheard of in real IANA data), this could miss it — a documented,
+//      accepted v1 limitation, not a silent correctness claim.
+//   2. If both probes report the SAME offset, there is no DST transition
+//      anywhere near this wall-clock time at all — exactly one candidate
+//      offset to try.
+//   3. If they differ, there are exactly two candidate offsets (the one
+//      before the transition and the one after) — try both, regardless of
+//      whether they differ by 30, 60, or any other number of minutes; this
+//      is what makes the algorithm general rather than hour-shaped.
+//   4. For each candidate offset, compute the resulting instant and
+//      round-trip it back through getZonedParts() in the SAME timezone,
+//      keeping only the ones that reproduce the exact requested wall-clock
+//      reading.
+//   5. Zero surviving candidates = the wall time never occurred (spring-
+//      forward gap) -> fail closed. Exactly one = the unambiguous, correct
+//      instant. Two or more = the wall time is genuinely ambiguous (a
+//      fall-back fold) -> fail closed rather than arbitrarily picking one.
+//
+// V1 policy (documented, matches Section 6): both failure cases always
+// throw — no caller in this codebase currently supplies an explicit UTC
+// offset capable of disambiguating an ambiguous reading, so this function
+// never silently normalizes a nonexistent time to a different clock time,
+// and never arbitrarily picks one of several repeated occurrences.
 export function zonedWallTimeToUtcMs(
   year: number,
   month: number,
@@ -129,31 +156,30 @@ export function zonedWallTimeToUtcMs(
 ): number {
 
   const targetAsIfUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
-  let guess = targetAsIfUtc;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const OFFSET_DISCOVERY_MARGIN_MS = 24 * 60 * 60_000;
+  const earlyOffsetMinutes = getUtcOffsetMinutesAt(targetAsIfUtc - OFFSET_DISCOVERY_MARGIN_MS, timeZone);
+  const lateOffsetMinutes = getUtcOffsetMinutesAt(targetAsIfUtc + OFFSET_DISCOVERY_MARGIN_MS, timeZone);
 
-    const zoned = getZonedParts(guess, timeZone);
-    const zonedAsIfUtc = Date.UTC(zoned.year, zoned.month - 1, zoned.day, zoned.hour, zoned.minute, zoned.second);
-    const driftMs = zonedAsIfUtc - targetAsIfUtc;
+  const candidateOffsetsMinutes = earlyOffsetMinutes === lateOffsetMinutes
+    ? [earlyOffsetMinutes]
+    : [earlyOffsetMinutes, lateOffsetMinutes];
 
-    if (driftMs === 0) {
-      break;
+  const matchingInstants: number[] = [];
+
+  for (const offsetMinutes of candidateOffsetsMinutes) {
+
+    const candidateInstant = targetAsIfUtc - offsetMinutes * 60_000;
+    const candidateParts = getZonedParts(candidateInstant, timeZone);
+
+    if (wallTimeMatches(candidateParts, year, month, day, hour, minute) && !matchingInstants.includes(candidateInstant)) {
+      matchingInstants.push(candidateInstant);
     }
-
-    guess -= driftMs;
 
   }
 
-  const finalParts = getZonedParts(guess, timeZone);
+  if (matchingInstants.length === 0) {
 
-  if (!wallTimeMatches(finalParts, year, month, day, hour, minute)) {
-
-    // The corrected guess does not reproduce the requested wall time at
-    // all — that wall time never occurred (spring-forward gap). A repeated
-    // (ambiguous) wall time, by contrast, DOES round-trip correctly (both
-    // valid instants reproduce the same reading) — that case is detected
-    // below, independently of this branch.
     throw new InvalidLocalWallTimeError(
       "nonexistent",
       `Local time ${year}-${month}-${day} ${hour}:${minute} in ${timeZone} does not exist (falls inside a DST spring-forward gap).`
@@ -161,31 +187,56 @@ export function zonedWallTimeToUtcMs(
 
   }
 
-  // Ambiguity check (fall-back repeat): if the instant exactly one hour
-  // earlier OR exactly one hour later ALSO reproduces the identical
-  // requested wall-clock reading, this hour occurs twice in this timezone
-  // on this day and `guess` is only one of the two equally-valid instants.
-  // Both directions must be checked — the iterative correction above can
-  // converge to EITHER the earlier (pre-fall-back) or later (post-fall-back)
-  // occurrence depending on where the initial naive guess happened to land,
-  // and the other occurrence is one hour away in whichever direction that
-  // is (per this function's documented whole-hour-DST assumption).
-  const oneHourEarlierParts = getZonedParts(guess - 60 * 60_000, timeZone);
-  const oneHourLaterParts = getZonedParts(guess + 60 * 60_000, timeZone);
-
-  if (
-    wallTimeMatches(oneHourEarlierParts, year, month, day, hour, minute) ||
-    wallTimeMatches(oneHourLaterParts, year, month, day, hour, minute)
-  ) {
+  if (matchingInstants.length >= 2) {
 
     throw new InvalidLocalWallTimeError(
       "ambiguous",
-      `Local time ${year}-${month}-${day} ${hour}:${minute} in ${timeZone} is ambiguous (occurs twice due to a DST fall-back) and no explicit UTC offset was given to disambiguate it.`
+      `Local time ${year}-${month}-${day} ${hour}:${minute} in ${timeZone} is ambiguous (occurs more than once due to a DST fall-back) and no explicit UTC offset was given to disambiguate it.`
     );
 
   }
 
-  return guess;
+  return matchingInstants[0];
+
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// TIME-P1c HARDENING FIX (final-blocker round, Blocker 2 — month/year
+// boundary crash): deterministic "local calendar date ± N days" arithmetic
+// that never passes an out-of-range day (0, 32, -1, ...) into
+// zonedWallTimeToUtcMs(). Before this function existed, callers computed
+// "previous/next local day" by passing `day - 1` / `day + 1` directly to
+// zonedWallTimeToUtcMs() and relying on `Date.UTC`'s own day-overflow
+// rollover to land on the right real calendar date — which worked fine
+// against the ORIGINAL (pre-DST-hardening) implementation, but the
+// DST-safety round-trip check added since then compares the result's real
+// calendar day (always 1-31) against the literal (possibly 0 or 32) day
+// that was passed in, which can never match, and so incorrectly raised
+// InvalidLocalWallTimeError purely because a month or year boundary was
+// crossed (e.g. seeding "the day before 2026-11-01" as day=0).
+//
+// This never passes an overflowing day into zonedWallTimeToUtcMs(). It
+// anchors at LOCAL NOON of the given, already-valid (year, month, day) —
+// noon is never subject to a DST spring-forward gap or fall-back ambiguity
+// in any real IANA zone, so this starting call always succeeds — adds
+// `deltaDays` whole days as raw milliseconds (safe arithmetic, no calendar
+// validity concerns), and re-derives the real resulting calendar date via
+// getZonedParts(). A DST shift can move the landing instant a few hours off
+// noon, but never far enough to cross a midnight boundary, so the derived
+// (year, month, day) is always exactly the intended calendar date.
+export function addCalendarDays(
+  year: number,
+  month: number,
+  day: number,
+  deltaDays: number,
+  timeZone: string
+): { year: number; month: number; day: number } {
+
+  const anchorMs = zonedWallTimeToUtcMs(year, month, day, 12, 0, timeZone) + deltaDays * MS_PER_DAY;
+  const parts = getZonedParts(anchorMs, timeZone);
+
+  return { year: parts.year, month: parts.month, day: parts.day };
 
 }
 

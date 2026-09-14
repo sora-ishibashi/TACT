@@ -53,7 +53,26 @@ export function extractTimezoneAnswer(input: string): string | undefined {
 }
 
 const DAILY_WINDOW_PATTERN = /([01]?\d|2[0-3]):([0-5]\d)\s*(?:〜|～|-|–|to)\s*([01]?\d|2[0-3]):([0-5]\d)/;
+const MINUTES_PER_DAY = 24 * 60;
 
+// TIME-P1c HARDENING FIX (final-blocker round, Blocker 4 — Codex-reproduced
+// rejection of normal conversational overnight input): this previously
+// rejected outright whenever the parsed end-of-day minute was not strictly
+// greater than the start ("22:00-02:00" -> startMinuteOfDay=1320,
+// endMinuteOfDay=120, and 120 > 1320 is false), even though
+// core/tact-work/slotEngine.ts's DailyWindow contract has always supported
+// an overnight window via endMinuteOfDay >= 1440 (see its own doc comment)
+// — this function just never produced that shape from ordinary user input.
+// A raw end-of-day minute at or before the start is now interpreted as
+// "the next local day", matching how a person actually reads "22:00-02:00":
+// startMinuteOfDay=1320, endMinuteOfDay=1560 (120 + 1440).
+//
+// Zero-length input ("22:00-22:00") is deliberately EXCLUDED from this
+// reinterpretation and fails closed instead — silently treating it as an
+// implicit 24-hour window would be exactly the kind of hidden
+// business-hours assumption Section 9's absolute condition forbids; if the
+// user meant a full day, they must say so some other way (this module
+// never invents that meaning on their behalf).
 export function extractDailyWindowAnswer(input: string): DailyWindow | undefined {
 
   const match = input.match(DAILY_WINDOW_PATTERN);
@@ -63,9 +82,17 @@ export function extractDailyWindowAnswer(input: string): DailyWindow | undefined
   }
 
   const startMinuteOfDay = Number(match[1]) * 60 + Number(match[2]);
-  const endMinuteOfDay = Number(match[3]) * 60 + Number(match[4]);
+  const rawEndMinuteOfDay = Number(match[3]) * 60 + Number(match[4]);
 
-  return endMinuteOfDay > startMinuteOfDay ? { startMinuteOfDay, endMinuteOfDay } : undefined;
+  if (rawEndMinuteOfDay === startMinuteOfDay) {
+    return undefined;
+  }
+
+  const endMinuteOfDay = rawEndMinuteOfDay > startMinuteOfDay
+    ? rawEndMinuteOfDay
+    : rawEndMinuteOfDay + MINUTES_PER_DAY;
+
+  return { startMinuteOfDay, endMinuteOfDay };
 
 }
 
@@ -167,6 +194,28 @@ export interface ToCandidateSlotSnapshotMetadataParams {
   readonly slotGranularityMinutes: number;
 }
 
+interface RequestHashInput {
+  readonly resolvedRange: { readonly startUtc: string; readonly endUtc: string };
+  readonly timezone: string;
+  readonly dailyWindow: DailyWindow;
+  readonly candidateCount: number;
+  readonly slotGranularityMinutes: number;
+  readonly sourceScope: CalendarAvailabilitySourceScope;
+}
+
+// Shared by both toCandidateSlotSnapshotMetadata() (write) and
+// readCandidateSlotSnapshotMetadata() (TIME-P1c HARDENING, final-blocker
+// round Section 12: read-time recomputation below) — one implementation,
+// so the hash a snapshot is written with and the hash it is checked against
+// on read can never silently diverge.
+function computeRequestHash(input: RequestHashInput): string {
+  return sha256Hex(canonicalStringify(input));
+}
+
+function computeCandidateHash(candidates: readonly CandidateSlot[]): string {
+  return sha256Hex(canonicalStringify(candidates));
+}
+
 export function toCandidateSlotSnapshotMetadata(
   params: ToCandidateSlotSnapshotMetadataParams
 ): CandidateSlotSnapshotMetadata {
@@ -179,16 +228,16 @@ export function toCandidateSlotSnapshotMetadata(
   const resolvedRangeCopy = deepFreezeClone(params.resolvedRange as { startUtc: string; endUtc: string });
   const dailyWindowCopy = deepFreezeClone(params.dailyWindow as DailyWindow);
 
-  const requestHash = sha256Hex(canonicalStringify({
+  const requestHash = computeRequestHash({
     resolvedRange: resolvedRangeCopy,
     timezone: params.timezone,
     dailyWindow: dailyWindowCopy,
     candidateCount: params.candidateCount,
     slotGranularityMinutes: params.slotGranularityMinutes,
     sourceScope: params.sourceScope,
-  }));
+  });
 
-  const candidateHash = sha256Hex(canonicalStringify(candidatesCopy));
+  const candidateHash = computeCandidateHash(candidatesCopy);
 
   return Object.freeze({
     version: 2 as const,
@@ -249,12 +298,45 @@ export function readCandidateSlotSnapshotMetadata(
     return undefined;
   }
 
+  const resolvedRange = { startUtc: value.resolvedRange.startUtc, endUtc: value.resolvedRange.endUtc };
+  const dailyWindow = { startMinuteOfDay: value.dailyWindow.startMinuteOfDay, endMinuteOfDay: value.dailyWindow.endMinuteOfDay };
+
+  // TIME-P1c HARDENING FIX (final-blocker round, Section 12: snapshot
+  // reader hash validation). Structural shape validation above already
+  // rejects a value that's the wrong TYPE — this additionally rejects a
+  // value that has the right shape but has been tampered with, corrupted in
+  // storage, or hand-edited (e.g. Work.metadata written directly rather
+  // than through toCandidateSlotSnapshotMetadata()): recomputing both
+  // hashes from the parsed fields and refusing to trust the stored
+  // snapshot at all if either does not match. This is a narrow integrity
+  // check on the fields this reader already parses — it does not attempt a
+  // broader structural re-validation of every candidate field beyond what
+  // isCandidateSlot() already checks (deferred, non-blocking debt).
+  const recomputedRequestHash = computeRequestHash({
+    resolvedRange,
+    timezone: value.timezone,
+    dailyWindow,
+    candidateCount: value.candidateCount,
+    slotGranularityMinutes: value.slotGranularityMinutes,
+    sourceScope: "own_calendar",
+  });
+
+  if (recomputedRequestHash !== value.requestHash) {
+    return undefined;
+  }
+
+  const recomputedCandidateHash = computeCandidateHash(value.candidates);
+
+  if (recomputedCandidateHash !== value.candidateHash) {
+    return undefined;
+  }
+
   return {
     version: 2,
     generatedAtUtc: value.generatedAtUtc,
-    resolvedRange: { startUtc: value.resolvedRange.startUtc, endUtc: value.resolvedRange.endUtc },
+    resolvedRange,
     timezone: value.timezone,
-    dailyWindow: { startMinuteOfDay: value.dailyWindow.startMinuteOfDay, endMinuteOfDay: value.dailyWindow.endMinuteOfDay },
+    dailyWindow,
     candidateCount: value.candidateCount,
     slotGranularityMinutes: value.slotGranularityMinutes,
     sourceScope: "own_calendar",

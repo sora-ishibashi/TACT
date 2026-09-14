@@ -268,6 +268,79 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     !malformedBusyEntry.success && malformedBusyEntry.errorCode === "malformed_response"
   ));
 
+  // =========================
+  // HARDENING FIX (final-blocker round, Blocker 1 — Codex-reproduced FALSE
+  // FREE TIME): raw busy periods with a value-invalid (not merely
+  // wrong-typed) start/end must fail the whole response as
+  // malformed_response, at THIS adapter boundary — never reach
+  // calendarAvailability.ts's normalizeBusyIntervals() at all, where they
+  // would previously be silently dropped, potentially reporting a genuinely
+  // busy window as free.
+  // =========================
+
+  function busyResponse(busy: readonly Record<string, unknown>[]) {
+    return { successful: true, data: envelope({ calendars: { primary: { busy, is_reliable: true } } }) };
+  }
+
+  const hostileBusyCases: Array<{ label: string; busy: Record<string, unknown>[] }> = [
+    { label: "start is not a valid instant", busy: [{ start: "not-an-instant", end: "2026-09-21T01:00:00Z" }] },
+    { label: "end is not a valid instant", busy: [{ start: "2026-09-21T00:00:00Z", end: "not-an-instant" }] },
+    { label: "start is missing", busy: [{ end: "2026-09-21T01:00:00Z" }] },
+    { label: "end is missing", busy: [{ start: "2026-09-21T00:00:00Z" }] },
+    { label: "reversed interval (end before start)", busy: [{ start: "2026-09-21T02:00:00Z", end: "2026-09-21T01:00:00Z" }] },
+    { label: "equal start/end (zero-length)", busy: [{ start: "2026-09-21T01:00:00Z", end: "2026-09-21T01:00:00Z" }] },
+    { label: "start is the wrong type (number)", busy: [{ start: 1758416400000, end: "2026-09-21T01:00:00Z" }] },
+    { label: "start is a naive datetime with no Z/offset", busy: [{ start: "2026-09-21T00:00:00", end: "2026-09-21T01:00:00Z" }] },
+    {
+      label: "one malformed interval mixed with an otherwise-valid one",
+      busy: [
+        { start: "2026-09-22T00:00:00Z", end: "2026-09-22T01:00:00Z" }, // valid
+        { start: "not-an-instant", end: "2026-09-21T01:00:00Z" }, // malformed
+      ],
+    },
+  ];
+
+  for (const { label, busy } of hostileBusyCases) {
+    const result = normalizeGoogleCalendarFindFreeSlotsOutput(busyResponse(busy), REQUEST);
+    results.push(check(
+      `[HARDENING Blocker 1: raw busy validation] ${label} -> malformed_response (never silently dropped into false-free time)`,
+      !result.success && result.errorCode === "malformed_response"
+    ));
+  }
+
+  // End-to-end proof (Section 3): a hostile raw busy period reaching the
+  // REAL adapter (mocked Composio, no live call) must propagate all the way
+  // through candidateSchedule.ts as a hard failure producing NO candidates
+  // — never an empty-busy-list success that would let the slot engine
+  // fabricate free time.
+  const hostileEndToEndProvider = createComposioGoogleCalendarAvailabilityProvider({
+    client: {
+      tools: {
+        execute: async () => busyResponse([{ start: "not-an-instant", end: "2026-09-21T01:00:00.000Z" }]),
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- narrow mock satisfying only the Pick<Composio,"tools"> shape this provider actually uses
+    } as any,
+    tactUserId: "user-1",
+    connectedAccountId: "conn-abc",
+  });
+
+  const hostileEndToEndResult = await generateCandidateSchedule({
+    requirement: {
+      durationMinutes: 30,
+      date: { kind: "relative", value: "next_week" },
+      candidateCount: 3,
+      timezone: "Asia/Tokyo",
+      dailyWindow: { startMinuteOfDay: 540, endMinuteOfDay: 1080 },
+    },
+    referenceInstantUtc: "2026-09-14T00:00:00.000Z",
+    provider: hostileEndToEndProvider,
+  });
+
+  results.push(check(
+    "[HARDENING Blocker 1: end-to-end] a malformed raw busy timestamp from the real adapter propagates through candidateSchedule.ts as malformed_response with ZERO candidates — the false-free path is fully closed",
+    !hostileEndToEndResult.success && hostileEndToEndResult.error.code === "malformed_response"
+  ));
+
   for (const notAnObject of [null, "a string", 42, ["array"]]) {
     const result = normalizeGoogleCalendarFindFreeSlotsOutput(notAnObject, REQUEST);
     results.push(check(
@@ -400,7 +473,12 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // used elsewhere in this suite (e.g. tests/tact/work/temporalRequirements.test.ts).
   // =========================
 
-  const otherCalendarSlugPattern = /GOOGLECALENDAR_(?!FIND_FREE_SLOTS)[A-Z_]+/;
+  // Matches only a QUOTED slug-shaped string literal (how every real
+  // Composio action slug actually appears in this codebase, e.g.
+  // "GOOGLECALENDAR_FIND_FREE_SLOTS") — narrower than a bare identifier
+  // search, which previously false-positived on legitimate prose mentioning
+  // the unrelated COMPOSIO_GOOGLECALENDAR_TOOLKIT_VERSION env var name.
+  const otherCalendarSlugPattern = /"GOOGLECALENDAR_(?!FIND_FREE_SLOTS")[A-Z_]+"/;
   results.push(check(
     "[safety] no other googlecalendar action slug (create/update/delete/move/invite/RSVP or otherwise) is named anywhere in the mapper or provider files",
     !otherCalendarSlugPattern.test(mapperSource) && !otherCalendarSlugPattern.test(providerSource)

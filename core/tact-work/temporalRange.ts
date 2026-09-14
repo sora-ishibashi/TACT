@@ -17,7 +17,7 @@
 
 import type { TemporalDateConstraint } from "./temporalRequirements";
 import { isValidCalendarDate } from "./temporalRequirements";
-import { getZonedParts, isExplicitUtcInstant, isKnownTimeZone, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "./timezone";
+import { addCalendarDays, getZonedParts, isExplicitUtcInstant, isKnownTimeZone, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "./timezone";
 
 export interface ResolvedTemporalRange {
   readonly startUtc: string;
@@ -45,21 +45,22 @@ export type TemporalRangeResolution =
 
 const FRIDAY_WEEKDAY = 5;
 const DAYS_PER_WEEK = 7;
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 function startOfLocalDayUtc(year: number, month: number, day: number, timezone: string): number {
   return zonedWallTimeToUtcMs(year, month, day, 0, 0, timezone);
 }
 
-// Adds `days` calendar days to a (year, month, day) local date by going
-// through a UTC-noon anchor for that date — noon avoids any ambiguity from
-// DST transitions landing exactly on the added day's local midnight, and
-// then re-reads the resulting UTC instant's local date via the same
-// timezone. Deterministic; never touches server/process time.
+// TIME-P1c HARDENING FIX (final-blocker round, Blocker 2): delegates to
+// core/tact-work/timezone.ts's addCalendarDays() — the single, shared,
+// deterministic local-calendar-date arithmetic helper — rather than this
+// file keeping its own duplicate noon-anchor implementation. This file's
+// own copy was already safe (it never passed an overflowing day into
+// zonedWallTimeToUtcMs()); core/tact-work/slotEngine.ts's equivalent
+// arithmetic was not, which is what actually crashed at month/year
+// boundaries. Kept as a thin local alias so every call site below reads
+// unchanged.
 function addLocalDays(year: number, month: number, day: number, days: number, timezone: string): { year: number; month: number; day: number } {
-  const anchorUtc = zonedWallTimeToUtcMs(year, month, day, 12, 0, timezone) + days * MS_PER_DAY;
-  const parts = getZonedParts(anchorUtc, timezone);
-  return { year: parts.year, month: parts.month, day: parts.day };
+  return addCalendarDays(year, month, day, days, timezone);
 }
 
 function singleDayRange(year: number, month: number, day: number, timezone: string): { startUtc: number; endUtc: number } {

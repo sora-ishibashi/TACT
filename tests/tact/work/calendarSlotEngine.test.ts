@@ -1,5 +1,6 @@
 import { normalizeBusyIntervals } from "../../../core/tact-work/calendarAvailability";
 import { generateCandidateSlots, CANDIDATE_SLOT_GRANULARITY_MINUTES } from "../../../core/tact-work/slotEngine";
+import { getZonedParts } from "../../../core/tact-work/timezone";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 // TIME-P1c: deterministic busy-interval normalization + slot generation.
@@ -320,6 +321,168 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     "[slots HARDENING Blocker A] the exact grid-aligned boundary immediately after a busy interval is still offered, never skipped",
     gridAfterBusyBoundary[0]?.startUtc === "2026-09-14T00:45:00.000Z" // 09:45 JST, exactly busy.end, grid-aligned
   ));
+
+  // =========================
+  // TIME-P1c HARDENING (final-blocker round, Blocker 2): month/year/leap
+  // boundary calendar-day arithmetic. Before the fix, generateCandidateSlots()
+  // threw InvalidLocalWallTimeError merely because a scan crossed a
+  // month/year boundary (e.g. seeding "the day before 2026-11-01" computed
+  // day=0) — this is a pure crash-prevention regression suite, not a DST
+  // test (none of these dates are DST transitions).
+  // =========================
+
+  const monthBoundaryBase = {
+    timezone: "Asia/Tokyo",
+    dailyWindow: { startMinuteOfDay: 540, endMinuteOfDay: 1080 },
+    durationMinutes: 30,
+    busyIntervals: [] as const,
+    candidateCount: 3,
+  };
+
+  const rangeBeginningNovemberFirst = generateCandidateSlots({
+    ...monthBoundaryBase,
+    rangeStartUtc: "2026-10-31T15:00:00.000Z", // 2026-11-01T00:00 JST — seeding "the previous day" must compute 2026-10-31, not day=0
+    rangeEndUtc: "2026-11-02T15:00:00.000Z",
+  });
+  results.push(check(
+    "[slots HARDENING Blocker 2] a range beginning exactly on a month boundary (2026-11-01) does not throw and produces candidates",
+    rangeBeginningNovemberFirst.length === 3 && rangeBeginningNovemberFirst[0].startUtc === "2026-11-01T00:00:00.000Z"
+  ));
+
+  const rangeCrossingOctToNov = generateCandidateSlots({
+    ...monthBoundaryBase,
+    rangeStartUtc: "2026-10-30T15:00:00.000Z", // 2026-10-31T00:00 JST
+    rangeEndUtc: "2026-11-01T15:00:00.000Z", // 2026-11-02T00:00 JST — the day-advancement loop must cross 10/31 -> 11/1 without throwing
+    candidateCount: 200,
+  });
+  results.push(check(
+    "[slots HARDENING Blocker 2] a range crossing 2026-10-31 -> 2026-11-01 does not throw and produces candidates on both sides of the boundary",
+    rangeCrossingOctToNov.some((slot) => slot.startUtc.startsWith("2026-10-31")) &&
+      rangeCrossingOctToNov.some((slot) => slot.startUtc.startsWith("2026-11-01"))
+  ));
+
+  const yearBoundary = generateCandidateSlots({
+    ...monthBoundaryBase,
+    rangeStartUtc: "2026-12-30T15:00:00.000Z", // 2026-12-31T00:00 JST
+    rangeEndUtc: "2027-01-01T15:00:00.000Z", // 2027-01-02T00:00 JST
+    candidateCount: 200,
+  });
+  results.push(check(
+    "[slots HARDENING Blocker 2] a year boundary (2026-12-31 -> 2027-01-01) does not throw and produces candidates on both sides",
+    yearBoundary.some((slot) => slot.startUtc.startsWith("2026-12-31")) &&
+      yearBoundary.some((slot) => slot.startUtc.startsWith("2027-01-01"))
+  ));
+
+  const leapDayBoundary = generateCandidateSlots({
+    ...monthBoundaryBase,
+    rangeStartUtc: "2028-02-27T15:00:00.000Z", // 2028-02-28T00:00 JST
+    rangeEndUtc: "2028-03-01T15:00:00.000Z", // 2028-03-02T00:00 JST
+    candidateCount: 200,
+  });
+  results.push(check(
+    "[slots HARDENING Blocker 2] a leap-day boundary (2028-02-28 -> 02-29 -> 03-01) does not throw and produces candidates on all three days",
+    leapDayBoundary.some((slot) => slot.startUtc.startsWith("2028-02-28")) &&
+      leapDayBoundary.some((slot) => slot.startUtc.startsWith("2028-02-29")) &&
+      leapDayBoundary.some((slot) => slot.startUtc.startsWith("2028-03-01"))
+  ));
+
+  const overnightAcrossMonthBoundary = generateCandidateSlots({
+    timezone: "Asia/Tokyo",
+    dailyWindow: { startMinuteOfDay: 22 * 60, endMinuteOfDay: 26 * 60 }, // 22:00-02:00 overnight
+    durationMinutes: 30,
+    busyIntervals: [],
+    rangeStartUtc: "2026-10-30T15:00:00.000Z", // 2026-10-31T00:00 JST
+    rangeEndUtc: "2026-11-01T15:00:00.000Z",
+    candidateCount: 200,
+  });
+  results.push(check(
+    "[slots HARDENING Blocker 2] an overnight window spanning a month boundary (Oct 31 22:00 -> Nov 1 02:00) does not throw",
+    overnightAcrossMonthBoundary.some((slot) => slot.startUtc === "2026-10-31T13:00:00.000Z") // 22:00 JST Oct 31
+  ));
+
+  // =========================
+  // TIME-P1c HARDENING (final-blocker round, Section 8): candidate
+  // generation across real DST transitions — verifies local-grid alignment
+  // survives the offset change, no duplicate/corrupted instants, and
+  // deterministic chronological ordering. Dates are the same
+  // real, verified transitions used in temporalHardening.test.ts.
+  // =========================
+
+  function assertGridAcrossDst(
+    label: string,
+    timezone: string,
+    rangeStartUtc: string,
+    rangeEndUtc: string,
+    dailyWindow: { startMinuteOfDay: number; endMinuteOfDay: number }
+  ) {
+
+    const slots = generateCandidateSlots({
+      rangeStartUtc,
+      rangeEndUtc,
+      timezone,
+      dailyWindow,
+      durationMinutes: 30,
+      busyIntervals: [],
+      candidateCount: 500,
+    });
+
+    results.push(check(`[Section 8 grid-across-DST] ${label}: at least one candidate was generated`, slots.length > 0));
+
+    const allGridAligned = slots.every((slot) => {
+      const parts = getZonedParts(Date.parse(slot.startUtc), timezone);
+      return parts.minute % CANDIDATE_SLOT_GRANULARITY_MINUTES === 0;
+    });
+    results.push(check(`[Section 8 grid-across-DST] ${label}: every candidate remains local-grid-aligned (:00/:15/:30/:45) on both sides of the transition`, allGridAligned));
+
+    const startTimes = slots.map((slot) => slot.startUtc);
+    const uniqueStartTimes = new Set(startTimes);
+    results.push(check(`[Section 8 grid-across-DST] ${label}: no duplicate candidate instant`, uniqueStartTimes.size === startTimes.length));
+
+    const isSortedAscending = startTimes.every((value, index) => index === 0 || value > startTimes[index - 1]);
+    results.push(check(`[Section 8 grid-across-DST] ${label}: candidates are in strict, deterministic chronological order`, isSortedAscending));
+
+  }
+
+  // America/New_York spring-forward: 2026-03-08, 02:00 -> 03:00 (60-minute
+  // shift). Overnight window 00:00-06:00 spans straight across the gap.
+  assertGridAcrossDst(
+    "America/New_York spring-forward",
+    "America/New_York",
+    "2026-03-07T00:00:00.000Z",
+    "2026-03-09T00:00:00.000Z",
+    { startMinuteOfDay: 0, endMinuteOfDay: 360 }
+  );
+
+  // America/New_York fall-back: 2026-11-01, 02:00 -> 01:00 (60-minute
+  // shift, the 01:00-01:59 hour occurs twice).
+  assertGridAcrossDst(
+    "America/New_York fall-back",
+    "America/New_York",
+    "2026-10-31T00:00:00.000Z",
+    "2026-11-02T00:00:00.000Z",
+    { startMinuteOfDay: 0, endMinuteOfDay: 360 }
+  );
+
+  // Australia/Lord_Howe fall-back fold: 2026-04-05, a real 30-minute
+  // shift (11:00 daylight -> 10:30 standard) — the smallest realistic
+  // real-world DST delta, and still an exact multiple of the 15-minute
+  // grid, which is exactly why fixed-ms stepping remains grid-aligned here.
+  assertGridAcrossDst(
+    "Australia/Lord_Howe fall-back (30-minute fold)",
+    "Australia/Lord_Howe",
+    "2026-04-04T12:00:00.000Z",
+    "2026-04-06T12:00:00.000Z",
+    { startMinuteOfDay: 0, endMinuteOfDay: 180 } // 00:00-03:00 local, spans the 01:45 fold
+  );
+
+  // Australia/Lord_Howe spring-forward gap: 2026-10-04, 02:00 -> 02:30.
+  assertGridAcrossDst(
+    "Australia/Lord_Howe spring-forward (30-minute gap)",
+    "Australia/Lord_Howe",
+    "2026-10-03T12:00:00.000Z",
+    "2026-10-05T12:00:00.000Z",
+    { startMinuteOfDay: 0, endMinuteOfDay: 180 }
+  );
 
   return summarize("work/calendarSlotEngine", results);
 }

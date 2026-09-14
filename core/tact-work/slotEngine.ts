@@ -17,7 +17,7 @@
 //     enforces no business-hours opinion of its own.
 
 import type { BusyInterval } from "./calendarAvailability";
-import { getZonedParts, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "./timezone";
+import { addCalendarDays, getZonedParts, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "./timezone";
 
 export const CANDIDATE_SLOT_GRANULARITY_MINUTES = 15;
 export const DEFAULT_CANDIDATE_COUNT = 3;
@@ -83,10 +83,15 @@ function alignUpToLocalGrid(instantMs: number, timezone: string, granularityMinu
 
 }
 
-// JS's Date.UTC (which zonedWallTimeToUtcMs is built on) normalizes an
-// out-of-range day (e.g. day=31 in a 30-day month) into the following
-// month, so passing day+1 here correctly lands on the next calendar day's
-// local midnight even across a month/year boundary.
+// TIME-P1c HARDENING FIX (final-blocker round, Blocker 2 — month/year
+// boundary crash): the overflow branch previously passed `day + 1` directly
+// into zonedWallTimeToUtcMs(), relying on Date.UTC's own rollover to land
+// on the right real calendar date — this broke once zonedWallTimeToUtcMs()
+// started round-trip-validating its result (Blocker D), since a real
+// calendar day (1-31) can never equal the literal overflowing `day + 1`
+// (e.g. day=32) that was passed in. addCalendarDays() (timezone.ts) is now
+// used to normalize the day FIRST, so only ever-valid (year, month, day)
+// triples reach zonedWallTimeToUtcMs().
 //
 // TIME-P1c HARDENING (Blocker D): returns undefined, rather than throwing
 // or silently normalizing, when this specific day's window boundary falls
@@ -101,7 +106,8 @@ function windowBoundUtcMs(year: number, month: number, day: number, minuteOfDay:
 
     if (minuteOfDay >= 1440) {
       const overflowMinute = minuteOfDay - 1440;
-      return zonedWallTimeToUtcMs(year, month, day + 1, Math.floor(overflowMinute / 60), overflowMinute % 60, timezone);
+      const nextDay = addCalendarDays(year, month, day, 1, timezone);
+      return zonedWallTimeToUtcMs(nextDay.year, nextDay.month, nextDay.day, Math.floor(overflowMinute / 60), overflowMinute % 60, timezone);
     }
 
     return zonedWallTimeToUtcMs(year, month, day, Math.floor(minuteOfDay / 60), minuteOfDay % 60, timezone);
@@ -152,16 +158,13 @@ export function generateCandidateSlots(input: SlotEngineInput): CandidateSlot[] 
   // [rangeStart, rangeEnd) simply clips to an empty effective window below
   // (effectiveStart >= effectiveEnd) and contributes zero candidates, same
   // as any other out-of-range day.
+  // TIME-P1c HARDENING FIX (final-blocker round, Blocker 2): uses
+  // addCalendarDays() rather than passing `day - 1` directly into a
+  // timezone conversion — see addCalendarDays()'s own comment (timezone.ts)
+  // for why that overflowing-day pattern broke at month/year boundaries
+  // once zonedWallTimeToUtcMs() started round-trip-validating its result.
   const rangeStartLocalParts = getZonedParts(rangeStart, input.timezone);
-  const seedAnchorMs = zonedWallTimeToUtcMs(
-    rangeStartLocalParts.year,
-    rangeStartLocalParts.month,
-    rangeStartLocalParts.day - 1,
-    12,
-    0,
-    input.timezone
-  );
-  let cursor = getZonedParts(seedAnchorMs, input.timezone);
+  let cursor = addCalendarDays(rangeStartLocalParts.year, rangeStartLocalParts.month, rangeStartLocalParts.day, -1, input.timezone);
 
   // A generous but finite bound (a bit over a year of days) so a
   // misconfigured range can never spin forever; real usage never
@@ -227,8 +230,13 @@ export function generateCandidateSlots(input: SlotEngineInput): CandidateSlot[] 
     // entirely. Noon is never subject to a spring-forward/fall-back DST gap
     // or ambiguity, so this is always exactly "cursor's day + 1" regardless
     // of window timing or DST.
-    const nextDayAnchorMs = zonedWallTimeToUtcMs(cursor.year, cursor.month, cursor.day + 1, 12, 0, input.timezone);
-    cursor = getZonedParts(nextDayAnchorMs, input.timezone);
+    //
+    // TIME-P1c HARDENING FIX (final-blocker round, Blocker 2): uses
+    // addCalendarDays() rather than passing `cursor.day + 1` directly into
+    // a timezone conversion, which broke at month/year boundaries (e.g.
+    // day=31 -> 32) once zonedWallTimeToUtcMs() started round-trip-
+    // validating its result.
+    cursor = addCalendarDays(cursor.year, cursor.month, cursor.day, 1, input.timezone);
 
   }
 

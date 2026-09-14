@@ -1,4 +1,4 @@
-import { isExplicitUtcInstant, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "../../../core/tact-work/timezone";
+import { isExplicitUtcInstant, zonedWallTimeToUtcMs, addCalendarDays, InvalidLocalWallTimeError } from "../../../core/tact-work/timezone";
 import { resolveTemporalDateRange } from "../../../core/tact-work/temporalRange";
 import { check, summarize, type CheckResult } from "../lib/check";
 
@@ -142,6 +142,89 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   results.push(check(
     "[Blocker D] a requested date whose local midnight is a real DST gap fails closed with a distinguishable dst_invalid_local_time, never a fabricated range",
     !dstInvalidDateRange.success && dstInvalidDateRange.code === "dst_invalid_local_time"
+  ));
+
+  // =========================
+  // TIME-P1c HARDENING (final-blocker round, Blocker 3): non-1-hour DST
+  // fold/gap detection (Australia/Lord_Howe, a real 30-minute DST offset
+  // change — 10:30 standard to 11:00 daylight). Both dates below were
+  // confirmed by directly scanning zonedWallTimeToUtcMs() across all of
+  // 2026 for this zone before writing these assertions, not guessed. The
+  // OLD ±60-minute-hardcoded ambiguity probe would have missed both of
+  // these entirely (silently accepting an ambiguous/nonexistent time),
+  // since neither transition is a 60-minute shift.
+  // =========================
+
+  let lordHoweAmbiguous: InvalidLocalWallTimeError | undefined;
+  try {
+    zonedWallTimeToUtcMs(2026, 4, 5, 1, 45, "Australia/Lord_Howe"); // repeated wall time across the 30-minute fall-back fold
+  } catch (error) {
+    if (error instanceof InvalidLocalWallTimeError) lordHoweAmbiguous = error;
+  }
+  results.push(check(
+    "[Blocker 3] Australia/Lord_Howe's repeated 2026-04-05 01:45 (a real 30-minute DST fold, not a 60-minute one) is detected as ambiguous and fails closed",
+    lordHoweAmbiguous?.reason === "ambiguous"
+  ));
+
+  let lordHoweNonexistent: InvalidLocalWallTimeError | undefined;
+  try {
+    zonedWallTimeToUtcMs(2026, 10, 4, 2, 15, "Australia/Lord_Howe"); // inside the 30-minute spring-forward gap
+  } catch (error) {
+    if (error instanceof InvalidLocalWallTimeError) lordHoweNonexistent = error;
+  }
+  results.push(check(
+    "[Blocker 3] Australia/Lord_Howe's nonexistent 2026-10-04 02:15 (a real 30-minute DST gap) is detected as nonexistent and fails closed",
+    lordHoweNonexistent?.reason === "nonexistent"
+  ));
+
+  results.push(check(
+    "[Blocker 3] an ordinary Lord_Howe wall time well outside either transition resolves normally, without falsely flagging every date in this zone",
+    (() => {
+      try {
+        zonedWallTimeToUtcMs(2026, 6, 15, 9, 0, "Australia/Lord_Howe");
+        return true;
+      } catch {
+        return false;
+      }
+    })()
+  ));
+
+  // =========================
+  // TIME-P1c HARDENING (final-blocker round, Blocker 2): pure
+  // local-calendar-date arithmetic (addCalendarDays), independent of the
+  // slot engine — see also tests/tact/work/calendarSlotEngine.test.ts for
+  // the end-to-end candidate-generation coverage across these same
+  // boundaries.
+  // =========================
+
+  results.push(check(
+    "[Blocker 2] 2026-11-01 previous day -> 2026-10-31",
+    JSON.stringify(addCalendarDays(2026, 11, 1, -1, "Asia/Tokyo")) === JSON.stringify({ year: 2026, month: 10, day: 31 })
+  ));
+
+  results.push(check(
+    "[Blocker 2] 2026-10-31 next day -> 2026-11-01",
+    JSON.stringify(addCalendarDays(2026, 10, 31, 1, "Asia/Tokyo")) === JSON.stringify({ year: 2026, month: 11, day: 1 })
+  ));
+
+  results.push(check(
+    "[Blocker 2] 2027-01-01 previous day -> 2026-12-31 (year boundary)",
+    JSON.stringify(addCalendarDays(2027, 1, 1, -1, "Asia/Tokyo")) === JSON.stringify({ year: 2026, month: 12, day: 31 })
+  ));
+
+  results.push(check(
+    "[Blocker 2] 2028-02-28 next day -> 2028-02-29 (leap year)",
+    JSON.stringify(addCalendarDays(2028, 2, 28, 1, "Asia/Tokyo")) === JSON.stringify({ year: 2028, month: 2, day: 29 })
+  ));
+
+  results.push(check(
+    "[Blocker 2] 2028-02-29 next day -> 2028-03-01",
+    JSON.stringify(addCalendarDays(2028, 2, 29, 1, "Asia/Tokyo")) === JSON.stringify({ year: 2028, month: 3, day: 1 })
+  ));
+
+  results.push(check(
+    "[Blocker 2] 2026-02-28 next day -> 2026-03-01 (non-leap year, no Feb 29)",
+    JSON.stringify(addCalendarDays(2026, 2, 28, 1, "Asia/Tokyo")) === JSON.stringify({ year: 2026, month: 3, day: 1 })
   ));
 
   return summarize("work/temporalHardening", results);

@@ -164,6 +164,40 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   ));
 
   // =========================
+  // TIME-P1c HARDENING (final-blocker round, Section 12): snapshot reader
+  // hash validation — a value with the CORRECT shape but a tampered/
+  // corrupted/hand-edited field must still be rejected, not just a
+  // wrong-type value.
+  // =========================
+
+  results.push(check(
+    "[Section 12] a snapshot whose stored candidateHash does not match its actual candidates (e.g. a hand-edited startUtc) is rejected outright",
+    readCandidateSlotSnapshotMetadata({
+      calendarCandidateSnapshot: {
+        ...snapshotA,
+        candidates: [{ ...snapshotA.candidates[0], startUtc: "1999-01-01T00:00:00.000Z" }, ...snapshotA.candidates.slice(1)],
+        // candidateHash left as-is from snapshotA -> now stale/mismatched
+      },
+    }) === undefined
+  ));
+
+  results.push(check(
+    "[Section 12] a snapshot whose stored requestHash does not match its actual policy fields (e.g. a hand-edited candidateCount) is rejected outright",
+    readCandidateSlotSnapshotMetadata({
+      calendarCandidateSnapshot: {
+        ...snapshotA,
+        candidateCount: 999,
+        // requestHash left as-is from snapshotA -> now stale/mismatched
+      },
+    }) === undefined
+  ));
+
+  results.push(check(
+    "[Section 12] an untampered snapshot (hashes genuinely match its own fields) still reads back successfully — the new check does not false-positive",
+    readCandidateSlotSnapshotMetadata({ calendarCandidateSnapshot: snapshotA }) !== undefined
+  ));
+
+  // =========================
   // Section 11 / Section 23-24: Work.metadata persistence — same
   // source-inspection technique already established for
   // updateWorkTemporalRequirementMetadata() by

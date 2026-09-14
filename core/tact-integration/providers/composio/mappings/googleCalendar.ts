@@ -1,11 +1,32 @@
 import type { BusyInterval, CalendarAvailabilityErrorCode } from "../../../../tact-work/calendarAvailability";
+import { isExplicitUtcInstant } from "../../../../tact-work/timezone";
 import { normalizeComposioError } from "../adapter";
 import { EXPECTED_ENVELOPE_KIND, GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT } from "./googleCalendarFindFreeSlotsContract";
 
 // =========================
 // TACT Integration — Composio Google Calendar Availability Mapper/Normalizer
-// (TIME-P1c Section 7-9; HARDENING Codex delta-fix Sections 1/2/3/6)
+// (TIME-P1c Section 7-9; HARDENING Codex delta-fix Sections 1/2/3/6;
+// final-blocker round Section 11)
 // =========================
+//
+// Schema/version pinning status (Section 11, final-blocker round): the
+// Composio SDK's tools.execute() DOES accept an explicit `version`
+// parameter (core/tact-integration/providers/composio/googleCalendarAvailabilityProvider.ts
+// passes one), so pinning is technically possible — but the RUNTIME DEFAULT
+// (getGoogleCalendarToolkitVersion() in ./client.ts, used when
+// COMPOSIO_GOOGLECALENDAR_TOOLKIT_VERSION is unset) stays "latest",
+// unchanged, matching the exact same established default already used for
+// Slack/Gmail/Notion. Hardcoding the verifiedAtToolkitVersion recorded in
+// the contract fixture as the default is deliberately NOT done here: unlike
+// an opt-in override, a hardcoded historical default could silently break
+// if Composio ever retires that dated version, trading one drift risk for
+// another rather than removing it. What actually protects against schema
+// drift, regardless of which toolkit version ends up in effect, is this
+// file's OWN strict envelope/normalizer validation (Section 2/9) — any
+// response shape that doesn't match the verified contract fails closed as
+// malformed_response rather than being silently trusted. An operator who
+// wants a specific version pinned can still set
+// COMPOSIO_GOOGLECALENDAR_TOOLKIT_VERSION explicitly.
 //
 // Schema verification (Section 7): this slug and the exact shapes below were
 // retrieved live from Composio's tool metadata endpoint
@@ -22,13 +43,20 @@ import { EXPECTED_ENVELOPE_KIND, GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT } from
 // This file is the ONLY place in the codebase that names this slug or knows
 // this response shape (Section 8/9: strict mapper, strict normalizer — no
 // other file constructs Composio Calendar arguments or parses its output).
-export const GOOGLECALENDAR_FIND_FREE_SLOTS_SLUG = "GOOGLECALENDAR_FIND_FREE_SLOTS";
+//
+// TIME-P1c HARDENING FIX (final-blocker round, Section 11 — schema pinning
+// debt): re-exported directly from the committed contract
+// (googleCalendarFindFreeSlotsContract.ts) rather than redeclared as a
+// second literal, so the slug this file actually calls and the slug the
+// contract documents cannot silently drift apart — same principle already
+// applied to EXPECTED_ENVELOPE_KIND below.
+export const GOOGLECALENDAR_FIND_FREE_SLOTS_SLUG: string = GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.slug;
 
 // TIME-P1c HARDENING FIX (Codex delta-fix, arbitrary-calendar-target
 // blocker): the calendar identifier queried is now a single, internal,
 // non-exported, non-parameterized constant — "primary" (the verified
 // schema's own conceptual name for the authenticated user's main calendar;
-// see the contract fixture in ./__fixtures__/googleCalendarFindFreeSlots.ts).
+// see the contract fixture in ./googleCalendarFindFreeSlotsContract.ts).
 // Neither mapToGoogleCalendarFindFreeSlotsInput() nor
 // normalizeGoogleCalendarFindFreeSlotsOutput() below accepts a calendarId
 // parameter at all — there is structurally no argument through which a
@@ -113,10 +141,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// A single malformed busy period fails the entire parse (returns
-// undefined) rather than being dropped and continuing — dropping a busy
-// period we could not parse would silently make a genuinely busy time look
-// free, which this normalizer must never do.
+// TIME-P1c HARDENING FIX (final-blocker round, Blocker 1 — Codex-reproduced
+// false-free-time path): this previously validated only that `start`/`end`
+// were STRINGS — a raw busy period like {start: "not-an-instant", end:
+// "2026-09-21T01:00:00Z"} passed this check, produced a canonical
+// BusyInterval carrying the unparseable string, and only got caught (and
+// SILENTLY DROPPED, not failed) two layers downstream by
+// calendarAvailability.ts's normalizeBusyIntervals() — which is a
+// second-line, provider-neutral defense, not a schema validator. The net
+// effect: a malformed Google busy period could vanish and the affected time
+// window would be reported free. Provider-specific schema validation
+// belongs HERE, at the adapter boundary, before a canonical BusyInterval is
+// ever constructed. Every entry must now have a start/end that:
+//   - is present and a string
+//   - is an explicit absolute instant (contains "Z" or a numeric ±HH:MM
+//     offset — isExplicitUtcInstant(), the same helper that already
+//     protects reference-instant parsing in core/tact-work/timezone.ts)
+//   - parses to a finite instant (redundant with the above by construction,
+//     kept as an explicit assertion for readability)
+//   - has end strictly after start (rejects reversed AND zero-length)
+// A single malformed period still fails the ENTIRE parse (returns
+// undefined) rather than being dropped and continuing.
+function isValidAbsoluteInstant(value: unknown): value is string {
+  return typeof value === "string" && isExplicitUtcInstant(value) && Number.isFinite(Date.parse(value));
+}
+
 function parseBusyIntervals(value: unknown): BusyInterval[] | undefined {
 
   if (!Array.isArray(value)) {
@@ -127,7 +176,15 @@ function parseBusyIntervals(value: unknown): BusyInterval[] | undefined {
 
   for (const entry of value) {
 
-    if (!isRecord(entry) || typeof entry.start !== "string" || typeof entry.end !== "string") {
+    if (!isRecord(entry)) {
+      return undefined;
+    }
+
+    if (!isValidAbsoluteInstant(entry.start) || !isValidAbsoluteInstant(entry.end)) {
+      return undefined;
+    }
+
+    if (Date.parse(entry.end) <= Date.parse(entry.start)) {
       return undefined;
     }
 
