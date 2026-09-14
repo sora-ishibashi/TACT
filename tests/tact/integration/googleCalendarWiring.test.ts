@@ -585,6 +585,79 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
+  for (const wrongService of ["gmail", "slack", "notion"] as const) {
+    const { deps, calls } = makeDeps({
+      getConnection: async (connectionId, userId) => {
+        calls.getConnectionCalls += 1;
+        return userId === OWNER_USER_ID
+          ? makeConnection({ id: connectionId, service: wrongService, providerConnectionRef: `injected-${wrongService}-ref` })
+          : undefined;
+      },
+    });
+    const outcome = await executeReadIntegrationAction({
+      workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-cal-1",
+      action: { service: "google_calendar", operation: "availability_read", input: {} },
+    }, deps);
+    results.push(check(
+      `[service match hardening] ${wrongService} connection cannot execute google_calendar or inject its provider ref`,
+      outcome.status === "connection_unavailable" && calls.executeIntegrationActionCalls === 0 && calls.createRunCalls === 0
+    ));
+  }
+
+  {
+    const { deps, calls } = makeDeps({
+      getConnection: async (connectionId, userId) => userId === OWNER_USER_ID
+        ? makeConnection({ id: connectionId, status: "revoked", providerConnectionRef: "injected-revoked-ref" })
+        : undefined,
+    });
+    const outcome = await executeReadIntegrationAction({
+      workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-cal-1",
+      action: { service: "google_calendar", operation: "availability_read", input: {} },
+    }, deps);
+    results.push(check(
+      "[service match hardening] an inactive google_calendar connection cannot execute or inject its provider ref",
+      outcome.status === "connection_unavailable" && calls.executeIntegrationActionCalls === 0 && calls.createRunCalls === 0
+    ));
+  }
+
+  for (const action of [
+    { service: "slack", operation: "list_channels", input: {} },
+    { service: "gmail", operation: "search_messages", input: { query: "status" } },
+    { service: "notion", operation: "search", input: { query: "plan" } },
+    { service: "google_calendar", operation: "availability_read", input: {} },
+  ] as const) {
+    const { deps, calls } = makeDeps({
+      getConnection: async (connectionId, userId) => userId === OWNER_USER_ID
+        ? makeConnection({ id: connectionId, service: action.service, providerConnectionRef: `canonical-${action.service}-ref` })
+        : undefined,
+    });
+    const outcome = await executeReadIntegrationAction({
+      workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-matching-service",
+      action,
+    }, deps);
+    results.push(check(
+      `[service match regression] matching active ${action.service} connection continues to execute with its canonical provider ref`,
+      outcome.status === "completed" && calls.executeIntegrationActionCalls === 1 &&
+        calls.executeIntegrationActionArgs[0].providerConnectionRef === `canonical-${action.service}-ref`
+    ));
+  }
+
+  {
+    const { deps, calls } = makeDeps();
+    const outcome = await executeReadIntegrationAction({
+      workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-cal-1",
+      action: {
+        service: "google_calendar",
+        operation: "availability_read",
+        input: { providerConnectionRef: "caller-controlled-ref" },
+      },
+    }, deps);
+    results.push(check(
+      "[provider ref hardening] a caller-supplied provider ref is ignored in favor of the canonical matching connection row",
+      outcome.status === "completed" && calls.executeIntegrationActionArgs[0].providerConnectionRef === "ca_calendar_123"
+    ));
+  }
+
   return summarize("integration/googleCalendarWiring", results);
 
 }

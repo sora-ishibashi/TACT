@@ -56,6 +56,7 @@ import { getWork, updateWorkCandidateSnapshotMetadata } from "../tact-work/store
 import { readTemporalRequirementMetadata } from "../tact-work/temporalRequirements";
 import {
   generateCandidateSchedule,
+  preflightCandidateSchedule,
   type GenerateCandidateScheduleError,
 } from "../tact-work/candidateSchedule";
 import type { CandidateSlotSnapshotMetadata } from "../tact-work/candidateSchedule";
@@ -377,6 +378,15 @@ export async function executeCalendarAvailabilityScheduling(
       success: false,
       error: { code: "temporal_requirement_incomplete", message: "候補生成に必要な日時情報がまだ確定していません。" },
     };
+  }
+
+  // Validate the complete temporal request before connection lookup. This
+  // keeps clarification independent from connection state and guarantees no
+  // connection resolver/provider path runs for incomplete temporal input.
+  const temporalPreflight = preflightCandidateSchedule({ requirement, referenceInstantUtc });
+
+  if (!temporalPreflight.success) {
+    return { success: false, error: mapScheduleErrorToCalendarSchedulingError(temporalPreflight.error) };
   }
 
   // Connection resolution: user-scoped, active-only, re-derived from

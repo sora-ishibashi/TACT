@@ -5,6 +5,7 @@ import { check, summarize, type CheckResult } from "../lib/check";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..");
 const MIGRATION_PATH = "supabase/migrations/20260917000000_allow_notion_tact_connections.sql";
+const HARDENING_MIGRATION_PATH = "supabase/migrations/20261012000000_restrict_tact_connections_mutations_to_service_role.sql";
 
 function readRepoFile(relativePath: string): string {
   return readFileSync(join(REPO_ROOT, relativePath), "utf-8");
@@ -21,6 +22,8 @@ function extractAllowedServices(migration: string): string[] {
 export async function run(): Promise<{ pass: number; fail: number }> {
   const results: CheckResult[] = [];
   const migration = readRepoFile(MIGRATION_PATH);
+  const hardeningMigration = readRepoFile(HARDENING_MIGRATION_PATH);
+  const connectionRepository = readRepoFile("core/tact-integration/connection.ts");
   const originalSchema = readRepoFile("supabase/migrations/20260907000000_create_tact_connections.sql");
   const canonicalTypes = readRepoFile("core/tact-integration/types.ts");
   const calendarMigration = readRepoFile("supabase/migrations/20261011000000_allow_google_calendar_tact_connections.sql");
@@ -85,6 +88,22 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   results.push(check(
     "[Connection schema] hotfix does not change RLS policies or introduce credentials",
     !/row level security|create\s+policy|provider_connection_ref|token|secret/i.test(migration)
+  ));
+
+  results.push(check(
+    "[Connection schema hardening] direct authenticated tact_connections mutations are removed while read access is preserved",
+    /drop\s+policy\s+if\s+exists\s+"tact_connections_insert_own"/i.test(hardeningMigration) &&
+      /drop\s+policy\s+if\s+exists\s+"tact_connections_update_own"/i.test(hardeningMigration) &&
+      /drop\s+policy\s+if\s+exists\s+"tact_connections_delete_own"/i.test(hardeningMigration) &&
+      /revoke\s+insert,\s*update,\s*delete\s+on\s+table\s+public\.tact_connections\s+from\s+authenticated/i.test(hardeningMigration) &&
+      !/drop\s+policy[^;]*select/i.test(hardeningMigration)
+  ));
+
+  results.push(check(
+    "[Connection schema hardening] canonical provisioning mutations use the server-only service role repository client",
+    /import\s*\{\s*getServiceRoleClient\s*\}\s*from\s*"\.\.\/database\/supabaseServiceRole"/.test(connectionRepository) &&
+      /function\s+getConnectionMutationClient/.test(connectionRepository) &&
+      /SUPABASE_SERVICE_ROLE_KEY is required for trusted connection mutation/.test(connectionRepository)
   ));
 
   return summarize("integration/connectionSchema", results);

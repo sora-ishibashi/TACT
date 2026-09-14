@@ -364,12 +364,22 @@ async function validateConnectionForExecution(
   connectionId: string,
   userId: string,
   accessToken: string,
+  expectedService: string,
   deps: Pick<ExecuteApprovedIntegrationActionDeps, "getConnection">
 ): Promise<{ ok: true; connection: Connection } | { ok: false; outcome: IntegrationActionExecutionOutcome }> {
 
   const connection = await deps.getConnection(connectionId, userId, accessToken);
 
-  if (!connection || connection.status !== "active") {
+  // A canonical connection id is not authority on its own. The provider
+  // reference may be used only for the trusted owner's active connection to
+  // the exact service named by the action. This closes cross-service
+  // confused-deputy execution (for example, Gmail -> Google Calendar).
+  if (
+    !connection ||
+    connection.userId !== userId ||
+    connection.status !== "active" ||
+    connection.service !== expectedService
+  ) {
     return { ok: false, outcome: { status: "connection_unavailable" } };
   }
 
@@ -883,6 +893,7 @@ export async function executeApprovedIntegrationAction(
     extracted.connectionId,
     userId,
     accessToken,
+    extracted.action.service,
     deps
   );
 
@@ -1108,6 +1119,7 @@ async function validateReadExecutionPreconditions(
     connectionId,
     userId,
     accessToken,
+    action.service,
     deps
   );
 

@@ -489,6 +489,62 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
+  for (const testCase of [
+    {
+      name: "missing timezone",
+      requirement: { ...REALITY_REQUIREMENT, timezone: undefined },
+      referenceInstantUtc: REFERENCE,
+      expectedCode: "timezone_required",
+    },
+    {
+      name: "missing daily window",
+      requirement: { ...REALITY_REQUIREMENT, dailyWindow: undefined },
+      referenceInstantUtc: REFERENCE,
+      expectedCode: "daily_window_missing",
+    },
+    {
+      name: "missing duration",
+      requirement: { ...REALITY_REQUIREMENT, durationMinutes: undefined },
+      referenceInstantUtc: REFERENCE,
+      expectedCode: "temporal_requirement_incomplete",
+    },
+    {
+      name: "missing date",
+      requirement: { ...REALITY_REQUIREMENT, date: undefined },
+      referenceInstantUtc: REFERENCE,
+      expectedCode: "temporal_requirement_incomplete",
+    },
+    {
+      name: "naive reference instant",
+      requirement: REALITY_REQUIREMENT,
+      referenceInstantUtc: "2026-09-14T00:00:00",
+      expectedCode: "reference_instant_invalid",
+    },
+    {
+      name: "DST-invalid local date",
+      requirement: { ...REALITY_REQUIREMENT, date: { kind: "date" as const, date: "2026-09-06" }, timezone: "America/Santiago" },
+      referenceInstantUtc: "2026-09-01T00:00:00Z",
+      expectedCode: "dst_invalid_local_time",
+    },
+  ] as const) {
+    const { deps, calls } = buildDeps({
+      work: makeWork({
+        metadata: {
+          temporalRequirement: toTemporalRequirementMetadata(testCase.requirement, { kind: "meeting_candidates", required: [] }),
+        },
+      }),
+    });
+    const result = await executeCalendarAvailabilityScheduling(
+      { workId: "work-1", taskId: "task-1", userId: OWNER_USER_ID, accessToken: "token", referenceInstantUtc: testCase.referenceInstantUtc },
+      deps
+    );
+    results.push(check(
+      `[temporal preflight] ${testCase.name} returns the specific error before resolver or provider invocation`,
+      result.success === false && result.error.code === testCase.expectedCode &&
+        calls.listConnectionsForUserCalls.length === 0 && calls.executeReadIntegrationActionCalls === 0
+    ));
+  }
+
   return summarize("conversation/calendarAvailabilityExecution", results);
 
 }

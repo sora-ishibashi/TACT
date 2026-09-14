@@ -1176,8 +1176,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[ARCH-P1c/Case4] service mutation to known gmail.send_message fails Approval Integrity before any provider call",
-        outcome.status === "approval_integrity_failed" && calls.executeIntegrationActionCalls === 0
+        "[ARCH-P1c/Case4] service mutation to known gmail.send_message is rejected as a mismatched connection before any provider call",
+        outcome.status === "connection_unavailable" && calls.executeIntegrationActionCalls === 0
       )
     );
   }
@@ -2452,6 +2452,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ---- E: provider.failed detailsへsanitized diagnosticsのみが入る ----
   {
     const { deps, calls } = makeDeps({
+      getConnection: async (connectionId, userId) => userId === OWNER_USER_ID
+        ? makeConnection({ id: connectionId, service: "gmail" })
+        : undefined,
       executeIntegrationAction: async (): Promise<IntegrationExecutionResult> => {
         calls.executeIntegrationActionCalls += 1;
         calls.callOrder.push("executeIntegrationAction");

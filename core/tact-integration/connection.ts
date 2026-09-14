@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { getServiceRoleClient } from "../database/supabaseServiceRole";
 import type {
   Connection,
   ConnectionStatus,
@@ -45,6 +46,18 @@ function createRequestScopedClient(accessToken: string) {
     }
   );
 
+}
+
+function getConnectionMutationClient() {
+  const client = getServiceRoleClient();
+
+  if (!client) {
+    throw new Error(
+      "[tact-integration/connection] SUPABASE_SERVICE_ROLE_KEY is required for trusted connection mutation."
+    );
+  }
+
+  return client;
 }
 
 // =========================
@@ -123,7 +136,10 @@ export async function createConnection(
   params: CreateConnectionParams
 ): Promise<Connection> {
 
-  const client = createRequestScopedClient(accessToken);
+  // Connection authority fields, especially provider_connection_ref and
+  // status, are written only by server-side canonical provisioning.
+  void accessToken;
+  const client = getConnectionMutationClient();
 
   const { data, error } = await client
     .from("tact_connections")
@@ -249,7 +265,11 @@ export async function updateConnectionStatus(
   metadata?: Record<string, unknown> | null
 ): Promise<void> {
 
-  const client = createRequestScopedClient(accessToken);
+  // The caller is authenticated before reaching this repository; the trusted
+  // server-side mutation client is required because direct client writes are
+  // prohibited by the companion RLS migration.
+  void accessToken;
+  const client = getConnectionMutationClient();
 
   const update: Record<string, unknown> = {
     status,
