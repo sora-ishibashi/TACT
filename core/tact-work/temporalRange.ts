@@ -60,22 +60,47 @@ function singleDayRange(year: number, month: number, day: number, timezone: stri
   return { startUtc: start, endUtc: end };
 }
 
-// Parses TIME-P1b's no-year "MM-DD" date-string convention. TIME-P1b's
-// toDate() helper (temporalRequirements.ts) concatenates a 4-digit year
-// directly in front of "MM-DD" with no separator when a year was present in
-// the input (e.g. "202609-14"), which is not a value this function can
-// safely interpret — that is a pre-existing TIME-P1b format quirk, out of
-// scope for this phase (CLAUDE.md rule: don't expand a fix beyond the
-// current change's scope). Only the clean "MM-DD" (no year) shape, which is
-// what every existing TIME-P1b test and realistic no-year input produces,
-// is accepted here; anything else fails closed.
+// Parses TIME-P1b's date-string convention, emitted by
+// temporalRequirements.ts's toDate(). TIME-P1c FIX (explicit-year date bug):
+// toDate() previously concatenated a 4-digit year directly in front of
+// "MM-DD" with no separator when a year was present in the input (e.g.
+// "202609-14"), which no parser could safely interpret — the year was fixed
+// at its source (temporalRequirements.ts) to instead emit a well-formed
+// "YYYY-MM-DD". Both of toDate()'s possible shapes are handled explicitly
+// here; anything else (including the old malformed concatenation, which may
+// still exist in previously-persisted Work.metadata) fails closed rather
+// than being guessed at.
+const EXPLICIT_YEAR_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const NO_YEAR_DATE = /^(\d{2})-(\d{2})$/;
+
+function isValidCalendarDate(month: number, day: number): boolean {
+  return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+}
 
 function resolveExplicitDateToLocalParts(
   dateString: string,
   referenceParts: { year: number; month: number; day: number },
   timezone: string
 ): { year: number; month: number; day: number } | undefined {
+
+  const explicitYear = dateString.match(EXPLICIT_YEAR_DATE);
+
+  if (explicitYear) {
+
+    const year = Number(explicitYear[1]);
+    const month = Number(explicitYear[2]);
+    const day = Number(explicitYear[3]);
+
+    if (!isValidCalendarDate(month, day)) {
+      return undefined;
+    }
+
+    // An explicit year is exact user intent, never a "nearest upcoming"
+    // guess — unlike the no-year case below, this never rolls forward to a
+    // different year.
+    return { year, month, day };
+
+  }
 
   const match = dateString.match(NO_YEAR_DATE);
 
@@ -86,7 +111,7 @@ function resolveExplicitDateToLocalParts(
   const month = Number(match[1]);
   const day = Number(match[2]);
 
-  if (month < 1 || month > 12 || day < 1 || day > 31) {
+  if (!isValidCalendarDate(month, day)) {
     return undefined;
   }
 

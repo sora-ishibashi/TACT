@@ -64,11 +64,15 @@ import { resolveCapabilityForBinding } from "../tact-orchestrator";
 // 関数群・既存test)を壊さないためのaliasとしてそのまま維持する。
 export type CanonicalCapability = CanonicalTaskCapability;
 
+// TIME-P1c (Section 5, capability audit): "calendar.availability.read"
+// added the same way "research.perform" was — see its definition in
+// core/tact-work/types.ts for why no DB migration was needed.
 export const CANONICAL_CAPABILITIES: readonly CanonicalCapability[] = [
   "organizational_context.read",
   "communication.read",
   "communication.write",
   "research.perform",
+  "calendar.availability.read",
 ];
 
 // =========================
@@ -160,9 +164,15 @@ export function summarizeTaskCapabilities(
 // side-effect free)。
 //
 // 絶対条件: WorkCapabilityRequirement(DB制約付き3値)に存在しない
-// Canonical Capability(例: "research.perform")は、そもそも
-// Work.requiredCapabilitiesへ書き込めない値のため、比較対象から
-// 自然に除外する(型レベルでWorkCapabilityRequirementのみを見る)。
+// Canonical Capability(例: "research.perform"、TIME-P1cで追加された
+// "calendar.availability.read")は、そもそもWork.requiredCapabilitiesへ
+// 書き込めない値のため、比較対象から自然に除外する(型レベルで
+// WorkCapabilityRequirementのみを見る)。
+const NON_WORK_CAPABILITY_REQUIREMENTS: ReadonlySet<CanonicalCapability> = new Set([
+  "research.perform",
+  "calendar.availability.read",
+]);
+
 export function findUndeclaredTaskCapabilities(
   work: Pick<Work, "requiredCapabilities">,
   tasks: readonly Pick<WorkTask, "assignedCapability">[]
@@ -171,7 +181,7 @@ export function findUndeclaredTaskCapabilities(
   const declared = new Set(work.requiredCapabilities ?? []);
 
   const used = summarizeTaskCapabilities(tasks).filter(
-    (capability): capability is WorkCapabilityRequirement => capability !== "research.perform"
+    (capability): capability is WorkCapabilityRequirement => !NON_WORK_CAPABILITY_REQUIREMENTS.has(capability)
   );
 
   return used.filter((capability) => !declared.has(capability));

@@ -144,9 +144,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Test4] CANONICAL_CAPABILITIESは重複なく4値ちょうど(既存3値 + research.perform)",
-        CANONICAL_CAPABILITIES.length === 4 &&
-          new Set(CANONICAL_CAPABILITIES).size === 4
+        "[Test4] CANONICAL_CAPABILITIESは重複なく5値ちょうど(既存3値 + research.perform + TIME-P1c calendar.availability.read)",
+        CANONICAL_CAPABILITIES.length === 5 &&
+          new Set(CANONICAL_CAPABILITIES).size === 5 &&
+          CANONICAL_CAPABILITIES.includes("calendar.availability.read")
       )
     );
   }
@@ -283,6 +284,24 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         '[Test12] "research.perform"はWork.requiredCapabilitiesへ書き込めない値(DB CHECK制約外)のため、drift検出の対象にならず空配列を返す',
         JSON.stringify(findUndeclaredTaskCapabilities(work, tasks)) === "[]"
+      )
+    );
+  }
+
+  // ---- Test14 (TIME-P1c): CANONICAL_CAPABILITIES' two non-Work-writable
+  // values are exactly research.perform and calendar.availability.read —
+  // no dispatch key resolves to calendar.availability.read yet (no
+  // production binding exists in core/tact-orchestrator/capabilityPlan.ts),
+  // so this is a direct assertion on the exported set rather than a
+  // round-trip through resolveTaskCapabilities(). ----
+  {
+    const dbWritable = new Set(["organizational_context.read", "communication.read", "communication.write"]);
+    const nonWorkWritable = CANONICAL_CAPABILITIES.filter((c) => !dbWritable.has(c)).sort();
+
+    results.push(
+      check(
+        '[Test14] the only two Canonical Capabilities absent from WorkCapabilityRequirement are "research.perform" and (TIME-P1c) "calendar.availability.read"',
+        JSON.stringify(nonWorkWritable) === JSON.stringify(["calendar.availability.read", "research.perform"])
       )
     );
   }

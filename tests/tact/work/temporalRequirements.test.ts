@@ -7,6 +7,7 @@ import {
   toTemporalRequirementMetadata,
   readTemporalRequirementMetadata,
 } from "../../../core/tact-work/temporalRequirements";
+import { resolveTemporalDateRange } from "../../../core/tact-work/temporalRange";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { check, summarize, type CheckResult } from "../lib/check";
@@ -73,6 +74,102 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   results.push(check("[metadata] temporal persistence preserves unrelated metadata and guards concurrent writes", temporalMetadataWriter.includes("...(work.metadata ?? {})") && temporalMetadataWriter.includes("temporalRequirement") && temporalMetadataWriter.includes('.eq("updated_at", work.updatedAt)')));
 
   results.push(check("[boundary] request facts do not expose TIME-P1a execution state", !("waitUntil" in afterAnswer) && !("nextRetryAt" in afterAnswer)));
+
+  // =========================
+  // TIME-P1c FIX (explicit-year date bug)
+  // =========================
+  //
+  // Root cause (two parts, both in this file):
+  //  1. The year-separator character class only recognized "-", "/", "."
+  //     — not "年" — so "2026年9月14日" never captured a year at all and
+  //     silently fell back to a bare "9月14日" (month/day only).
+  //  2. toDate() concatenated a captured year directly onto "MM-DD" with no
+  //     separator (e.g. "202609-14"), a string no downstream parser could
+  //     interpret. It now emits well-formed "YYYY-MM-DD".
+  // core/tact-work/temporalRange.ts's resolveExplicitDateToLocalParts()
+  // parses both the year-included and year-omitted shapes explicitly.
+
+  const explicitYearKanji = extractTemporalRequirement("2026年9月14日に会議");
+  results.push(check(
+    "[TIME-P1c FIX explicit-year] 2026年9月14日 captures the explicit year as well-formed YYYY-MM-DD",
+    explicitYearKanji.date?.kind === "date" && explicitYearKanji.date.date === "2026-09-14"
+  ));
+
+  const explicitYearSlash = extractTemporalRequirement("2026/9/14に会議");
+  results.push(check(
+    "[TIME-P1c FIX explicit-year] 2026/9/14 captures the explicit year as well-formed YYYY-MM-DD (previously malformed as \"202609-14\")",
+    explicitYearSlash.date?.kind === "date" && explicitYearSlash.date.date === "2026-09-14"
+  ));
+
+  const noYearDate = extractTemporalRequirement("9月14日に会議");
+  results.push(check(
+    "[TIME-P1c FIX explicit-year] 9月14日 (year omitted) still extracts as bare MM-DD, unaffected by the fix",
+    noYearDate.date?.kind === "date" && noYearDate.date.date === "09-14"
+  ));
+
+  const invalidDate = extractTemporalRequirement("2026年13月40日に会議");
+  results.push(check(
+    "[TIME-P1c FIX explicit-year] an invalid calendar date (13月40日) is rejected at extraction, not passed through",
+    invalidDate.date === undefined
+  ));
+
+  if (explicitYearKanji.date) {
+    const resolvedExplicitYear = resolveTemporalDateRange(explicitYearKanji.date, "2026-09-01T00:00:00.000Z", "Asia/Tokyo");
+    results.push(check(
+      "[TIME-P1c FIX explicit-year] an explicit-year date resolves to exactly that calendar day, not a \"nearest upcoming\" guess",
+      resolvedExplicitYear.success &&
+        resolvedExplicitYear.range.startUtc === "2026-09-13T15:00:00.000Z" &&
+        resolvedExplicitYear.range.endUtc === "2026-09-14T15:00:00.000Z"
+    ));
+  } else {
+    results.push(check("[TIME-P1c FIX explicit-year] an explicit-year date resolves to exactly that calendar day", false, "extraction itself failed"));
+  }
+
+  const legacyMalformedStillFailsClosed = resolveTemporalDateRange(
+    { kind: "date", date: "202609-14" }, // the old, pre-fix malformed shape (may still exist in already-persisted Work.metadata)
+    "2026-09-01T00:00:00.000Z",
+    "Asia/Tokyo"
+  );
+  results.push(check(
+    "[TIME-P1c FIX explicit-year] downstream range resolution still fails closed on the old malformed concatenation, never guesses a date from it",
+    !legacyMalformedStillFailsClosed.success && legacyMalformedStillFailsClosed.code === "temporal_requirement_incomplete"
+  ));
+
+  // =========================
+  // TIME-P1c FIX (candidateCount over-extraction bug)
+  // =========================
+  //
+  // Root cause: extractCandidateCount() matched any bare "Nつ/件/個"
+  // anywhere in the input, with no check that N had anything to do with
+  // meeting-candidate scheduling ("資料を3つ作って" has nothing to do with
+  // it). It now gates on isSchedulingCandidateIntent() — the exact same
+  // signal deriveTemporalRequirementPolicy() uses to classify a request as
+  // "meeting_candidates" — so there is one source of truth for "is this
+  // scheduling-candidate language", not a second, broader heuristic.
+
+  const unrelatedDocuments = extractTemporalRequirement("資料を3つ作って");
+  results.push(check(
+    "[TIME-P1c FIX candidateCount] \"資料を3つ作って\" (unrelated \"3つ\") does not set candidateCount",
+    unrelatedDocuments.candidateCount === undefined
+  ));
+
+  const unrelatedImages = extractTemporalRequirement("画像を3つ作って");
+  results.push(check(
+    "[TIME-P1c FIX candidateCount] \"画像を3つ作って\" (unrelated \"3つ\") does not set candidateCount",
+    unrelatedImages.candidateCount === undefined
+  ));
+
+  const schedulingCandidateCount = extractTemporalRequirement("候補を3つ出して");
+  results.push(check(
+    "[TIME-P1c FIX candidateCount] \"候補を3つ出して\" (scheduling-candidate intent) sets candidateCount = 3",
+    schedulingCandidateCount.candidateCount === 3
+  ));
+
+  const schedulingCandidateCountWithDuration = extractTemporalRequirement("30分の候補を3つ出して");
+  results.push(check(
+    "[TIME-P1c FIX candidateCount] \"30分の候補を3つ出して\" sets candidateCount = 3 alongside durationMinutes = 30",
+    schedulingCandidateCountWithDuration.candidateCount === 3 && schedulingCandidateCountWithDuration.durationMinutes === 30
+  ));
 
   return summarize("work/temporalRequirements", results);
 }

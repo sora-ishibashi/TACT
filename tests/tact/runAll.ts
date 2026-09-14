@@ -161,6 +161,7 @@ import { run as runIntegrationPolicy } from "./integration/policy.test";
 import { run as runIntegrationConnectionSchema } from "./integration/connectionSchema.test";
 import { run as runIntegrationGmail } from "./integration/gmail.test";
 import { run as runIntegrationNotion } from "./integration/notion.test";
+import { run as runIntegrationGoogleCalendarAvailability } from "./integration/googleCalendarAvailability.test";
 import { run as runIntegrationConnectionProvisioning } from "./integration/connectionProvisioning.test";
 import { run as runIntegrationConnectionsApi } from "./integration/connectionsApi.test";
 import { run as runIntegrationConnectionLifecycle } from "./integration/connectionLifecycle.test";
@@ -326,6 +327,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "integration/connectionSchema", run: runIntegrationConnectionSchema },
   { name: "integration/gmail", run: runIntegrationGmail },
   { name: "integration/notion", run: runIntegrationNotion },
+  { name: "integration/googleCalendarAvailability", run: runIntegrationGoogleCalendarAvailability },
   { name: "integration/connectionProvisioning", run: runIntegrationConnectionProvisioning },
   { name: "integration/connectionsApi", run: runIntegrationConnectionsApi },
   { name: "integration/connectionLifecycle", run: runIntegrationConnectionLifecycle },

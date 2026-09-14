@@ -138,7 +138,19 @@ export type WorkCapabilityRequirement =
 // capability.tsをimportする)は行わない。capability.ts側の
 // CanonicalCapability型はこの型のaliasとして定義し、値集合の
 // 単一の真実の情報源(source of truth)はこちらに置く。
-export type CanonicalTaskCapability = WorkCapabilityRequirement | "research.perform";
+// TIME-P1c capability audit (Section 5): "calendar.availability.read" is
+// added the same way "research.perform" was — as a classification-only
+// value on this superset type, never on WorkCapabilityRequirement (whose
+// DB CHECK constraint, supabase/migrations/20260921000000_add_gmail_work_semantics.sql,
+// is untouched by this addition; no migration was needed for this specific
+// change). It represents a genuinely distinct semantic capability (reading
+// calendar availability data), not a fit for the existing three
+// organizational_context.read/communication.read/communication.write
+// values. No execution binding (core/tact-orchestrator/capabilityPlan.ts)
+// exists for it yet — this is audit-only groundwork, not production wiring
+// (TIME-P1c Section 13: wiring requires a verified provider adapter, which
+// this phase does not have — see candidateSchedule.ts's header).
+export type CanonicalTaskCapability = WorkCapabilityRequirement | "research.perform" | "calendar.availability.read";
 
 export type WorkCompletionCondition =
   | "subject_identified"

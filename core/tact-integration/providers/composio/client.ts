@@ -64,6 +64,18 @@ export function getNotionToolkitVersion(): string {
 
 }
 
+// TIME-P1c (Section 7): mirrors the three getters above for the verified
+// GOOGLECALENDAR_FIND_FREE_SLOTS action (tool metadata retrieved live via
+// client.tools.getRawComposioToolBySlug() on 2026-09-14, current version
+// "20260902_00" at that time — see the phase report for the full verified
+// schema). No adapter call in this codebase executes any other
+// googlecalendar action.
+export function getGoogleCalendarToolkitVersion(): string {
+
+  return process.env.COMPOSIO_GOOGLECALENDAR_TOOLKIT_VERSION || "latest";
+
+}
+
 export function getComposioClient(): Composio | null {
 
   if (!isComposioConfigured()) {
@@ -80,6 +92,7 @@ export function getComposioClient(): Composio | null {
       slack: getSlackToolkitVersion(),
       gmail: getGmailToolkitVersion(),
       notion: getNotionToolkitVersion(),
+      googlecalendar: getGoogleCalendarToolkitVersion(),
     },
   });
 

@@ -60,7 +60,13 @@ const DURATION_HOURS = /(\d+)\s*(?:時間|hours?|hrs?)/i;
 const DURATION_MINUTES = /(\d+)\s*(?:分|minutes?|mins?)/i;
 const CLOCK_TIME = /\b([01]?\d|2[0-3])(?::([0-5]\d))\b|([01]?\d|2[0-3])時(?:([0-5]\d)分?)?/;
 const DATE_RANGE = /(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:〜|～|-|–|to)\s*(\d{1,2})(?:\s*\/\s*(\d{1,2}))?/i;
-const DATE = /(?:\b(20\d{2})[-/.])?(\d{1,2})[\/.月](\d{1,2})(?:日)?/;
+// TIME-P1c FIX (explicit-year date bug, root cause part 1 of 2): the year
+// separator class previously only recognized "-", "/", "." (e.g.
+// "2026-9-14", "2026/9/14"). It did not include "年", so the most natural
+// Japanese phrasing "2026年9月14日" never matched the year group at all —
+// the year was silently dropped and the date fell back to a bare "9月14日"
+// (month/day only), with no fail-closed signal that a year had been typed.
+const DATE = /(?:\b(20\d{2})[-/.年])?(\d{1,2})[\/.月](\d{1,2})(?:日)?/;
 // TIME-P1c: how many candidates the user asked for, e.g. "3つ出して" / "3件".
 // Deliberately narrow (つ/件/個 only) so it doesn't collide with the
 // duration/delay number-extraction regexes above, which require 分/時間.
@@ -83,8 +89,17 @@ function withoutDelayExpressions(input: string): string {
     .replace(/\d+\s*(?:hours?|hrs?|minutes?|mins?)\s+later\b/gi, "");
 }
 
+// TIME-P1c FIX (explicit-year date bug, root cause part 2 of 2): this
+// previously concatenated a 4-digit year directly in front of "MM-DD" with
+// no separator (e.g. year="2026" -> "202609-14"), producing a string no
+// downstream parser could interpret as a date. Now emits a well-formed
+// "YYYY-MM-DD" when a year was captured, or the original year-omitted
+// "MM-DD" otherwise — core/tact-work/temporalRange.ts's
+// resolveExplicitDateToLocalParts() is the sole consumer and parses both
+// shapes explicitly (anything else still fails closed there).
 function toDate(month: string, day: string, year?: string): string {
-  return `${year ?? ""}${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  const monthDay = `${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  return year ? `${year}-${monthDay}` : monthDay;
 }
 
 function extractDateConstraint(input: string): TemporalDateConstraint | undefined {
@@ -118,7 +133,16 @@ function extractSpecificTime(input: string): string | undefined {
   return hour ? `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}` : undefined;
 }
 
+// TIME-P1c FIX (candidateCount over-extraction bug): a bare "Nつ/件/個" is
+// not, by itself, evidence that N is a meeting-candidate count — "資料を3つ
+//作って" / "画像を3つ作って" have nothing to do with scheduling. This now
+// requires the same scheduling-candidate-intent signal
+// deriveTemporalRequirementPolicy() uses to classify a request as
+// "meeting_candidates" (isSchedulingCandidateIntent(), defined further
+// down) before extracting a count at all — never a broad generic numeric
+// extraction.
 function extractCandidateCount(input: string): number | undefined {
+  if (!isSchedulingCandidateIntent(input)) return undefined;
   const match = input.match(CANDIDATE_COUNT);
   if (!match) return undefined;
   const count = Number(match[1]);
@@ -149,15 +173,26 @@ export function mergeTemporalRequirements(existing: TemporalRequirement | undefi
   return { ...(existing ?? {}), ...incoming };
 }
 
-export function deriveTemporalRequirementPolicy(input: string): TemporalRequirementPolicy {
+// TIME-P1c FIX (candidateCount over-extraction bug, shared root cause fix):
+// this is the exact same "is this actually meeting-candidate-scheduling
+// language" signal deriveTemporalRequirementPolicy() below uses to classify
+// a request as "meeting_candidates" — extracted here so extractCandidateCount()
+// (further down) can gate on the identical condition instead of maintaining
+// a second, divergent heuristic for the same question. Behavior of
+// deriveTemporalRequirementPolicy() itself is unchanged by this extraction.
+function isSchedulingCandidateIntent(input: string): boolean {
   const normalized = input.toLowerCase();
+  return (
+    /(?:会議|ミーティング|打ち合わせ|meeting|schedule).{0,30}(?:候補|日程調整|調整|schedule|slots?)/i.test(input) ||
+    /(?:候補(?:を|の)?.{0,12}(?:出|作|generate)|candidate\s*slots?)/i.test(normalized)
+  );
+}
+
+export function deriveTemporalRequirementPolicy(input: string): TemporalRequirementPolicy {
   if (/(?:カレンダー|予定|calendar).{0,20}(?:登録|追加|入れ|create|add)/i.test(input)) {
     return { kind: "specific_calendar_action", required: ["specific_time"] };
   }
-  const candidateScheduling =
-    /(?:会議|ミーティング|打ち合わせ|meeting|schedule).{0,30}(?:候補|日程調整|調整|schedule|slots?)/i.test(input) ||
-    /(?:候補(?:を|の)?.{0,12}(?:出|作|generate)|candidate\s*slots?)/i.test(normalized);
-  if (candidateScheduling) return { kind: "meeting_candidates", required: ["duration", "date"] };
+  if (isSchedulingCandidateIntent(input)) return { kind: "meeting_candidates", required: ["duration", "date"] };
   if (/(?:締切(?:まで)?|期限(?:まで)?|[月火水木金土日]曜(?:日)?まで|deadline|by\s+(?:friday|\d))/i.test(input)) {
     return { kind: "deadline_work", required: ["deadline"] };
   }
