@@ -7,6 +7,18 @@ export type TemporalDateConstraint =
   | { readonly kind: "date"; readonly date: string }
   | { readonly kind: "range"; readonly start: string; readonly end: string };
 
+// TIME-P1c: the minutes-since-local-midnight daily search window a
+// candidate-slot request should stay inside (e.g. 9:00-18:00 ->
+// {startMinuteOfDay: 540, endMinuteOfDay: 1080}). Mirrors
+// core/tact-work/slotEngine.ts's DailyWindow shape field-for-field so no
+// mapping is needed between the two; defined separately here (rather than
+// imported) so this file stays a dependency-free leaf module, matching its
+// existing design.
+export interface TemporalDailyWindow {
+  readonly startMinuteOfDay: number;
+  readonly endMinuteOfDay: number;
+}
+
 export interface TemporalRequirement {
   readonly durationMinutes?: number;
   // A delay is distinct from a meeting duration. It is intentionally not
@@ -17,6 +29,17 @@ export interface TemporalRequirement {
   // combined into an ambiguous timestamp.
   readonly specificTime?: string;
   readonly deadline?: TemporalDateConstraint;
+  // TIME-P1c additions below. All optional/additive: extractTemporalRequirement()
+  // (this file's own free-text extractor) never sets timezone or dailyWindow —
+  // no repository-reliable source for either exists (see
+  // core/tact-work/timezone.ts's header), so both are only ever populated
+  // from an explicit Clarification answer (see core/tact-work/candidateSchedule.ts's
+  // answer parsers). candidateCount is extracted here because, like
+  // duration, it is a plain fact statable in the original request text
+  // ("3つ出して") with no timezone-like ambiguity.
+  readonly timezone?: string;
+  readonly dailyWindow?: TemporalDailyWindow;
+  readonly candidateCount?: number;
 }
 
 export type TemporalRequiredField = "duration" | "delay" | "date" | "specific_time" | "deadline";
@@ -38,6 +61,11 @@ const DURATION_MINUTES = /(\d+)\s*(?:分|minutes?|mins?)/i;
 const CLOCK_TIME = /\b([01]?\d|2[0-3])(?::([0-5]\d))\b|([01]?\d|2[0-3])時(?:([0-5]\d)分?)?/;
 const DATE_RANGE = /(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:〜|～|-|–|to)\s*(\d{1,2})(?:\s*\/\s*(\d{1,2}))?/i;
 const DATE = /(?:\b(20\d{2})[-/.])?(\d{1,2})[\/.月](\d{1,2})(?:日)?/;
+// TIME-P1c: how many candidates the user asked for, e.g. "3つ出して" / "3件".
+// Deliberately narrow (つ/件/個 only) so it doesn't collide with the
+// duration/delay number-extraction regexes above, which require 分/時間.
+const CANDIDATE_COUNT = /(\d+)\s*(?:つ|件|個)/;
+const MAX_REASONABLE_CANDIDATE_COUNT = 10;
 
 function extractDelayMinutes(input: string): number | undefined {
   const japanese = input.match(/(\d+)\s*(時間|分)後/);
@@ -90,6 +118,13 @@ function extractSpecificTime(input: string): string | undefined {
   return hour ? `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}` : undefined;
 }
 
+function extractCandidateCount(input: string): number | undefined {
+  const match = input.match(CANDIDATE_COUNT);
+  if (!match) return undefined;
+  const count = Number(match[1]);
+  return Number.isFinite(count) && count > 0 && count <= MAX_REASONABLE_CANDIDATE_COUNT ? count : undefined;
+}
+
 export function extractTemporalRequirement(input: string): TemporalRequirement {
   const durationInput = withoutDelayExpressions(input);
   const hours = durationInput.match(DURATION_HOURS);
@@ -98,6 +133,7 @@ export function extractTemporalRequirement(input: string): TemporalRequirement {
   const delayMinutes = extractDelayMinutes(input);
   const date = extractDateConstraint(input);
   const specificTime = extractSpecificTime(input);
+  const candidateCount = extractCandidateCount(input);
   const hasDeadlineLanguage = /(?:締切(?:まで)?|期限(?:まで)?|[月火水木金土日]曜(?:日)?まで|deadline|by\s+(?:friday|\d))/i.test(input);
   return {
     ...(Number.isFinite(durationMinutes) && durationMinutes > 0 && durationMinutes <= 24 * 60 ? { durationMinutes } : {}),
@@ -105,6 +141,7 @@ export function extractTemporalRequirement(input: string): TemporalRequirement {
     ...(date ? { date } : {}),
     ...(specificTime ? { specificTime } : {}),
     ...(hasDeadlineLanguage && date ? { deadline: date } : {}),
+    ...(candidateCount !== undefined ? { candidateCount } : {}),
   };
 }
 

@@ -49,3 +49,10 @@ export * from "./gmailReferentCandidates";
 export * from "./executionPreview";
 export * from "./temporal";
 export * from "./temporalRequirements";
+// TIME-P1c: Calendar Availability & Candidate Slots (read-only foundation;
+// see core/tact-work/candidateSchedule.ts for the top-level entry point).
+export * from "./timezone";
+export * from "./calendarAvailability";
+export * from "./slotEngine";
+export * from "./temporalRange";
+export * from "./candidateSchedule";

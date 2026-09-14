@@ -23,6 +23,9 @@ import type {
 import { parseCandidateSnapshot, type CandidateSnapshotEntry } from "../tact-referent/clarification";
 import type { JsonValue } from "./approvalIntegrity";
 import type { TemporalRequirementMetadata } from "./temporalRequirements";
+// TIME-P1c: candidate slot snapshot persistence, same merge-safe pattern as
+// updateWorkTemporalRequirementMetadata below.
+import type { CandidateSlotSnapshotMetadata } from "./candidateSchedule";
 // CAP-P1b: DB rowが持つ既存のexecution binding(assigned_capability/
 // capability、いずれもCapability Registry dispatch key)から、
 // provider名を含まないCanonical Capabilityを決定論的に導出する
@@ -796,6 +799,42 @@ export async function updateWorkTemporalRequirementMetadata(
       .from("tact_works")
       .update({
         metadata: { ...(work.metadata ?? {}), temporalRequirement },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", workId)
+      .eq("user_id", userId)
+      .eq("updated_at", work.updatedAt)
+      .select("id")
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return true;
+  }
+
+  return false;
+}
+
+// TIME-P1c (Section 19/23): pins a generated candidate-slot snapshot into
+// Work.metadata so a later "2番で" reference resolves against exactly the
+// candidates originally shown, not a silently recomputed set. Same
+// merge-safe/optimistic-concurrency shape as
+// updateWorkTemporalRequirementMetadata above — no arbitrary metadata patch
+// API, only this one named key, and no unrelated metadata is ever dropped.
+export async function updateWorkCandidateSnapshotMetadata(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  snapshot: CandidateSlotSnapshotMetadata,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const work = await deps.getWork(workId, userId, accessToken);
+    if (!work) return false;
+
+    const client = createRequestScopedClient(accessToken);
+    const { data, error } = await client
+      .from("tact_works")
+      .update({
+        metadata: { ...(work.metadata ?? {}), calendarCandidateSnapshot: snapshot },
         updated_at: new Date().toISOString(),
       })
       .eq("id", workId)
