@@ -8,6 +8,7 @@ import {
 } from "../../../core/tact-work/candidateSchedule";
 import { createFakeCalendarAvailabilityProvider } from "../../../core/tact-work/calendarAvailability";
 import { CANDIDATE_SLOT_GRANULARITY_MINUTES } from "../../../core/tact-work/slotEngine";
+import { getZonedParts } from "../../../core/tact-work/timezone";
 import type { TemporalRequirement } from "../../../core/tact-work/temporalRequirements";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -333,6 +334,73 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   } else {
 
     results.push(check("[Blocker 4 end-to-end] a user's overnight answer flows through to a valid candidate", false, "extractDailyWindowAnswer(\"22:00-02:00\") itself failed"));
+
+  }
+
+  // =========================
+  // TIME-P1c HARDENING (DST-fold-final round): full Reality Test — a
+  // request spanning a real DST fall-back fold, through the entire
+  // generateCandidateSchedule() pipeline, proving the ambiguous-local-time
+  // filter is applied INSIDE slot generation (before the snapshot/hash is
+  // ever built) rather than as a post-hoc filter — Section 10/11.
+  // =========================
+
+  const nyFoldRequirement: TemporalRequirement = {
+    durationMinutes: 30,
+    date: { kind: "date", date: "2026-11-01" },
+    candidateCount: 500,
+    timezone: "America/New_York",
+    dailyWindow: { startMinuteOfDay: 0, endMinuteOfDay: 360 }, // 00:00-06:00 local, spans the fold
+  };
+
+  const nyFoldResult = await generateCandidateSchedule({
+    requirement: nyFoldRequirement,
+    referenceInstantUtc: "2026-10-01T00:00:00Z",
+    provider: createFakeCalendarAvailabilityProvider({}),
+  });
+
+  if (nyFoldResult.success) {
+
+    const localLabels = nyFoldResult.candidates.map((slot) => {
+      const parts = getZonedParts(Date.parse(slot.startUtc), "America/New_York");
+      return `${parts.hour}:${parts.minute}`;
+    });
+
+    results.push(check(
+      "[DST-fold-final Reality Test] a full generateCandidateSchedule() request spanning the NY fall-back fold never surfaces the ambiguous 01:00/01:15/01:30/01:45 local times",
+      !["1:0", "1:15", "1:30", "1:45"].some((ambiguous) => localLabels.includes(ambiguous))
+    ));
+
+    results.push(check(
+      "[DST-fold-final Reality Test] the result has no duplicate local wall label",
+      new Set(localLabels).size === localLabels.length
+    ));
+
+    // The snapshot's candidateHash must be a hash of exactly the returned
+    // (already-filtered) candidates — recomputing it independently here
+    // (via the same public snapshot constructor, which is itself what
+    // candidateSchedule.ts calls) must reproduce the identical hash,
+    // proving no separate/later filtering step could have silently
+    // diverged the snapshot from the actual candidate list.
+    const independentSnapshot = toCandidateSlotSnapshotMetadata({
+      candidates: nyFoldResult.candidates,
+      generatedAtUtc: nyFoldResult.snapshot.generatedAtUtc,
+      sourceScope: nyFoldResult.sourceScope,
+      resolvedRange: nyFoldResult.resolvedRange,
+      timezone: nyFoldRequirement.timezone!,
+      dailyWindow: nyFoldRequirement.dailyWindow!,
+      candidateCount: nyFoldRequirement.candidateCount!,
+      slotGranularityMinutes: CANDIDATE_SLOT_GRANULARITY_MINUTES,
+    });
+
+    results.push(check(
+      "[DST-fold-final Reality Test] candidateHash reflects exactly the already-filtered (unambiguous-only) candidate set — not filtered after hashing",
+      independentSnapshot.candidateHash === nyFoldResult.snapshot.candidateHash
+    ));
+
+  } else {
+
+    results.push(check("[DST-fold-final Reality Test] a full request spanning the NY fall-back fold succeeds with a valid, filtered candidate set", false, `generateCandidateSchedule failed: ${nyFoldResult.error.code}`));
 
   }
 

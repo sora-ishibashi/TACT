@@ -436,7 +436,20 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     const startTimes = slots.map((slot) => slot.startUtc);
     const uniqueStartTimes = new Set(startTimes);
-    results.push(check(`[Section 8 grid-across-DST] ${label}: no duplicate candidate instant`, uniqueStartTimes.size === startTimes.length));
+    results.push(check(`[Section 8 grid-across-DST] ${label}: no duplicate candidate UTC instant`, uniqueStartTimes.size === startTimes.length));
+
+    // TIME-P1c HARDENING FIX (DST-fold-final round): "unique UTC instant"
+    // alone does not prove "unique user-visible local wall-clock time" — a
+    // fall-back fold means two DIFFERENT UTC instants can render as the
+    // SAME local label (e.g. 05:00Z and 06:00Z both reading "01:00" in
+    // America/New_York on the fold day). This is the actual invariant that
+    // was violated before the fix.
+    const localLabels = slots.map((slot) => {
+      const parts = getZonedParts(Date.parse(slot.startUtc), timezone);
+      return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+    });
+    const uniqueLocalLabels = new Set(localLabels);
+    results.push(check(`[Section 8 grid-across-DST] ${label}: no duplicate LOCAL wall-clock label (the actual DST-fold-final invariant)`, uniqueLocalLabels.size === localLabels.length));
 
     const isSortedAscending = startTimes.every((value, index) => index === 0 || value > startTimes[index - 1]);
     results.push(check(`[Section 8 grid-across-DST] ${label}: candidates are in strict, deterministic chronological order`, isSortedAscending));
@@ -483,6 +496,69 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     "2026-10-05T12:00:00.000Z",
     { startMinuteOfDay: 0, endMinuteOfDay: 180 }
   );
+
+  // =========================
+  // TIME-P1c HARDENING (DST-fold-final round): explicit required checks —
+  // the specific ambiguous local labels Codex reproduced must NEVER appear
+  // as candidates, on either occurrence, and valid surrounding slots must
+  // still be offered exactly once.
+  // =========================
+
+  function localLabelsOf(timezone: string, rangeStartUtc: string, rangeEndUtc: string, dailyWindow: { startMinuteOfDay: number; endMinuteOfDay: number }): string[] {
+    const slots = generateCandidateSlots({
+      rangeStartUtc,
+      rangeEndUtc,
+      timezone,
+      dailyWindow,
+      durationMinutes: 30,
+      busyIntervals: [],
+      candidateCount: 500,
+    });
+    return slots.map((slot) => {
+      const parts = getZonedParts(Date.parse(slot.startUtc), timezone);
+      return `${parts.month}-${parts.day} ${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
+    });
+  }
+
+  const nyFoldLabels = localLabelsOf("America/New_York", "2026-10-31T00:00:00.000Z", "2026-11-02T00:00:00.000Z", { startMinuteOfDay: 0, endMinuteOfDay: 360 });
+
+  for (const ambiguousLabel of ["11-1 01:00", "11-1 01:15", "11-1 01:30", "11-1 01:45"]) {
+    results.push(check(
+      `[DST-fold-final] America/New_York fall-back: ambiguous local ${ambiguousLabel.split(" ")[1]} is emitted ZERO times, never once, never twice`,
+      !nyFoldLabels.includes(ambiguousLabel)
+    ));
+  }
+
+  results.push(check(
+    "[DST-fold-final] America/New_York fall-back: no duplicate local wall label anywhere in the result",
+    new Set(nyFoldLabels).size === nyFoldLabels.length
+  ));
+
+  for (const validLabel of ["10-31 01:00", "10-31 01:30", "11-1 00:00", "11-1 00:45", "11-1 02:00", "11-1 02:15"]) {
+    results.push(check(
+      `[DST-fold-final] America/New_York fall-back: unambiguous surrounding local time ${validLabel} still appears exactly once`,
+      nyFoldLabels.filter((label) => label === validLabel).length === 1
+    ));
+  }
+
+  const lordHoweFoldLabels = localLabelsOf("Australia/Lord_Howe", "2026-04-04T12:00:00.000Z", "2026-04-06T12:00:00.000Z", { startMinuteOfDay: 0, endMinuteOfDay: 180 });
+
+  for (const ambiguousLabel of ["4-5 01:30", "4-5 01:45"]) {
+    results.push(check(
+      `[DST-fold-final] Australia/Lord_Howe fall-back: ambiguous local ${ambiguousLabel.split(" ")[1]} is emitted ZERO times (proves the fix generalizes beyond a 60-minute assumption)`,
+      !lordHoweFoldLabels.includes(ambiguousLabel)
+    ));
+  }
+
+  results.push(check(
+    "[DST-fold-final] Australia/Lord_Howe fall-back: no duplicate local wall label anywhere in the result",
+    new Set(lordHoweFoldLabels).size === lordHoweFoldLabels.length
+  ));
+
+  results.push(check(
+    "[DST-fold-final] Australia/Lord_Howe fall-back: unambiguous local 01:00 (before the fold) still appears exactly once",
+    lordHoweFoldLabels.filter((label) => label === "4-5 01:00").length === 1
+  ));
 
   return summarize("work/calendarSlotEngine", results);
 }

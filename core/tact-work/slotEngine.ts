@@ -17,7 +17,7 @@
 //     enforces no business-hours opinion of its own.
 
 import type { BusyInterval } from "./calendarAvailability";
-import { addCalendarDays, getZonedParts, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "./timezone";
+import { addCalendarDays, classifyLocalWallTime, getZonedParts, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "./timezone";
 
 export const CANDIDATE_SLOT_GRANULARITY_MINUTES = 15;
 export const DEFAULT_CANDIDATE_COUNT = 3;
@@ -202,17 +202,53 @@ export function generateCandidateSlots(input: SlotEngineInput): CandidateSlot[] 
           slotStart += granularityMs
         ) {
 
-          const slotEnd = slotStart + durationMs;
-          const blocked = busy.some((interval) => overlaps(slotStart, slotEnd, interval.start, interval.end));
+          // TIME-P1c HARDENING FIX (DST-fold-final round, Blocker: duplicate
+          // local wall-clock candidates): stepping through UTC instants at a
+          // fixed millisecond granularity is not sufficient on its own — a
+          // DST fall-back fold means two DIFFERENT UTC instants within this
+          // day's window can map back to the exact SAME local wall-clock
+          // reading (e.g. both 05:00 UTC and 06:00 UTC read as "01:00" local
+          // in America/New_York on the fold day). "Unique UTC instant" is
+          // not the same guarantee as "unique local scheduling time" — a
+          // user must never see the same local label offered twice, or be
+          // silently handed one arbitrary occurrence of an ambiguous one.
+          //
+          // v1 policy (Section 1/3/4): an ambiguous local wall-clock
+          // candidate is skipped entirely — never displayed, on either
+          // occurrence, and never disambiguated by an implicit "earlier" or
+          // "later" choice. This reuses classifyLocalWallTime() — the exact
+          // same DST-fold authority zonedWallTimeToUtcMs() itself is built
+          // on (core/tact-work/timezone.ts) — rather than a second,
+          // independently-maintained heuristic.
+          const slotStartLocalParts = getZonedParts(slotStart, input.timezone);
+          const uniqueness = classifyLocalWallTime(
+            slotStartLocalParts.year,
+            slotStartLocalParts.month,
+            slotStartLocalParts.day,
+            slotStartLocalParts.hour,
+            slotStartLocalParts.minute,
+            input.timezone
+          );
 
-          if (!blocked) {
-            candidates.push({
-              index: candidates.length + 1,
-              startUtc: new Date(slotStart).toISOString(),
-              endUtc: new Date(slotEnd).toISOString(),
-              timezone: input.timezone,
-            });
+          if (uniqueness === "unique") {
+
+            const slotEnd = slotStart + durationMs;
+            const blocked = busy.some((interval) => overlaps(slotStart, slotEnd, interval.start, interval.end));
+
+            if (!blocked) {
+              candidates.push({
+                index: candidates.length + 1,
+                startUtc: new Date(slotStart).toISOString(),
+                endUtc: new Date(slotEnd).toISOString(),
+                timezone: input.timezone,
+              });
+            }
+
           }
+          // "nonexistent" is not reachable here in practice — slotStart is
+          // always a real instant, and every real instant has SOME valid
+          // local reading — but is deliberately handled the same way
+          // (skip, never emit) for defense in depth, not just "ambiguous".
 
         }
 

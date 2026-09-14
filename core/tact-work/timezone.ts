@@ -106,17 +106,18 @@ function getUtcOffsetMinutesAt(epochMs: number, timeZone: string): number {
   return (asIfUtc - epochMs) / 60_000;
 }
 
-// Converts an explicit wall-clock date/time in an explicit IANA timezone
-// into a UTC epoch instant.
-//
 // TIME-P1c HARDENING FIX (final-blocker round, Blocker 3 — Codex-reproduced
-// non-1-hour DST fold, e.g. Australia/Lord_Howe's 30-minute transition):
-// the previous implementation iteratively corrected a naive guess and then
-// only ever probed exactly ±60 minutes to detect a fall-back ambiguity —
-// which silently missed (and would have silently, arbitrarily resolved) an
-// ambiguous wall time in any zone whose DST offset change is not exactly
-// one hour. This is now offset-discovery based instead of hour-hardcoded:
+// non-1-hour DST fold, e.g. Australia/Lord_Howe's 30-minute transition;
+// extracted further for the DST-fold-final round, Section 9): this is the
+// SINGLE semantic authority for "how many real UTC instants does this local
+// wall-clock date/time correspond to in this timezone" — every caller that
+// needs an answer to that question (zonedWallTimeToUtcMs()'s throwing
+// contract below, and core/tact-work/slotEngine.ts's non-throwing
+// per-candidate uniqueness check) is a thin wrapper around this one
+// function, so there is exactly one DST-fold algorithm in the codebase, not
+// two independently-maintained heuristics.
 //
+// Offset-discovery approach (general, not hour-hardcoded):
 //   1. Sample the zone's actual UTC offset at two probe instants 24 hours
 //      before and 24 hours after the naive (wall-clock-as-UTC) target — a
 //      margin comfortably wider than any single real-world DST transition's
@@ -136,24 +137,17 @@ function getUtcOffsetMinutesAt(epochMs: number, timeZone: string): number {
 //      round-trip it back through getZonedParts() in the SAME timezone,
 //      keeping only the ones that reproduce the exact requested wall-clock
 //      reading.
-//   5. Zero surviving candidates = the wall time never occurred (spring-
-//      forward gap) -> fail closed. Exactly one = the unambiguous, correct
-//      instant. Two or more = the wall time is genuinely ambiguous (a
-//      fall-back fold) -> fail closed rather than arbitrarily picking one.
-//
-// V1 policy (documented, matches Section 6): both failure cases always
-// throw — no caller in this codebase currently supplies an explicit UTC
-// offset capable of disambiguating an ambiguous reading, so this function
-// never silently normalizes a nonexistent time to a different clock time,
-// and never arbitrarily picks one of several repeated occurrences.
-export function zonedWallTimeToUtcMs(
+// Returns every distinct matching instant: zero means the wall time never
+// occurred (spring-forward gap), exactly one means it is unambiguous, two
+// or more means it is a genuine fall-back fold.
+function findMatchingInstantsForLocalWallTime(
   year: number,
   month: number,
   day: number,
   hour: number,
   minute: number,
   timeZone: string
-): number {
+): number[] {
 
   const targetAsIfUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
 
@@ -177,6 +171,60 @@ export function zonedWallTimeToUtcMs(
     }
 
   }
+
+  return matchingInstants;
+
+}
+
+export type LocalWallTimeUniqueness = "nonexistent" | "unique" | "ambiguous";
+
+// TIME-P1c HARDENING FIX (DST-fold-final round, Section 9): non-throwing
+// classification built on the same authority as zonedWallTimeToUtcMs()
+// below — used where ambiguity is an expected, silently-skippable condition
+// (candidate-slot filtering) rather than an exceptional one (resolving a
+// single required wall-clock boundary), so that path never needs to
+// construct/catch an InvalidLocalWallTimeError just to ask this question.
+export function classifyLocalWallTime(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string
+): LocalWallTimeUniqueness {
+
+  const matches = findMatchingInstantsForLocalWallTime(year, month, day, hour, minute, timeZone);
+
+  if (matches.length === 0) {
+    return "nonexistent";
+  }
+
+  if (matches.length >= 2) {
+    return "ambiguous";
+  }
+
+  return "unique";
+
+}
+
+// Converts an explicit wall-clock date/time in an explicit IANA timezone
+// into a UTC epoch instant.
+//
+// V1 policy (documented, matches Section 6): both failure cases always
+// throw — no caller in this codebase currently supplies an explicit UTC
+// offset capable of disambiguating an ambiguous reading, so this function
+// never silently normalizes a nonexistent time to a different clock time,
+// and never arbitrarily picks one of several repeated occurrences.
+export function zonedWallTimeToUtcMs(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string
+): number {
+
+  const matchingInstants = findMatchingInstantsForLocalWallTime(year, month, day, hour, minute, timeZone);
 
   if (matchingInstants.length === 0) {
 
