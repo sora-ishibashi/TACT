@@ -1,9 +1,10 @@
 import type { BusyInterval, CalendarAvailabilityErrorCode } from "../../../../tact-work/calendarAvailability";
 import { normalizeComposioError } from "../adapter";
+import { EXPECTED_ENVELOPE_KIND, GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT } from "./googleCalendarFindFreeSlotsContract";
 
 // =========================
 // TACT Integration — Composio Google Calendar Availability Mapper/Normalizer
-// (TIME-P1c Section 7-9)
+// (TIME-P1c Section 7-9; HARDENING Codex delta-fix Sections 1/2/3/6)
 // =========================
 //
 // Schema verification (Section 7): this slug and the exact shapes below were
@@ -12,12 +13,32 @@ import { normalizeComposioError } from "../adapter";
 // on 2026-09-14, current pinned version "20260902_00" at that time. This is
 // a metadata/schema lookup only — it does not execute the tool and does not
 // touch any user's actual Google Calendar. DO NOT GUESS at this shape if it
-// ever needs re-verifying; re-run the same metadata lookup.
+// ever needs re-verifying; re-run the same metadata lookup. The full
+// sanitized contract (field names/types/descriptions only — no
+// credentials, tokens, account IDs, or Calendar data) is committed at
+// ./googleCalendarFindFreeSlotsContract.ts so a reviewer can audit this
+// file against it without needing to re-run that lookup themselves.
 //
 // This file is the ONLY place in the codebase that names this slug or knows
 // this response shape (Section 8/9: strict mapper, strict normalizer — no
 // other file constructs Composio Calendar arguments or parses its output).
 export const GOOGLECALENDAR_FIND_FREE_SLOTS_SLUG = "GOOGLECALENDAR_FIND_FREE_SLOTS";
+
+// TIME-P1c HARDENING FIX (Codex delta-fix, arbitrary-calendar-target
+// blocker): the calendar identifier queried is now a single, internal,
+// non-exported, non-parameterized constant — "primary" (the verified
+// schema's own conceptual name for the authenticated user's main calendar;
+// see the contract fixture in ./__fixtures__/googleCalendarFindFreeSlots.ts).
+// Neither mapToGoogleCalendarFindFreeSlotsInput() nor
+// normalizeGoogleCalendarFindFreeSlotsOutput() below accepts a calendarId
+// parameter at all — there is structurally no argument through which a
+// caller, an LLM, a TemporalRequirement field, or Work metadata could ever
+// supply "attendee@example.com" or any other calendar identifier. This is
+// what makes `sourceScope: "own_calendar"` true BY CONSTRUCTION rather than
+// by convention (Section 1/10/16/17: attendee availability is out of scope
+// for TIME-P1c v1, and this file cannot be used to query anyone else's
+// calendar even by caller error).
+const PRIMARY_CALENDAR_ID = "primary";
 
 // =========================
 // Canonical -> Composio input (Section 8: fixed READ binding)
@@ -53,19 +74,18 @@ export interface GoogleCalendarFindFreeSlotsInput {
 }
 
 // Section 16/10 (attendee honesty, structural enforcement): this mapper
-// only ever emits a single calendar id, defaulting to "primary" — TACT's
-// own accessible calendar. It has no parameter for an arbitrary email
-// address, so this file cannot be used to query a third party's calendar
+// takes no calendarId parameter at all — it always emits exactly
+// PRIMARY_CALENDAR_ID, TACT's own accessible calendar. There is no
+// argument here through which a third party's calendar could be requested,
 // even by caller error; that would require a different, not-yet-built,
 // explicitly-named attendee-availability entry point (Section 17, not
 // implemented in TIME-P1c v1).
 export function mapToGoogleCalendarFindFreeSlotsInput(
-  request: { readonly rangeStartUtc: string; readonly rangeEndUtc: string; readonly timezone: string },
-  calendarId: string
+  request: { readonly rangeStartUtc: string; readonly rangeEndUtc: string; readonly timezone: string }
 ): GoogleCalendarFindFreeSlotsInput {
 
   return {
-    items: [calendarId],
+    items: [PRIMARY_CALENDAR_ID],
     time_min: request.rangeStartUtc,
     time_max: request.rangeEndUtc,
     timezone: request.timezone,
@@ -130,9 +150,50 @@ export type GoogleCalendarFindFreeSlotsNormalizedResult =
       readonly message: string;
     };
 
+// TIME-P1c HARDENING FIX (Codex delta-fix Section 2, provider envelope
+// validation): the verified contract (googleCalendarFindFreeSlotsContract.ts)
+// requires "kind", "timeMin", and "timeMax" on FindFreeSlotsResponse — this
+// normalizer previously read straight through to "calendars" without ever
+// checking any of the three, so a response with the right calendars shape
+// but a wrong/mutated envelope (e.g. a completely different "kind", or a
+// timeMin/timeMax that silently doesn't match what was actually requested —
+// a sign the request itself may not have been honored) would have been
+// accepted at face value. All three are now validated before "calendars" is
+// ever read, and timeMin/timeMax are compared to the ACTUAL requested range
+// (by parsed instant, not string equality, since a provider may legitimately
+// reformat an equivalent ISO timestamp).
+function validateEnvelope(
+  data: Record<string, unknown>,
+  expectedRange: { readonly rangeStartUtc: string; readonly rangeEndUtc: string }
+): { readonly valid: true } | { readonly valid: false; readonly message: string } {
+
+  if (data.kind !== EXPECTED_ENVELOPE_KIND) {
+    return { valid: false, message: `Envelope "kind" was ${JSON.stringify(data.kind)}, expected ${JSON.stringify(EXPECTED_ENVELOPE_KIND)}.` };
+  }
+
+  if (typeof data.timeMin !== "string" || !Number.isFinite(Date.parse(data.timeMin))) {
+    return { valid: false, message: "Envelope \"timeMin\" is missing or unparseable." };
+  }
+
+  if (typeof data.timeMax !== "string" || !Number.isFinite(Date.parse(data.timeMax))) {
+    return { valid: false, message: "Envelope \"timeMax\" is missing or unparseable." };
+  }
+
+  if (Date.parse(data.timeMin) !== Date.parse(expectedRange.rangeStartUtc)) {
+    return { valid: false, message: "Envelope \"timeMin\" does not match the requested range start — the provider may not have honored the request." };
+  }
+
+  if (Date.parse(data.timeMax) !== Date.parse(expectedRange.rangeEndUtc)) {
+    return { valid: false, message: "Envelope \"timeMax\" does not match the requested range end — the provider may not have honored the request." };
+  }
+
+  return { valid: true };
+
+}
+
 export function normalizeGoogleCalendarFindFreeSlotsOutput(
   rawOutput: unknown,
-  calendarId: string
+  expectedRange: { readonly rangeStartUtc: string; readonly rangeEndUtc: string }
 ): GoogleCalendarFindFreeSlotsNormalizedResult {
 
   if (!isRecord(rawOutput)) {
@@ -147,7 +208,17 @@ export function normalizeGoogleCalendarFindFreeSlotsOutput(
     };
   }
 
-  if (!isRecord(rawOutput.data) || !isRecord(rawOutput.data.calendars)) {
+  if (!isRecord(rawOutput.data)) {
+    return { success: false, errorCode: "malformed_response", message: "Composio response was missing the \"data\" envelope." };
+  }
+
+  const envelope = validateEnvelope(rawOutput.data, expectedRange);
+
+  if (!envelope.valid) {
+    return { success: false, errorCode: "malformed_response", message: envelope.message };
+  }
+
+  if (!isRecord(rawOutput.data.calendars)) {
     return {
       success: false,
       errorCode: "malformed_response",
@@ -155,25 +226,40 @@ export function normalizeGoogleCalendarFindFreeSlotsOutput(
     };
   }
 
-  const calendarWindow = rawOutput.data.calendars[calendarId];
+  // TIME-P1c HARDENING FIX (Codex delta-fix Section 1, arbitrary-calendar-
+  // target blocker): this ALWAYS reads exactly PRIMARY_CALENDAR_ID — there
+  // is no calendarId parameter on this function for a caller to override,
+  // so `sourceScope: "own_calendar"` (set by the caller, googleCalendarAvailabilityProvider.ts)
+  // is true by construction, not by convention.
+  const calendarWindow = rawOutput.data.calendars[PRIMARY_CALENDAR_ID];
 
   if (!isRecord(calendarWindow)) {
-    // Composio's own tool documentation warns that a calendar omitted from
-    // the response, or inaccessible, must never be silently treated as
-    // free — this is exactly the "silently produce incorrect availability
-    // results" failure mode it warns about, so it is surfaced as an error.
+    // TIME-P1c HARDENING (Codex delta-fix Section 6, reliability/error
+    // semantics): an entirely ABSENT calendar entry is a structurally
+    // different signal than the documented is_reliable mechanism below —
+    // see googleCalendarFindFreeSlotsContract.ts's reliabilitySemantics —
+    // so it is kept distinct as malformed_response rather than assumed to
+    // share is_reliable:false's permission_denied cause.
     return {
       success: false,
-      errorCode: "permission_denied",
-      message: `Calendar "${calendarId}" was not accessible or was not returned by the provider.`,
+      errorCode: GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.reliabilitySemantics.calendarEntryMissingEntirely,
+      message: `Calendar "${PRIMARY_CALENDAR_ID}" was not returned by the provider at all.`,
     };
   }
 
   if (calendarWindow.is_reliable === false) {
+    // TIME-P1c HARDENING (Codex delta-fix Section 6): grounded in the
+    // contract's own is_reliable description ("Set to False when the
+    // calendar query encountered errors (e.g., notFound, forbidden)") —
+    // both documented causes are access-related, and the ONE calendar TACT
+    // ever queries is the connected account's own "primary" calendar, so
+    // this maps to permission_denied. This must never become
+    // no_availability — that would falsely assert a confirmed, empty
+    // result from data the provider itself flagged as unreliable.
     return {
       success: false,
-      errorCode: "permission_denied",
-      message: `Calendar "${calendarId}" free/busy data was reported unreliable by the provider.`,
+      errorCode: GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.reliabilitySemantics.isReliableFalse,
+      message: `Calendar "${PRIMARY_CALENDAR_ID}" free/busy data was reported unreliable by the provider.`,
     };
   }
 
@@ -183,7 +269,7 @@ export function normalizeGoogleCalendarFindFreeSlotsOutput(
     return {
       success: false,
       errorCode: "malformed_response",
-      message: `Calendar "${calendarId}" busy period data did not match the expected shape.`,
+      message: `Calendar "${PRIMARY_CALENDAR_ID}" busy period data did not match the expected shape.`,
     };
   }
 

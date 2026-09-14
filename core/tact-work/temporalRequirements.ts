@@ -66,11 +66,41 @@ const DATE_RANGE = /(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:〜|～|-|–|to)\s*(\d{1,2}
 // Japanese phrasing "2026年9月14日" never matched the year group at all —
 // the year was silently dropped and the date fell back to a bare "9月14日"
 // (month/day only), with no fail-closed signal that a year had been typed.
-const DATE = /(?:\b(20\d{2})[-/.年])?(\d{1,2})[\/.月](\d{1,2})(?:日)?/;
-// TIME-P1c: how many candidates the user asked for, e.g. "3つ出して" / "3件".
-// Deliberately narrow (つ/件/個 only) so it doesn't collide with the
-// duration/delay number-extraction regexes above, which require 分/時間.
-const CANDIDATE_COUNT = /(\d+)\s*(?:つ|件|個)/;
+//
+// TIME-P1c HARDENING FIX (Codex delta-fix): the month/day separator class
+// previously only recognized "/", ".", "月" — never "-" — so the ISO-like
+// "2026-09-14" (year separator "-" consumed, then "09-14" needed to match
+// the month/day separator, which "-" was not a member of) silently failed
+// to match this regex AT ALL, producing no date rather than a fail-closed
+// signal. "-" is now a valid month/day separator too.
+const DATE = /(?:\b(20\d{2})[-/.年])?(\d{1,2})[-/.月](\d{1,2})(?:日)?/;
+// TIME-P1c HARDENING FIX (Codex delta-fix, candidateCount context
+// hardening v2): the previous design gated a generic "any bare Nつ/件/個"
+// match behind a separate isSchedulingCandidateIntent() sentence-level
+// check. That was still too brittle in both directions:
+//   - "30分の候補を3つ" has no verb (出す/作る/generate) after 候補, so the
+//     sentence-level gate rejected it entirely even though "候補を3つ" is
+//     unambiguous on its own.
+//   - "日程候補を2つ" — "日程候補" wasn't a recognized prefix at all.
+//   - A mixed sentence ("資料を3つ確認して、打ち合わせ候補を2つ出して")
+//     passed the sentence-level gate (it does mention scheduling) but then
+//     extracted the FIRST bare number anywhere in the string — the
+//     unrelated "3つ" attached to 資料, not the "2つ" attached to 候補.
+//
+// This now requires DIRECT syntactic attachment instead: the count must be
+// immediately preceded by 候補/候補日/日程候補/打ち合わせ候補-style
+// candidate vocabulary (optionally via a "を"/"の" particle), so the
+// keyword and the number are matched by ONE regex, not two independent
+// checks. This is what correctly resolves the mixed-sentence case — the
+// match anchors on "候補を2つ", never on the unrelated "3つ" — without
+// reintroducing broad generic numeric extraction (a bare "Nつ" with no
+// preceding 候補-family word anywhere still never matches at all).
+const CANDIDATE_COUNT_JA = /候補(?:日)?(?:を|の)?\s*(\d+)\s*(?:つ|件|個)/;
+// English "candidate slots/options", supporting the count on either side
+// (e.g. "3 candidate slots" / "candidate slots: 3") — kept intentionally
+// simple per instruction not to overbuild NLP; not exercised by any
+// required test, but consistent with the same attachment principle.
+const CANDIDATE_COUNT_EN = /(?:(\d+)\s*candidate\s*(?:slots?|options?)|candidate\s*(?:slots?|options?)\D{0,10}?(\d+))/i;
 const MAX_REASONABLE_CANDIDATE_COUNT = 10;
 
 function extractDelayMinutes(input: string): number | undefined {
@@ -102,14 +132,54 @@ function toDate(month: string, day: string, year?: string): string {
   return year ? `${year}-${monthDay}` : monthDay;
 }
 
+// TIME-P1c HARDENING FIX (Codex delta-fix, explicit-date validation):
+// replaces the previous crude "day <= 31" bound (which let through
+// impossible dates like 2026/2/30 or 4/31) with real calendar-date
+// validation — exact days-in-month, including leap years when a year is
+// known. Built entirely from pure integer arithmetic, with no dependency on
+// any built-in date/time object (this file's own absolute condition,
+// enforced by an existing regression test). Exported so core/tact-work/temporalRange.ts's final,
+// year-aware validation (once a no-year date has been resolved to a
+// concrete year) reuses this exact same logic rather than a second,
+// possibly-divergent implementation.
+const DAYS_IN_MONTH_NON_LEAP = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+export function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+// When `year` is omitted (a yearless date like "2/30"), this uses the more
+// permissive leap-year day count for February (29) — the concrete year
+// isn't known yet at extraction time (core/tact-work/temporalRange.ts
+// resolves it later, against the reference instant), so this stage only
+// rejects dates that are impossible in ANY year (e.g. day 30 in February,
+// day 31 in a 30-day month, day/month out of range). A specific year's
+// exact Feb-29 validity is checked again, precisely, once
+// resolveExplicitDateToLocalParts() knows the concrete year.
+export function isValidCalendarDate(month: number, day: number, year?: number): boolean {
+
+  if (!Number.isInteger(month) || !Number.isInteger(day) || month < 1 || month > 12 || day < 1) {
+    return false;
+  }
+
+  const maxDay = month === 2 && (year === undefined || isLeapYear(year)) ? 29 : DAYS_IN_MONTH_NON_LEAP[month - 1];
+
+  return day <= maxDay;
+
+}
+
 function extractDateConstraint(input: string): TemporalDateConstraint | undefined {
   const range = input.match(DATE_RANGE);
   if (range) {
     const [, startMonth, startDay, endPartA, endPartB] = range;
+    const [endMonth, endDay] = endPartB ? [endPartA, endPartB] : [startMonth, endPartA];
+    if (!isValidCalendarDate(Number(startMonth), Number(startDay)) || !isValidCalendarDate(Number(endMonth), Number(endDay))) {
+      return undefined;
+    }
     return {
       kind: "range",
       start: toDate(startMonth, startDay),
-      end: endPartB ? toDate(endPartA, endPartB) : toDate(startMonth, endPartA),
+      end: toDate(endMonth, endDay),
     };
   }
   if (/(?:来週|next week)/i.test(input)) return { kind: "relative", value: "next_week" };
@@ -121,7 +191,7 @@ function extractDateConstraint(input: string): TemporalDateConstraint | undefine
   const date = input.match(DATE);
   if (!date) return undefined;
   const [, year, month, day] = date;
-  if (Number(month) < 1 || Number(month) > 12 || Number(day) < 1 || Number(day) > 31) return undefined;
+  if (!isValidCalendarDate(Number(month), Number(day), year ? Number(year) : undefined)) return undefined;
   return { kind: "date", date: toDate(month, day, year) };
 }
 
@@ -133,20 +203,31 @@ function extractSpecificTime(input: string): string | undefined {
   return hour ? `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}` : undefined;
 }
 
-// TIME-P1c FIX (candidateCount over-extraction bug): a bare "Nつ/件/個" is
-// not, by itself, evidence that N is a meeting-candidate count — "資料を3つ
-//作って" / "画像を3つ作って" have nothing to do with scheduling. This now
-// requires the same scheduling-candidate-intent signal
-// deriveTemporalRequirementPolicy() uses to classify a request as
-// "meeting_candidates" (isSchedulingCandidateIntent(), defined further
-// down) before extracting a count at all — never a broad generic numeric
-// extraction.
-function extractCandidateCount(input: string): number | undefined {
-  if (!isSchedulingCandidateIntent(input)) return undefined;
-  const match = input.match(CANDIDATE_COUNT);
-  if (!match) return undefined;
-  const count = Number(match[1]);
+function isReasonableCandidateCount(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const count = Number(raw);
   return Number.isFinite(count) && count > 0 && count <= MAX_REASONABLE_CANDIDATE_COUNT ? count : undefined;
+}
+
+// TIME-P1c FIX (candidateCount over-extraction bug) + HARDENING FIX
+// (Codex delta-fix v2, see CANDIDATE_COUNT_JA/EN above): a bare "Nつ/件/個"
+// is not, by itself, evidence that N is a meeting-candidate count —
+// "資料を3つ作って" / "画像を3つ作って" have nothing to do with scheduling.
+// Rather than a separate sentence-level "is this scheduling-shaped at all"
+// gate, the count must be directly, syntactically attached to
+// candidate/scheduling vocabulary (候補/候補日/日程候補/打ち合わせ候補,
+// or "candidate slots/options") in the SAME regex match — this is what
+// correctly resolves a mixed sentence containing an unrelated count
+// elsewhere, and never falls back to broad generic numeric extraction (no
+// 候補-family word anywhere in the input means no match, full stop).
+function extractCandidateCount(input: string): number | undefined {
+
+  const jaMatch = input.match(CANDIDATE_COUNT_JA);
+  const jaCount = isReasonableCandidateCount(jaMatch?.[1]);
+  if (jaCount !== undefined) return jaCount;
+
+  const enMatch = input.match(CANDIDATE_COUNT_EN);
+  return isReasonableCandidateCount(enMatch?.[1] ?? enMatch?.[2]);
 }
 
 export function extractTemporalRequirement(input: string): TemporalRequirement {

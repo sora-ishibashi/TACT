@@ -16,6 +16,7 @@
 // so a later audit can see why a given range was chosen.
 
 import type { TemporalDateConstraint } from "./temporalRequirements";
+import { isValidCalendarDate } from "./temporalRequirements";
 import { getZonedParts, isExplicitUtcInstant, isKnownTimeZone, zonedWallTimeToUtcMs, InvalidLocalWallTimeError } from "./timezone";
 
 export interface ResolvedTemporalRange {
@@ -81,10 +82,6 @@ function singleDayRange(year: number, month: number, day: number, timezone: stri
 const EXPLICIT_YEAR_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const NO_YEAR_DATE = /^(\d{2})-(\d{2})$/;
 
-function isValidCalendarDate(month: number, day: number): boolean {
-  return month >= 1 && month <= 12 && day >= 1 && day <= 31;
-}
-
 function resolveExplicitDateToLocalParts(
   dateString: string,
   referenceParts: { year: number; month: number; day: number },
@@ -99,7 +96,13 @@ function resolveExplicitDateToLocalParts(
     const month = Number(explicitYear[2]);
     const day = Number(explicitYear[3]);
 
-    if (!isValidCalendarDate(month, day)) {
+    // TIME-P1c HARDENING FIX (Codex delta-fix): the year is already known
+    // here, so this checks the EXACT day-in-month bound for that specific
+    // year (e.g. correctly rejects 2026-02-29 — 2026 is not a leap year —
+    // while still accepting 2028-02-29). Reuses
+    // temporalRequirements.ts's isValidCalendarDate() rather than a second,
+    // possibly-divergent leap-year implementation.
+    if (!isValidCalendarDate(month, day, year)) {
       return undefined;
     }
 

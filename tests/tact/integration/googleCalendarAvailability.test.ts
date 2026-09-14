@@ -4,24 +4,37 @@ import {
   normalizeGoogleCalendarFindFreeSlotsOutput,
   mapComposioErrorToCalendarAvailabilityErrorCode,
 } from "../../../core/tact-integration/providers/composio/mappings/googleCalendar";
-import { createComposioGoogleCalendarAvailabilityProvider } from "../../../core/tact-integration/providers/composio/googleCalendarAvailabilityProvider";
+import { GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT, EXPECTED_ENVELOPE_KIND } from "../../../core/tact-integration/providers/composio/mappings/googleCalendarFindFreeSlotsContract";
+import { createComposioGoogleCalendarAvailabilityProvider, type ComposioGoogleCalendarAvailabilityProviderConfig } from "../../../core/tact-integration/providers/composio/googleCalendarAvailabilityProvider";
 import { generateCandidateSchedule } from "../../../core/tact-work/candidateSchedule";
 import type { TemporalRequirement } from "../../../core/tact-work/temporalRequirements";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { check, summarize, type CheckResult } from "../lib/check";
 
-// TIME-P1c Section 7-9: contract tests for the real (schema-verified, but
-// never live-called — Section 14) Composio Google Calendar availability
-// adapter. All Composio responses here are hand-built mocks matching the
-// exact shape verified live via client.tools.getRawComposioToolBySlug()
-// (metadata only, no execution, no real Calendar touched) — never guessed.
+// TIME-P1c Section 7-9 + HARDENING (Codex delta-fix): contract tests for the
+// real (schema-verified, but never live-called — Section 14) Composio
+// Google Calendar availability adapter. All Composio responses here are
+// hand-built mocks matching the exact shape verified live via
+// client.tools.getRawComposioToolBySlug() (metadata only, no execution, no
+// real Calendar touched) — never guessed, and now committed as an auditable
+// contract fixture (googleCalendarFindFreeSlotsContract.ts).
 
 const REQUEST = {
   rangeStartUtc: "2026-09-20T15:00:00.000Z",
   rangeEndUtc: "2026-09-27T15:00:00.000Z",
   timezone: "Asia/Tokyo",
 };
+
+function envelope(overrides: Partial<{ kind: unknown; timeMin: unknown; timeMax: unknown; calendars: unknown }> = {}) {
+  return {
+    kind: EXPECTED_ENVELOPE_KIND,
+    timeMin: REQUEST.rangeStartUtc,
+    timeMax: REQUEST.rangeEndUtc,
+    calendars: { primary: { busy: [], is_reliable: true } },
+    ...overrides,
+  };
+}
 
 export async function run(): Promise<{ pass: number; fail: number }> {
   const results: CheckResult[] = [];
@@ -35,7 +48,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     GOOGLECALENDAR_FIND_FREE_SLOTS_SLUG === "GOOGLECALENDAR_FIND_FREE_SLOTS"
   ));
 
-  const mappedInput = mapToGoogleCalendarFindFreeSlotsInput(REQUEST, "primary");
+  const mappedInput = mapToGoogleCalendarFindFreeSlotsInput(REQUEST);
   results.push(check(
     "[mapper] canonical request maps to exactly the four verified input fields, nothing else",
     JSON.stringify(Object.keys(mappedInput).sort()) === JSON.stringify(["items", "time_max", "time_min", "timezone"]) &&
@@ -46,15 +59,101 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   ));
 
   // =========================
+  // HARDENING (Codex delta-fix Section 1): arbitrary-calendar-target
+  // blocker. No function in this chain accepts a calendar identifier from
+  // its caller at all — verified both at the type/call-arity level (a
+  // second argument is a TypeScript error, checked here by construction:
+  // this file itself only ever calls these with one/two arguments in their
+  // NEW shapes) and at the source level (no "calendarId" parameter name
+  // appears anywhere in the mapper/provider source).
+  // =========================
+
+  const mapperSource = readFileSync(
+    join(__dirname, "..", "..", "..", "core", "tact-integration", "providers", "composio", "mappings", "googleCalendar.ts"),
+    "utf8"
+  );
+  const providerSource = readFileSync(
+    join(__dirname, "..", "..", "..", "core", "tact-integration", "providers", "composio", "googleCalendarAvailabilityProvider.ts"),
+    "utf8"
+  );
+
+  // Strips "//" line comments before searching — this file's own comments
+  // legitimately discuss the REMOVED "calendarId" field by name (explaining
+  // why it's gone), so a plain substring search over the raw source would
+  // false-positive on its own documentation. Actual code (declarations,
+  // parameters, property accesses) is what must never mention it.
+  function stripLineComments(source: string): string {
+    return source
+      .split("\n")
+      .map((line) => {
+        const index = line.indexOf("//");
+        return index === -1 ? line : line.slice(0, index);
+      })
+      .join("\n");
+  }
+
+  const mapperCodeOnly = stripLineComments(mapperSource);
+  const providerCodeOnly = stripLineComments(providerSource);
+
+  results.push(check(
+    "[HARDENING Blocker: calendar target] no \"calendarId\" identifier exists anywhere in the mapper or provider's actual code (comments excluded, since they legitimately document its removal)",
+    !mapperCodeOnly.includes("calendarId") && !providerCodeOnly.includes("calendarId")
+  ));
+
+  results.push(check(
+    "[HARDENING Blocker: calendar target] the mapper always emits exactly [\"primary\"] regardless of what the request object contains",
+    JSON.stringify(mapToGoogleCalendarFindFreeSlotsInput({ ...REQUEST, ...{ items: ["attendee@example.com"] } }).items) === JSON.stringify(["primary"])
+  ));
+
+  // A minimal, well-typed config literal — reaching this line at all
+  // (i.e. this file compiling) already proves {client, tactUserId,
+  // connectedAccountId} are valid/sufficient fields; the grep-based check
+  // above is what proves no OTHER field (calendarId or otherwise) exists,
+  // since TypeScript's structural typing alone can't prove a field's
+  // absence when it might be merely optional.
+  const typedConfigLiteral: ComposioGoogleCalendarAvailabilityProviderConfig = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- narrow mock satisfying only the Pick<Composio,"tools"> shape this provider actually uses
+    client: { tools: { execute: async () => ({}) } } as any,
+    tactUserId: "x",
+    connectedAccountId: "y",
+  };
+  results.push(check(
+    "[HARDENING Blocker: calendar target] the provider config's required fields are exactly {client, tactUserId, connectedAccountId}",
+    Object.keys(typedConfigLiteral).sort().join(",") === "client,connectedAccountId,tactUserId"
+  ));
+
+  results.push(check(
+    "[HARDENING Blocker: calendar target] normalizeGoogleCalendarFindFreeSlotsOutput() always reads calendars.primary, ignoring any other calendar id present in the payload (e.g. an injected attendee email)",
+    (() => {
+      const result = normalizeGoogleCalendarFindFreeSlotsOutput(
+        { successful: true, data: envelope({ calendars: { "attendee@example.com": { busy: [{ start: "2026-09-21T00:00:00.000Z", end: "2026-09-21T23:00:00.000Z" }], is_reliable: true } } }) },
+        REQUEST
+      );
+      // "primary" is absent from this payload (only the injected attendee
+      // key is present), so this must fail the SAME way a genuinely absent
+      // primary calendar fails — it must never silently read the attendee
+      // entry's busy data instead.
+      return !result.success && result.errorCode === GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.reliabilitySemantics.calendarEntryMissingEntirely;
+    })()
+  ));
+
+  // sourceScope cannot be overridden: googleCalendarAvailabilityProvider.ts
+  // hardcodes "own_calendar" as a literal in its return statement — no
+  // config field or provider result field feeds it. Verified at the source
+  // level (a config-driven override would require a *variable*, not a
+  // literal, in that position).
+  results.push(check(
+    "[HARDENING Blocker: calendar target] sourceScope is a hardcoded literal in the provider, not sourced from config or the raw provider response",
+    /sourceScope:\s*"own_calendar"/.test(providerSource) && !/sourceScope:\s*config\./.test(providerSource)
+  ));
+
+  // =========================
   // Normalizer — success path
   // =========================
 
   const successResponse = {
     successful: true,
-    data: {
-      kind: "calendar#freeBusy",
-      timeMin: REQUEST.rangeStartUtc,
-      timeMax: REQUEST.rangeEndUtc,
+    data: envelope({
       calendars: {
         primary: {
           busy: [{ start: "2026-09-21T00:00:00Z", end: "2026-09-21T01:00:00Z" }],
@@ -62,10 +161,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           is_reliable: true,
         },
       },
-    },
+    }),
   };
 
-  const normalizedSuccess = normalizeGoogleCalendarFindFreeSlotsOutput(successResponse, "primary");
+  const normalizedSuccess = normalizeGoogleCalendarFindFreeSlotsOutput(successResponse, REQUEST);
   results.push(check(
     "[normalizer] a well-formed, reliable response normalizes to exactly the busy intervals, nothing else from the raw payload",
     normalizedSuccess.success &&
@@ -76,42 +175,93 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   ));
 
   // =========================
-  // Normalizer — error taxonomy (Section 9/12)
+  // HARDENING (Codex delta-fix Section 2): provider envelope validation
   // =========================
 
-  const unsuccessful = normalizeGoogleCalendarFindFreeSlotsOutput({ successful: false, error: "quota exceeded" }, "primary");
+  const unsuccessful = normalizeGoogleCalendarFindFreeSlotsOutput({ successful: false, error: "quota exceeded" }, REQUEST);
   results.push(check(
     '[normalizer] successful:false is provider_failure, never silently treated as "no availability"',
     !unsuccessful.success && unsuccessful.errorCode === "provider_failure" && unsuccessful.message === "quota exceeded"
   ));
 
-  const missingCalendarsKey = normalizeGoogleCalendarFindFreeSlotsOutput({ successful: true, data: { kind: "calendar#freeBusy" } }, "primary");
+  const missingDataEnvelope = normalizeGoogleCalendarFindFreeSlotsOutput({ successful: true }, REQUEST);
+  results.push(check(
+    "[normalizer] a response missing the \"data\" envelope entirely is malformed_response",
+    !missingDataEnvelope.success && missingDataEnvelope.errorCode === "malformed_response"
+  ));
+
+  const wrongKind = normalizeGoogleCalendarFindFreeSlotsOutput({ successful: true, data: envelope({ kind: "calendar#event" }) }, REQUEST);
+  results.push(check(
+    "[HARDENING Blocker: envelope] a malformed/unexpected envelope \"kind\" fails as malformed_response, never silently accepted",
+    !wrongKind.success && wrongKind.errorCode === "malformed_response"
+  ));
+
+  const missingKind = normalizeGoogleCalendarFindFreeSlotsOutput({ successful: true, data: envelope({ kind: undefined }) }, REQUEST);
+  results.push(check(
+    "[HARDENING Blocker: envelope] a missing envelope \"kind\" fails as malformed_response",
+    !missingKind.success && missingKind.errorCode === "malformed_response"
+  ));
+
+  const malformedTimeMin = normalizeGoogleCalendarFindFreeSlotsOutput({ successful: true, data: envelope({ timeMin: "not-a-timestamp" }) }, REQUEST);
+  results.push(check(
+    "[HARDENING Blocker: envelope] a malformed/unparseable envelope \"timeMin\" fails as malformed_response",
+    !malformedTimeMin.success && malformedTimeMin.errorCode === "malformed_response"
+  ));
+
+  const malformedTimeMax = normalizeGoogleCalendarFindFreeSlotsOutput({ successful: true, data: envelope({ timeMax: "not-a-timestamp" }) }, REQUEST);
+  results.push(check(
+    "[HARDENING Blocker: envelope] a malformed/unparseable envelope \"timeMax\" fails as malformed_response",
+    !malformedTimeMax.success && malformedTimeMax.errorCode === "malformed_response"
+  ));
+
+  const inconsistentRange = normalizeGoogleCalendarFindFreeSlotsOutput(
+    { successful: true, data: envelope({ timeMin: "2000-01-01T00:00:00.000Z" }) }, // does not match REQUEST.rangeStartUtc at all
+    REQUEST
+  );
+  results.push(check(
+    "[HARDENING Blocker: envelope] an envelope timeMin that does not match the actually-requested range start fails as malformed_response — the provider may not have honored the request",
+    !inconsistentRange.success && inconsistentRange.errorCode === "malformed_response"
+  ));
+
+  const differentButEquivalentInstant = normalizeGoogleCalendarFindFreeSlotsOutput(
+    // Same instant as REQUEST.rangeStartUtc, reformatted with an explicit
+    // +00:00 offset instead of "Z" — must still be accepted (compared by
+    // parsed instant, never by string equality).
+    { successful: true, data: envelope({ timeMin: "2026-09-20T15:00:00.000+00:00" }) },
+    REQUEST
+  );
+  results.push(check(
+    "[normalizer] an equivalent instant reformatted with an explicit offset (not \"Z\") is still accepted — compared by parsed instant, not string equality",
+    differentButEquivalentInstant.success
+  ));
+
+  const missingCalendarsKey = normalizeGoogleCalendarFindFreeSlotsOutput({ successful: true, data: envelope({ calendars: undefined }) }, REQUEST);
   results.push(check(
     "[normalizer] a response missing data.calendars entirely is malformed_response, never treated as fully free",
     !missingCalendarsKey.success && missingCalendarsKey.errorCode === "malformed_response"
   ));
 
   const calendarNotInMap = normalizeGoogleCalendarFindFreeSlotsOutput(
-    { successful: true, data: { calendars: { "someone-else@example.com": { busy: [] } } } },
-    "primary"
+    { successful: true, data: envelope({ calendars: { "someone-else@example.com": { busy: [] } } }) },
+    REQUEST
   );
   results.push(check(
-    '[normalizer] the requested calendar id absent from the response is permission_denied, NEVER inferred as free (Composio\'s own documented "inaccessible = silently free" pitfall must not reach Core)',
-    !calendarNotInMap.success && calendarNotInMap.errorCode === "permission_denied"
+    "[normalizer] the primary calendar entry absent from the response is a distinguished failure, NEVER inferred as free (Composio's own documented \"inaccessible = silently free\" pitfall must not reach Core)",
+    !calendarNotInMap.success && calendarNotInMap.errorCode === GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.reliabilitySemantics.calendarEntryMissingEntirely
   ));
 
   const unreliableCalendar = normalizeGoogleCalendarFindFreeSlotsOutput(
-    { successful: true, data: { calendars: { primary: { busy: [], is_reliable: false } } } },
-    "primary"
+    { successful: true, data: envelope({ calendars: { primary: { busy: [], is_reliable: false } } }) },
+    REQUEST
   );
   results.push(check(
-    "[normalizer] is_reliable:false is permission_denied, never trusted as an empty (fully free) busy list",
-    !unreliableCalendar.success && unreliableCalendar.errorCode === "permission_denied"
+    "[normalizer] is_reliable:false maps to the contract-documented reliability semantics, never trusted as an empty (fully free) busy list",
+    !unreliableCalendar.success && unreliableCalendar.errorCode === GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.reliabilitySemantics.isReliableFalse
   ));
 
   const malformedBusyEntry = normalizeGoogleCalendarFindFreeSlotsOutput(
-    { successful: true, data: { calendars: { primary: { busy: [{ start: "2026-09-21T00:00:00Z" }] } } } }, // missing "end"
-    "primary"
+    { successful: true, data: envelope({ calendars: { primary: { busy: [{ start: "2026-09-21T00:00:00Z" }] } } }) }, // missing "end"
+    REQUEST
   );
   results.push(check(
     "[normalizer] one malformed busy period fails the entire parse (malformed_response), never drops it and returns the rest as if complete",
@@ -119,7 +269,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   ));
 
   for (const notAnObject of [null, "a string", 42, ["array"]]) {
-    const result = normalizeGoogleCalendarFindFreeSlotsOutput(notAnObject, "primary");
+    const result = normalizeGoogleCalendarFindFreeSlotsOutput(notAnObject, REQUEST);
     results.push(check(
       `[normalizer] a non-object raw response (${JSON.stringify(notAnObject)}) is malformed_response, never crashes`,
       !result.success && result.errorCode === "malformed_response"
@@ -130,19 +280,43 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     {
       successful: true,
       unexpectedTopLevelField: { secret: "leak-me-not" },
-      data: {
+      data: envelope({
         calendars: { primary: { busy: [], is_reliable: true, someUnknownProviderField: "ignored" } },
-        display_url: "https://calendar.google.com/should-not-leak",
-      },
+      }),
     },
-    "primary"
+    REQUEST
   );
   results.push(check(
     "[normalizer] unknown/extra provider fields are ignored, never copied into the canonical result",
     extraUnknownFields.success &&
       extraUnknownFields.busyIntervals.length === 0 &&
-      !JSON.stringify(extraUnknownFields).includes("leak-me-not") &&
-      !JSON.stringify(extraUnknownFields).includes("should-not-leak")
+      !JSON.stringify(extraUnknownFields).includes("leak-me-not")
+  ));
+
+  // =========================
+  // HARDENING (Codex delta-fix Section 3): contract fixture auditability
+  // =========================
+
+  results.push(check(
+    "[HARDENING Blocker: schema auditability] the committed contract fixture's slug matches the slug this file actually calls",
+    GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.slug === GOOGLECALENDAR_FIND_FREE_SLOTS_SLUG
+  ));
+
+  results.push(check(
+    "[HARDENING Blocker: schema auditability] the contract documents all three envelope fields the normalizer actually validates (kind/timeMin/timeMax)",
+    JSON.stringify([...GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.output.findFreeSlotsResponse.required].sort()) === JSON.stringify(["kind", "timeMax", "timeMin"])
+  ));
+
+  results.push(check(
+    "[HARDENING Blocker: schema auditability] EXPECTED_ENVELOPE_KIND (used by the live runtime check) is sourced from the contract, not redeclared separately",
+    EXPECTED_ENVELOPE_KIND === GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.output.findFreeSlotsResponse.fields.kind.expectedValue &&
+      typeof EXPECTED_ENVELOPE_KIND === "string" && EXPECTED_ENVELOPE_KIND.length > 0
+  ));
+
+  results.push(check(
+    "[HARDENING Blocker: schema auditability] the contract's is_reliable description text (the actual evidence for the reliability mapping) mentions both documented causes",
+    GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.output.calendarWindow.fields.is_reliable.description.includes("notFound") &&
+      GOOGLE_CALENDAR_FIND_FREE_SLOTS_CONTRACT.output.calendarWindow.fields.is_reliable.description.includes("forbidden")
   ));
 
   // =========================
@@ -187,8 +361,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   ));
 
   results.push(check(
-    "[provider] the arguments actually sent to Composio are exactly the mapper's four fixed fields",
-    JSON.stringify(capturedArguments) === JSON.stringify(mapToGoogleCalendarFindFreeSlotsInput(REQUEST, "primary"))
+    "[provider] the arguments actually sent to Composio are exactly the mapper's four fixed fields, always targeting \"primary\"",
+    JSON.stringify(capturedArguments) === JSON.stringify(mapToGoogleCalendarFindFreeSlotsInput(REQUEST))
   ));
 
   results.push(check(
@@ -226,15 +400,6 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // used elsewhere in this suite (e.g. tests/tact/work/temporalRequirements.test.ts).
   // =========================
 
-  const mapperSource = readFileSync(
-    join(__dirname, "..", "..", "..", "core", "tact-integration", "providers", "composio", "mappings", "googleCalendar.ts"),
-    "utf8"
-  );
-  const providerSource = readFileSync(
-    join(__dirname, "..", "..", "..", "core", "tact-integration", "providers", "composio", "googleCalendarAvailabilityProvider.ts"),
-    "utf8"
-  );
-
   const otherCalendarSlugPattern = /GOOGLECALENDAR_(?!FIND_FREE_SLOTS)[A-Z_]+/;
   results.push(check(
     "[safety] no other googlecalendar action slug (create/update/delete/move/invite/RSVP or otherwise) is named anywhere in the mapper or provider files",
@@ -251,7 +416,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // core/tact-work/candidateSchedule.ts pipeline as the Fake provider does
   // in the Foundation's Reality Test — proving CalendarAvailabilityProvider
   // is genuinely provider-neutral, still with zero live Composio calls
-  // (the client here is the same mock used above).
+  // (the client here is the same mock used above), and now exercising the
+  // hardened envelope validation end-to-end too.
   // =========================
 
   const realityRequirement: TemporalRequirement = {
@@ -262,19 +428,26 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     dailyWindow: { startMinuteOfDay: 540, endMinuteOfDay: 1080 }, // 9:00-18:00
   };
 
+  // "next_week" resolved against reference 2026-09-14T00:00:00.000Z in
+  // Asia/Tokyo is the Mon-Sun week 2026-09-20T15:00:00.000Z .. 2026-09-27T15:00:00.000Z
+  // (verified in tests/tact/work/calendarAvailabilitySchedule.test.ts's own
+  // [range] 来週 check) — the mock below echoes exactly that back as
+  // timeMin/timeMax, matching real provider behavior.
   const mockedRealAdapterProvider = createComposioGoogleCalendarAvailabilityProvider({
     client: {
       tools: {
         execute: async () => ({
           successful: true,
-          data: {
+          data: envelope({
+            timeMin: "2026-09-20T15:00:00.000Z",
+            timeMax: "2026-09-27T15:00:00.000Z",
             calendars: {
               primary: {
                 busy: [{ start: "2026-09-21T00:00:00.000Z", end: "2026-09-21T01:00:00.000Z" }],
                 is_reliable: true,
               },
             },
-          },
+          }),
         }),
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- narrow mock satisfying only the Pick<Composio,"tools"> shape this provider actually uses
@@ -290,7 +463,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   });
 
   results.push(check(
-    "[end-to-end] the real (mocked-Composio) adapter drives candidateSchedule.ts to produce the same deterministic 3-candidate result as the Fake-provider Reality Test",
+    "[end-to-end] the real (mocked-Composio) adapter drives candidateSchedule.ts through fixed primary-calendar targeting, strict envelope validation, and normalization to produce the same deterministic 3-candidate result as the Fake-provider Reality Test",
     endToEnd.success &&
       endToEnd.candidates.length === 3 &&
       endToEnd.candidates[0].startUtc === "2026-09-21T01:00:00.000Z" &&

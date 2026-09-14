@@ -57,21 +57,21 @@ export interface ComposioGoogleCalendarAvailabilityProviderConfig {
   // explicitly out of scope this phase (Section 6/13) — the caller
   // supplies it directly.
   readonly connectedAccountId: string;
-  // Defaults to "primary" (the authenticated user's own calendar).
-  // Section 10/16/17 (attendee honesty, enforced structurally): there is no
-  // supported way to pass another person's email address as a target
-  // through this config — set this only to one of the connected user's own
-  // calendar ids.
-  readonly calendarId?: string;
+  // TIME-P1c HARDENING FIX (Codex delta-fix Section 1, arbitrary-calendar-
+  // target blocker): there is deliberately no calendarId field here anymore.
+  // The prior optional `calendarId` let a caller override the queried
+  // calendar (e.g. "attendee@example.com") while this provider still
+  // unconditionally returned sourceScope: "own_calendar" — an honesty gap.
+  // mapToGoogleCalendarFindFreeSlotsInput() and
+  // normalizeGoogleCalendarFindFreeSlotsOutput() (./mappings/googleCalendar.ts)
+  // now both hardcode the queried calendar internally with no parameter for
+  // it at all, so sourceScope: "own_calendar" is true by construction.
 }
-
-const DEFAULT_CALENDAR_ID = "primary";
 
 export function createComposioGoogleCalendarAvailabilityProvider(
   config: ComposioGoogleCalendarAvailabilityProviderConfig
 ): CalendarAvailabilityProvider {
 
-  const calendarId = config.calendarId ?? DEFAULT_CALENDAR_ID;
   const toolkitVersion = getGoogleCalendarToolkitVersion();
 
   return {
@@ -85,7 +85,7 @@ export function createComposioGoogleCalendarAvailabilityProvider(
         rawOutput = await config.client.tools.execute(GOOGLECALENDAR_FIND_FREE_SLOTS_SLUG, {
           userId: toComposioUserId(config.tactUserId),
           connectedAccountId: config.connectedAccountId,
-          arguments: mapToGoogleCalendarFindFreeSlotsInput(request, calendarId),
+          arguments: mapToGoogleCalendarFindFreeSlotsInput(request),
           version: toolkitVersion,
           dangerouslySkipVersionCheck: toolkitVersion === "latest",
         });
@@ -97,7 +97,10 @@ export function createComposioGoogleCalendarAvailabilityProvider(
 
       }
 
-      const normalized = normalizeGoogleCalendarFindFreeSlotsOutput(rawOutput, calendarId);
+      const normalized = normalizeGoogleCalendarFindFreeSlotsOutput(rawOutput, {
+        rangeStartUtc: request.rangeStartUtc,
+        rangeEndUtc: request.rangeEndUtc,
+      });
 
       if (!normalized.success) {
         return { success: false, error: { code: normalized.errorCode, message: normalized.message } };

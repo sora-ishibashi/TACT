@@ -171,5 +171,84 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     schedulingCandidateCountWithDuration.candidateCount === 3 && schedulingCandidateCountWithDuration.durationMinutes === 30
   ));
 
+  // =========================
+  // TIME-P1c HARDENING (Codex delta-fix Section 4): explicit-date validation
+  // =========================
+
+  const dashDate = extractTemporalRequirement("2026-09-14に会議");
+  results.push(check(
+    "[HARDENING Blocker: explicit date] \"2026-09-14\" (ISO dash format) is now recognized — previously the month/day separator class excluded \"-\"",
+    dashDate.date?.kind === "date" && dashDate.date.date === "2026-09-14"
+  ));
+
+  const noVerbYearlessDate = extractTemporalRequirement("9月14日に会議");
+  results.push(check(
+    "[HARDENING Blocker: explicit date] \"9月14日\" (yearless) is unaffected by the dash-separator fix",
+    noVerbYearlessDate.date?.kind === "date" && noVerbYearlessDate.date.date === "09-14"
+  ));
+
+  const invalidFeb30Slash = extractTemporalRequirement("2026/2/30に会議");
+  results.push(check(
+    "[HARDENING Blocker: explicit date] \"2026/2/30\" is rejected — real calendar-date validation, not JS Date rollover",
+    invalidFeb30Slash.date === undefined
+  ));
+
+  const invalidFeb30Dash = extractTemporalRequirement("2026-02-30に会議");
+  results.push(check(
+    "[HARDENING Blocker: explicit date] \"2026-02-30\" is rejected",
+    invalidFeb30Dash.date === undefined
+  ));
+
+  const invalidMonth13 = extractTemporalRequirement("2026/13/01に会議");
+  results.push(check(
+    "[HARDENING Blocker: explicit date] \"2026/13/01\" (month 13) is rejected",
+    invalidMonth13.date === undefined
+  ));
+
+  const invalidMonth0 = extractTemporalRequirement("2026/00/01に会議");
+  results.push(check(
+    "[HARDENING Blocker: explicit date] \"2026/00/01\" (month 0) is rejected",
+    invalidMonth0.date === undefined
+  ));
+
+  const nonLeapFeb29 = extractTemporalRequirement("2026-02-29に会議");
+  results.push(check(
+    "[HARDENING Blocker: explicit date] \"2026-02-29\" is rejected — 2026 is not a leap year, validated by real year-aware arithmetic, not a bare day<=31 bound",
+    nonLeapFeb29.date === undefined
+  ));
+
+  const leapFeb29 = extractTemporalRequirement("2028-02-29に会議");
+  results.push(check(
+    "[HARDENING Blocker: explicit date] \"2028-02-29\" is accepted — 2028 IS a leap year",
+    leapFeb29.date?.kind === "date" && leapFeb29.date.date === "2028-02-29"
+  ));
+
+  // =========================
+  // TIME-P1c HARDENING (Codex delta-fix Section 5): candidateCount context
+  // hardening v2 — direct syntactic attachment to candidate/scheduling
+  // vocabulary, replacing the prior sentence-level gate.
+  // =========================
+
+  results.push(check(
+    "[HARDENING Blocker: candidateCount] \"打ち合わせ候補3件\" (no を/の particle, no verb) sets candidateCount = 3",
+    extractTemporalRequirement("打ち合わせ候補3件").candidateCount === 3
+  ));
+
+  results.push(check(
+    "[HARDENING Blocker: candidateCount] \"日程候補を2つ\" (日程候補 prefix, previously unrecognized) sets candidateCount = 2",
+    extractTemporalRequirement("日程候補を2つ").candidateCount === 2
+  ));
+
+  results.push(check(
+    "[HARDENING Blocker: candidateCount] \"候補日を3つ\" (候補日 compound) sets candidateCount = 3",
+    extractTemporalRequirement("候補日を3つ").candidateCount === 3
+  ));
+
+  const mixedUnrelatedAndScheduling = extractTemporalRequirement("資料を3つ確認して、打ち合わせ候補を2つ出して");
+  results.push(check(
+    "[HARDENING Blocker: candidateCount] a mixed sentence with an unrelated count elsewhere selects the SCHEDULING count (2), never the unrelated one (3)",
+    mixedUnrelatedAndScheduling.candidateCount === 2
+  ));
+
   return summarize("work/temporalRequirements", results);
 }
