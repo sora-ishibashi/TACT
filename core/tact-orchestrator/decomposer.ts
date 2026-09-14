@@ -6,6 +6,11 @@ import {
 import { extractResearchTopic } from "../tact-research/queryGeneration";
 import type { OrchestrationRequest } from "./types";
 import type { Task } from "./task";
+// CAP-P1c: Task meaning -> Canonical Capability -> execution binding、
+// という意味論的に決定される単一のCapabilityPlanを、
+// assignedCapability(execution binding)より前に(あるいは同時に)
+// 参照する。
+import { planCapabilityForIntent, type CapabilityPlan } from "./capabilityPlan";
 
 // =========================
 // decomposeTask (Phase 3、Phase 10で比較表現の自然言語耐性を追加)
@@ -80,9 +85,15 @@ const LISTED_SUBJECTS_COMPARE_PATTERN = new RegExp(
 const SEQUENTIAL_PATTERN =
   /^(.+?)(?:について|を)(?:調べ|調査)(?:て|し)(?:て)?、?(?:その結果をもとに|その結果を踏まえて|それをもとに|それを踏まえて|を踏まえて|その結果)、?(.+?)(?:して)?(?:ください)?。?$/;
 
+// CAP-P1c: assignedCapability(HOW、execution binding)と
+// canonicalCapability(WHAT、Canonical Capability要件)は、常に同じ1つの
+// CapabilityPlan(渡さない場合はnull/undefined = Capability要件なし)
+// から同時に導出する——一方だけを個別に渡す呼び出しを許さない
+// (絶対条件Section6: 「dispatch keyを先に決め、意味論的Capabilityを
+// 事後的に逆算する」という順序に戻らないための構造的な保証)。
 function makeTask(
   description: string,
-  assignedCapability?: string,
+  plan?: CapabilityPlan | null,
   dependencies?: string[]
 ): Task {
 
@@ -94,7 +105,9 @@ function makeTask(
 
     status: "pending",
 
-    assignedCapability,
+    assignedCapability: plan?.binding,
+
+    canonicalCapability: plan?.capability,
 
     dependencies,
 
@@ -122,16 +135,20 @@ export function decomposeTask(
 
     if (contextPlan.sources.notion) {
       const query = contextPlan.sources.notion.query;
-      tasks.push(makeTask(`Notionで「${query}」を検索して`, "integration.notion.search"));
+      // CAP-P1c: classifyIntent()を経由しない経路(Slack context由来の
+      // Context Resolution Plan)でも、同じ意味論的Capability
+      // (organizational_context.read)の宣言を共有する——生のdispatch
+      // key文字列をここで再度書き下ろさない。
+      tasks.push(makeTask(`Notionで「${query}」を検索して`, planCapabilityForIntent("integration_notion_search")));
       // The adapter resolves title references only when unique before the
       // bounded page read; ambiguous search results are never selected here.
-      tasks.push(makeTask(`Notionの「${query}」を読んで`, "integration.notion.read_page"));
+      tasks.push(makeTask(`Notionの「${query}」を読んで`, planCapabilityForIntent("integration_notion_read_page")));
     }
 
     if (contextPlan.sources.gmail) {
       tasks.push(makeTask(
         `Gmailから「${contextPlan.sources.gmail.query}」を検索して`,
-        "integration.gmail.search_messages"
+        planCapabilityForIntent("integration_gmail_search_messages")
       ));
     }
 
@@ -149,9 +166,11 @@ export function decomposeTask(
 
     if (subjectA && subjectB) {
 
+      const researchPlan = planCapabilityForIntent("research");
+
       return [
-        makeTask(`${subjectA}について調査する`, "research"),
-        makeTask(`${subjectB}について調査する`, "research"),
+        makeTask(`${subjectA}について調査する`, researchPlan),
+        makeTask(`${subjectB}について調査する`, researchPlan),
       ];
 
     }
@@ -171,9 +190,11 @@ export function decomposeTask(
     // 扱わない。既存2パターンと同じ最小限のガード。
     if (subjectA && subjectB) {
 
+      const researchPlan = planCapabilityForIntent("research");
+
       return [
-        makeTask(`${subjectA}について調査する`, "research"),
-        makeTask(`${subjectB}について調査する`, "research"),
+        makeTask(`${subjectA}について調査する`, researchPlan),
+        makeTask(`${subjectB}について調査する`, researchPlan),
       ];
 
     }
@@ -189,11 +210,14 @@ export function decomposeTask(
 
     if (subject && followUpAction) {
 
-      const researchTask = makeTask(`${subject}について調査する`, "research");
+      const researchTask = makeTask(`${subject}について調査する`, planCapabilityForIntent("research"));
 
+      // followUpTaskは前段Research Taskの結果を要約/後処理するだけの
+      // Taskであり、それ自体はCapability Registry dispatchを必要と
+      // しない(既存のchat fallback、Phase 3以来変更していない)。
       const followUpTask = makeTask(
         `調査結果をもとに${followUpAction}する`,
-        undefined,
+        null,
         [researchTask.id]
       );
 
@@ -217,29 +241,18 @@ export function decomposeTask(
   // 判定するために使う(Section3)。
   const decision = classifyIntent(input, request.previousUserInput);
 
-  // Architecture Migration Phase C2.1b: "integration_slack_send_message"
-  // intentを、Capability Registry(core/tact-core/capabilities/
-  // registry.ts、core/tact-bootstrap.tsが登録)へ実際に登録される
-  // capability名"integration.slack.send_message"へ変換する。この
-  // 変換自体はProvider(Composio)を一切知らない——Canonical
-  // capability idという交通整理の語彙の変換にとどまる。
-  // Architecture Migration Phase C2.2: 同じ理由で
-  // "integration_slack_list_channels" → "integration.slack.list_channels"
-  // も追加する(read capability第1号)。
-  const assignedCapability =
-    decision.intent === "research"
-      ? "research"
-      : decision.intent === "integration_slack_send_message"
-        ? "integration.slack.send_message"
-        : decision.intent === "integration_slack_list_channels"
-          ? "integration.slack.list_channels"
-          : decision.intent === "integration_gmail_search_messages"
-            ? "integration.gmail.search_messages"
-            : decision.intent === "integration_notion_search"
-              ? "integration.notion.search"
-              : decision.intent === "integration_notion_read_page"
-                ? "integration.notion.read_page"
-          : undefined;
+  // CAP-P1c(旧: Architecture Migration Phase C2.1b/C2.2): 以前は
+  // decision.intentから直接Capability Registry dispatch key
+  // (例:"integration.slack.send_message")を三項演算子で作り、
+  // Canonical Capabilityはそこから事後的に逆算していた。現在は
+  // planCapabilityForIntent()(core/tact-orchestrator/capabilityPlan.ts)
+  // が、Canonical Capability(WHAT)とexecution binding(HOW)を
+  // 同じ1つのCapabilityPlanとして同時に返す——「dispatch keyを先に
+  // 決めて意味論的Capabilityを後から逆算する」順序には戻らない。
+  // decision.intentがCapability Registry dispatchを必要としない
+  // (chat/core_push)場合はnullを返す(fail closedの推測ではなく、
+  // 「そもそもCapability要件が無い」という正当な結果)。
+  const plan = planCapabilityForIntent(decision.intent);
 
   // =========================
   // Phase88: 直前Turnの主題をTask.descriptionへ補完する
@@ -273,8 +286,10 @@ export function decomposeTask(
   // (Phase88 Multi-turn unrelated topicテストで確認)。
   let taskDescription = input;
 
+  const isResearchPlan = plan?.capability === "research.perform";
+
   if (
-    assignedCapability === "research" &&
+    isResearchPlan &&
     request.previousUserInput &&
     (looksLikeAdditionalResearchRequest(input) ||
       looksLikeResearchContinuation(input, request.previousUserInput))
@@ -288,11 +303,11 @@ export function decomposeTask(
 
   }
 
-  const task = makeTask(taskDescription, assignedCapability);
+  const task = makeTask(taskDescription, plan);
 
   // Phase90: Table Schema(列構成・要求件数)をResearch Taskへ引き継ぐ。
   // Research Capability以外のTaskには意味を持たないため設定しない。
-  if (assignedCapability === "research" && request.tableSchema) {
+  if (isResearchPlan && request.tableSchema) {
     task.tableSchema = request.tableSchema;
   }
 

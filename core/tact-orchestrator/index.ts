@@ -59,3 +59,17 @@ export type { AnswerConfidence } from "./confidence";
 export type { LearningSignal, EvaluateTaskExecutionOptions } from "./evaluation";
 export { evaluateTaskExecution } from "./evaluation";
 export { runOrchestration } from "./commander";
+// CAP-P1c: Semantic-first Capability Planningの公開契約。
+// core/tact-work(このモジュールの既存の一方向消費者)が、
+// Task.canonicalCapability/assignedCapabilityと同じCanonical
+// Capability ⇄ execution binding compatibility tableを参照できる
+// ようにする(独自の並行tableを再実装させない、絶対条件: 重複した
+// 可変の真実を作らない)。decomposeTask()/executor.ts自身は
+// 意図的に再exportしない(絶対条件11、既存方針のまま)。
+export type { CanonicalCapabilityRequirement, CapabilityPlan } from "./capabilityPlan";
+export {
+  planCapabilityForIntent,
+  resolveCapabilityForBinding,
+  isBindingCompatibleWithCapability,
+  listKnownExecutionBindings,
+} from "./capabilityPlan";

@@ -31,6 +31,10 @@ import type { ResearchEvidenceItem } from "../tact-research/types";
 import type { ResearchPresentation } from "../tact-analysis/presentation/types";
 import type { ResearchFrameworkArtifact } from "../tact-analysis/framework/types";
 import type { AnalysisArtifactPlan } from "../tact-analysis/composition";
+// CAP-P1c: Semantic-first Capability Planningの値集合・型
+// (core/tact-orchestrator/capabilityPlan.ts、このfileと同じ
+// tact-orchestrator内のsibling module)。
+import type { CanonicalCapabilityRequirement } from "./capabilityPlan";
 
 // =========================
 // Task
@@ -64,13 +68,40 @@ export interface Task {
   // 持ち、実際のMemory retrieval絞り込みロジックは実装しない。
   context?: unknown;
 
-  // どのCapability(core/tact-core/capabilities/registry.tsに
-  // registerCapability済みの名前、例: "research"/"design")で
-  // このTaskを実行するか。省略時はOrchestrator内蔵のChat Handler的な
-  // 単発LLM実行(core/tact-intent/chatHandler.tsと同じ位置づけ)を
-  // 想定する。既存のCapability Registryをそのまま再利用し、
-  // Orchestrator独自の新しいCapability分岐機構は作らない。
+  // 実行binding(HOW): どのCapability(core/tact-core/capabilities/
+  // registry.tsにregisterCapability済みの名前、例: "research"/
+  // "design")でこのTaskを実行するか。省略時はOrchestrator内蔵の
+  // Chat Handler的な単発LLM実行(core/tact-intent/chatHandler.tsと
+  // 同じ位置づけ)を想定する。既存のCapability Registryをそのまま
+  // 再利用し、Orchestrator独自の新しいCapability分岐機構は作らない。
+  //
+  // CAP-P1c: この値の意味・生成される実際の値は一切変更していない
+  // (既存の実行経路を破壊的に置き換えない、絶対条件Section3)。
+  // decomposeTask()は、この値を「まず単独で決めてからCanonical
+  // Capabilityを逆算する」のではなく、直下のcanonicalCapabilityと
+  // 同じCapabilityPlan(core/tact-orchestrator/capabilityPlan.ts)の
+  // 1 entryから同時に導出する(Section6: 「dispatch key → 事後的な
+  // 意味ラベル」ではなく「Task meaning → Canonical Capability →
+  // 互換性のあるexecution binding」の順で決まる)。
   assignedCapability?: string;
+
+  // CAP-P1c: 意味論的Capability要件(WHAT)。decomposeTask()が
+  // Capability Registry dispatch key(上のassignedCapability、HOW)を
+  // 選ぶより前に(あるいは少なくとも同じ1つのCapabilityPlanから同時に)
+  // 決定する、provider名を含まないCanonical Capability。
+  //
+  // 絶対条件(Section5 "Prefer typed structures over two ambiguous
+  // strings"): assignedCapability(自由文字列のdispatch key)と
+  // canonicalCapability(閉じたunion型のCanonical Capability)は、
+  // 別々の意味を持つ別々のfieldとして共存する——一方から他方を
+  // 都度文字列パースし直す設計にしない。
+  //
+  // decomposeTask()が意味論的Capabilityを必要としないTask(chat
+  // fallback、intent="chat"/"core_push")を生成する場合はundefinedの
+  // まま(fail closedではなく、正当な「Capability不要」の表現、
+  // core/tact-orchestrator/capabilityPlan.tsのplanCapabilityForIntent()
+  // のコメント参照)。
+  canonicalCapability?: CanonicalCapabilityRequirement;
 
   assignedModel?: string;
 

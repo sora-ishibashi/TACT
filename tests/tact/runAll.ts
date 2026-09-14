@@ -43,6 +43,7 @@ import { run as runModelRouter } from "./orchestrator/modelRouter.test";
 import { run as runTaskContext } from "./orchestrator/taskContext.test";
 import { run as runExecutor } from "./orchestrator/executor.test";
 import { run as runCapabilityInvocationDecoupling } from "./orchestrator/capabilityInvocationDecoupling.test";
+import { run as runCapabilityPlan } from "./orchestrator/capabilityPlan.test";
 import { run as runDeriveAnswerConfidence } from "./confidence/deriveAnswerConfidence.test";
 import { run as runConfidenceExecutorWiring } from "./confidence/executorWiring.test";
 import { run as runWorkTypes } from "./work/types.test";
@@ -202,6 +203,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "orchestrator/taskContext", run: runTaskContext },
   { name: "orchestrator/executor", run: runExecutor },
   { name: "orchestrator/capabilityInvocationDecoupling", run: runCapabilityInvocationDecoupling },
+  { name: "orchestrator/capabilityPlan", run: runCapabilityPlan },
   { name: "confidence/deriveAnswerConfidence", run: runDeriveAnswerConfidence },
   { name: "confidence/executorWiring", run: runConfidenceExecutorWiring },
   { name: "work/types", run: runWorkTypes },

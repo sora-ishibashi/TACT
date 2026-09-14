@@ -1,4 +1,13 @@
 import type { CanonicalTaskCapability, Work, WorkCapabilityRequirement, WorkTask } from "./types";
+// CAP-P1c: Canonical Capability ⇄ execution binding compatibility
+// tableの単一の真実の情報源はcore/tact-orchestrator/capabilityPlan.ts
+// (Task Planning Layer、意味論的Capabilityが実際に決定される場所)へ
+// 移した。core/tact-workは既存の一方向依存(tact-work →
+// tact-orchestrator)に従い、それを消費するだけの薄いwrapperになる
+// ——このfileが独自に別のTASK_CAPABILITY_MAPを保持すると、2箇所を
+// 手動で同期し続けねばならない「重複した可変の真実」になるため、
+// CAP-P1c指示Section12によりそれを廃止する。
+import { resolveCapabilityForBinding } from "../tact-orchestrator";
 
 // =========================
 // TACT Work — Canonical Capability Router (CAP-P1)
@@ -69,12 +78,12 @@ export const CANONICAL_CAPABILITIES: readonly CanonicalCapability[] = [
 // 絶対条件(DETERMINISM / LLM BOUNDARY): 既知のWorkTask.assignedCapability/
 // Run.capability文字列(core/tact-orchestrator/decomposer.tsのTask
 // 生成、core/tact-work/execution.tsのcreateTask()/createRun()経由で
-// 既に確定しているcanonical dispatch key)から、決定論的なstatic map
-// だけでCanonical Capabilityへ変換する。LLMは一切使わない——このphase
-// 時点で全既知dispatch keyが決定論的に分類できるため、LLM routingは
-// 不要と判断した(repo realityに基づく判断、無理に導入しない)。
+// 既に確定しているcanonical dispatch key)から、決定論的な
+// resolveCapabilityForBinding()(core/tact-orchestrator/
+// capabilityPlan.ts、CAP-P1c)だけでCanonical Capabilityへ変換する。
+// LLMは一切使わない。
 //
-// 絶対条件(fail closed、未知Capabilityを勝手に生成しない): mapに
+// 絶対条件(fail closed、未知Capabilityを勝手に生成しない): tableに
 // 存在しないdispatch key(将来のprovider追加等で未登録のまま)には
 // undefinedを返す——推測でCanonical Capabilityを埋めない。呼び出し元は
 // これを「まだこのdispatch keyのcapability分類が定義されていない」と
@@ -82,35 +91,8 @@ export const CANONICAL_CAPABILITIES: readonly CanonicalCapability[] = [
 //
 // 絶対条件(CAPABILITY CARDINALITY): 1 dispatch key = 1 Capabilityに
 // 永久固定しない——将来1 Taskが複数Capabilityを必要とする場合に
-// 備え、戻り値は常に配列とする(現時点ではどのdispatch keyも1件のみ)。
-const TASK_CAPABILITY_MAP: Readonly<Record<string, readonly CanonicalCapability[]>> = {
-
-  // Research Capability(core/tact-research/、Capability Registry上の
-  // dispatch key"research")。Gmail/Notion communication/organizational
-  // capabilityのいずれにも該当しない、独立した「外部Web調査」能力。
-  "research": ["research.perform"],
-
-  // Gmail(core/tact-integration/、REF-P1経由)。
-  "integration.gmail.search_messages": ["communication.read"],
-  "integration.gmail.send_message": ["communication.write"],
-
-  // Slack(core/tact-integration/)。send_messageは既存
-  // resolveDelegatedWorkIntent()のact判定と同じ"communication.write"。
-  // list_channelsは、communication本文ではなくworkspace構造
-  // (どのchannelが存在するか)を読むoperationのため、Notionの
-  // 「組織内情報を読む」operationと同じ性質と判断し
-  // "organizational_context.read"に分類する(判断根拠: このphaseの
-  // 明示的な設計判断であり、docに記録する)。
-  "integration.slack.send_message": ["communication.write"],
-  "integration.slack.list_channels": ["organizational_context.read"],
-
-  // Notion(core/tact-integration/)。既存resolveDelegatedWorkIntent()の
-  // 分類とそのまま一致する。
-  "integration.notion.search": ["organizational_context.read"],
-  "integration.notion.read_page": ["organizational_context.read"],
-
-};
-
+// 備え、戻り値は常に配列とする(現時点ではどのdispatch keyも1件のみ、
+// resolveCapabilityForBinding()自体は単一値を返す)。
 export function resolveTaskCapabilities(
   assignedCapability: string | null | undefined
 ): readonly CanonicalCapability[] | undefined {
@@ -119,13 +101,15 @@ export function resolveTaskCapabilities(
     // 絶対条件: assignedCapability未設定(chat fallback等)は「能力
     // 不要」であり「未知」ではない——空配列(既知だが要件ゼロ)ではなく
     // undefined(この関数の入力自体が意味を持たない)を返すことで、
-    // 「未知のdispatch key」(mapに無いkey、こちらもundefined)と
+    // 「未知のdispatch key」(tableに無いkey、こちらもundefined)と
     // 区別しない——両者とも「Capability要件を主張しない」という
     // 同じ安全側の扱いにとどめる(絶対条件: 過剰な区別を増やさない)。
     return undefined;
   }
 
-  return TASK_CAPABILITY_MAP[assignedCapability];
+  const capability = resolveCapabilityForBinding(assignedCapability);
+
+  return capability ? [capability] : undefined;
 
 }
 
