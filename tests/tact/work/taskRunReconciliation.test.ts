@@ -19,14 +19,17 @@ import {
   reconcileStrandedTaskProjection,
   computeNextAttemptNumber,
   isRetryableIntegrationFailure,
+  evaluateTaskRetryEligibility,
   type ReconcileStrandedTaskProjectionDeps,
+  type TaskRetryEligibilityDeps,
 } from "../../../core/tact-work/taskRunReconciliation";
 import {
   dispatchIntegrationReadToRuntime,
   type ExecuteApprovedIntegrationActionDeps,
 } from "../../../core/tact-integration/execution";
 import { toRun, type RunRow } from "../../../core/tact-work/store";
-import type { Run, Work, WorkTask, TaskStatus } from "../../../core/tact-work/types";
+import { reconcileWorkCompletionStatus } from "../../../core/tact-work/completion";
+import type { Run, Work, WorkTask, TaskStatus, WorkStatus } from "../../../core/tact-work/types";
 import type { Connection, IntegrationExecutionResult } from "../../../core/tact-integration/types";
 import type { RuntimeAdapter, RuntimeStartOutcome, RuntimeExecutionRequest } from "../../../core/tact-runtime/types";
 import { check, summarize, type CheckResult } from "../lib/check";
@@ -305,6 +308,81 @@ function testPureFunctions(results: CheckResult[]): void {
     )
   );
 
+  // ---- Codexコントラクト由来(codex/runs-p1-contract-tests、
+  // 115e9af、"a latest failed Run cannot be masked by a stale
+  // successful Run"を移植): findLatestRun()が「attempt番号が最大の
+  // Run」を正しく選び、単に「completedなRunが1件でもあるか」を見て
+  // いないことの確認——古い(attempt=1)成功と新しい(attempt=2)失敗が
+  // 混在する場合、新しい失敗が正となる ----
+  results.push(
+    check(
+      "[Codex由来] 古い成功(attempt=1 completed)と新しい失敗(attempt=2 failed)が混在する場合、最新のfailedがcompletedにmaskされずprojected(failed)になる",
+      JSON.stringify(evaluateStrandedTaskProjection("pending", [
+        makeRun({ id: "run-1", attempt: 1, status: "completed" }),
+        makeRun({ id: "run-2", attempt: 2, status: "failed" }),
+      ])) === JSON.stringify({ status: "projected", taskStatus: "failed" })
+    )
+  );
+
+  // =========================
+  // RUNS-P1b: evaluateStrandedTaskProjection()のwaiting_for_retry対応
+  // =========================
+
+  // state D(retryable版): Run failed(retryable=true) / Task running ->
+  // Task を waiting_for_retry へprojection(既存state Dの"failed"固定
+  // ではなく、retryabilityで分岐する)。
+  results.push(
+    check(
+      "[RUNS-P1b state D-retryable] Run failed(retryable=true) / Task running -> projected(waiting_for_retry)",
+      JSON.stringify(evaluateStrandedTaskProjection("running", [
+        makeRun({ status: "failed", externalRef: { errorCode: "temporary_failure", errorRetryable: true } }),
+      ])) === JSON.stringify({ status: "projected", taskStatus: "waiting_for_retry" })
+    )
+  );
+
+  // 既存state D(non-retryable): externalRef.errorRetryable=falseは
+  // 従来通りfailedへprojection(fail safeのデフォルトを明示的に上書き)。
+  results.push(
+    check(
+      "[RUNS-P1b state D-non-retryable] Run failed(retryable=false) / Task running -> projected(failed)",
+      JSON.stringify(evaluateStrandedTaskProjection("running", [
+        makeRun({ status: "failed", externalRef: { errorCode: "authentication_error", errorRetryable: false } }),
+      ])) === JSON.stringify({ status: "projected", taskStatus: "failed" })
+    )
+  );
+
+  // waiting_for_retryのままRunがrunningになった(retry claimがRun作成後
+  // ・Task projection更新前でcrashした場合) -> running へprojection
+  // (既存state Bと同じ理由、waiting_for_retry版)。
+  results.push(
+    check(
+      "[RUNS-P1b] Run running / Task waiting_for_retry -> projected(running)(retry claim後のcrash復旧、state Bのwaiting_for_retry版)",
+      JSON.stringify(evaluateStrandedTaskProjection("waiting_for_retry", [makeRun({ status: "running" })])) ===
+        JSON.stringify({ status: "projected", taskStatus: "running" })
+    )
+  );
+
+  // Task waiting_for_retry のままRunの実体も一致している(最新Runが
+  // 依然retryable failed) -> no_drift(修復不要)。
+  results.push(
+    check(
+      "[RUNS-P1b] Task waiting_for_retry / 最新Runも依然retryable failed -> no_drift(既に正しい状態)",
+      evaluateStrandedTaskProjection("waiting_for_retry", [
+        makeRun({ status: "failed", externalRef: { errorRetryable: true } }),
+      ]).status === "no_drift"
+    )
+  );
+
+  // Task waiting_for_retryだが、実際には既に別経路でこのRunがcompleted
+  // へ確定していた(drift) -> completedへprojection。
+  results.push(
+    check(
+      "[RUNS-P1b] Task waiting_for_retry / 最新Runは実はcompleted(drift) -> projected(completed)",
+      JSON.stringify(evaluateStrandedTaskProjection("waiting_for_retry", [makeRun({ status: "completed" })])) ===
+        JSON.stringify({ status: "projected", taskStatus: "completed" })
+    )
+  );
+
 }
 
 // =========================
@@ -449,6 +527,82 @@ async function testReconcileStrandedTaskProjection(results: CheckResult[]): Prom
           calls.reconcileWorkCompletionStatusCalls === 1
       )
     );
+  }
+
+  // ---- Codexコントラクト由来(codex/runs-p1-contract-tests、115e9af、
+  // "recovered final Task projects to completed and allows Work
+  // completion only after all Tasks succeed"を移植・拡張): 上記の
+  // makeReconcileDeps()はreconcileWorkCompletionStatus()を呼び出し回数
+  // だけ数える簡易fakeだが、この1ブロックだけは本物の
+  // core/tact-work/completion.tsのreconcileWorkCompletionStatus()を
+  // in-memory sub-depsで包んで実際に接続する(multiTaskWork.test.tsと
+  // 同じ「判定ロジック自体は常に本物を通す」方針)。Task B(2 Task中の
+  // 最後の1件)がRun1 failed/Run2 completedというretry historyを経て
+  // 復旧し、reconcileStrandedTaskProjection()がそれをcompletedへ
+  // projectした瞬間、他の全Taskが既にcompletedである場合にのみ
+  // Work全体もcompletedへ確定することを、2つの関数を実際に繋いだ状態で
+  // 確認する。 ----
+  {
+
+    let work: Work = {
+      id: "work-1", userId: OWNER_USER_ID, createdByActorKind: "user", createdByActorId: OWNER_USER_ID,
+      status: "running", createdAt: "2026-09-14T00:00:00.000Z", updatedAt: "2026-09-14T00:00:00.000Z",
+    };
+
+    let tasks: WorkTask[] = [
+      { id: "task-a", workId: "work-1", description: "task-a", status: "completed", createdAt: "x", updatedAt: "x" } as WorkTask,
+      { id: "task-b", workId: "work-1", description: "task-b", status: "pending", createdAt: "x", updatedAt: "x" } as WorkTask,
+    ];
+
+    const runsForTaskB: Run[] = [
+      makeRun({ id: "run-1", taskId: "task-b", attempt: 1, status: "failed", error: "transient" }),
+      makeRun({ id: "run-2", taskId: "task-b", attempt: 2, status: "completed", result: { success: true, output: "recovered" } }),
+    ];
+
+    const workStatusUpdates: WorkStatus[] = [];
+
+    const deps: ReconcileStrandedTaskProjectionDeps = {
+
+      getWork: async () => work,
+
+      listTasksForWork: async () => tasks,
+
+      listRunsForTask: async (_workId, _userId, _accessToken, taskId) =>
+        taskId === "task-b" ? runsForTaskB : [],
+
+      updateTaskStatus: async (_workId, _userId, _accessToken, taskId, status) => {
+        tasks = tasks.map((t) => (t.id === taskId ? { ...t, status } : t));
+      },
+
+      reconcileWorkCompletionStatus: async (workId, userId, accessToken) =>
+        reconcileWorkCompletionStatus(workId, userId, accessToken, {
+          getWork: async () => work,
+          listTasksForWork: async () => tasks,
+          listApprovalsForWork: async () => [],
+          updateWorkStatus: async (_wId, _uId, _at, status) => {
+            workStatusUpdates.push(status);
+            work = { ...work, status };
+          },
+        }),
+
+    };
+
+    const outcome = await reconcileStrandedTaskProjection("work-1", OWNER_USER_ID, "token", "task-b", deps);
+
+    results.push(
+      check(
+        "[Codex由来/E2E] retry historyで復旧したTask Bがcompletedへprojectされ、他の全Task(task-a)も既にcompletedである場合に限り、本物のreconcileWorkCompletionStatus()経由でWork全体もcompletedへ確定する(Run1 failedはfailedのまま保持)",
+        outcome.status === "projected" &&
+          outcome.taskStatus === "completed" &&
+          tasks.every((t) => t.status === "completed") &&
+          workStatusUpdates.length === 1 &&
+          workStatusUpdates[0] === "completed" &&
+          work.status === "completed" &&
+          runsForTaskB[0].status === "failed" &&
+          runsForTaskB[1].status === "completed"
+      )
+    );
+
   }
 
   // no_drift: Task/Runが既に一致 -> 何も更新しない。
@@ -819,6 +973,187 @@ async function testPrepareRunForExecution(results: CheckResult[]): Promise<void>
 
 }
 
+// =========================
+// evaluateTaskRetryEligibility() (RUNS-P1b)
+// =========================
+
+interface MakeRetryEligibilityDepsOptions {
+  work?: Work | null;
+  tasks?: WorkTask[];
+  runs?: Run[];
+}
+
+function makeRetryEligibilityDeps(options: MakeRetryEligibilityDepsOptions = {}) {
+
+  const work: Work | undefined =
+    options.work === null
+      ? undefined
+      : (options.work ??
+        ({
+          id: "work-1",
+          userId: OWNER_USER_ID,
+          createdByActorKind: "user",
+          createdByActorId: OWNER_USER_ID,
+          status: "running",
+          createdAt: "2026-09-09T00:00:00.000Z",
+          updatedAt: "2026-09-09T00:00:00.000Z",
+        } as Work));
+
+  const tasks: WorkTask[] =
+    options.tasks ?? [
+      {
+        id: "task-1",
+        workId: "work-1",
+        description: "test",
+        status: "waiting_for_retry",
+        assignedCapability: "integration.gmail.search_messages",
+        createdAt: "2026-09-09T00:00:00.000Z",
+        updatedAt: "2026-09-09T00:00:00.000Z",
+      } as WorkTask,
+    ];
+
+  const runs: Run[] = options.runs ?? [
+    makeRun({ status: "failed", externalRef: { errorCode: "temporary_failure", errorRetryable: true } }),
+  ];
+
+  const deps: TaskRetryEligibilityDeps = {
+    getWork: async () => work,
+    listTasksForWork: async () => tasks,
+    listRunsForTask: async () => runs,
+  };
+
+  return { deps };
+
+}
+
+async function testRetryEligibility(results: CheckResult[]): Promise<void> {
+
+  const BASE_PARAMS = { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1" };
+
+  // ---- [1] waiting_for_retry Task、no active Run、最新Runがretryable
+  // failed -> eligible(Section12の全条件を満たす基本ケース) ----
+  {
+    const { deps } = makeRetryEligibilityDeps();
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b retry-eligibility 1] waiting_for_retry + no active Run + latest Run retryable failed -> eligible",
+        eligibility.status === "eligible"
+      )
+    );
+  }
+
+  // ---- [2] Task.status !== waiting_for_retry(例: pending) ->
+  // blocked(task_not_waiting_for_retry)、resume.tsのApproval/
+  // Clarification-driven eligibilityとは別の関数であることの確認 ----
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      tasks: [{ id: "task-1", workId: "work-1", description: "test", status: "pending", createdAt: "x", updatedAt: "x" } as WorkTask],
+    });
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b retry-eligibility 2] Task.status='pending'(waiting_for_retryではない) -> blocked(task_not_waiting_for_retry)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "task_not_waiting_for_retry"
+      )
+    );
+  }
+
+  // ---- [3] active(running)Runが存在する -> blocked(active_run_exists)、
+  // duplicate retry不可 ----
+  {
+    const { deps } = makeRetryEligibilityDeps({ runs: [makeRun({ status: "running" })] });
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b retry-eligibility 3] active(running)Runが存在する -> blocked(active_run_exists)、同一Task duplicate active Run防止",
+        eligibility.status === "blocked" && eligibility.reasonCode === "active_run_exists"
+      )
+    );
+  }
+
+  // ---- [4] 最新Runがfailedではない(例: completed、defense-in-depth:
+  // Task.statusだけを信用しない) -> blocked(latest_run_missing_or_not_failed) ----
+  {
+    const { deps } = makeRetryEligibilityDeps({ runs: [makeRun({ status: "completed" })] });
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b retry-eligibility 4] 最新Runがfailedではない(completed) -> blocked(latest_run_missing_or_not_failed、Task.statusだけを信用しないdefense-in-depth)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "latest_run_missing_or_not_failed"
+      )
+    );
+  }
+
+  // ---- [5] Runが1件も無い -> blocked(latest_run_missing_or_not_failed) ----
+  {
+    const { deps } = makeRetryEligibilityDeps({ runs: [] });
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b retry-eligibility 5] Runが1件も無い -> blocked(latest_run_missing_or_not_failed)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "latest_run_missing_or_not_failed"
+      )
+    );
+  }
+
+  // ---- [6] 最新Runはfailedだがretryable=false -> blocked
+  // (latest_failure_not_retryable、fail safe: falseをeligibleにしない) ----
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      runs: [makeRun({ status: "failed", externalRef: { errorCode: "authentication_error", errorRetryable: false } })],
+    });
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b retry-eligibility 6] 最新Runがfailedだがretryable=false -> blocked(latest_failure_not_retryable)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "latest_failure_not_retryable"
+      )
+    );
+  }
+
+  // ---- [7] retryabilityが不明(externalRef無し、RUNS-P1以前のRun相当) ->
+  // blocked(latest_failure_not_retryable、fail safe: undefinedをeligibleに
+  // しない、trueと明示されている場合のみ許可) ----
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      runs: [makeRun({ status: "failed", externalRef: null })],
+    });
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b retry-eligibility 7] retryabilityが不明(externalRef無し) -> blocked(latest_failure_not_retryable、fail safe)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "latest_failure_not_retryable"
+      )
+    );
+  }
+
+  // ---- [8/9] Work/Task不明 -> fail closed ----
+  {
+    const { deps: workNotFoundDeps } = makeRetryEligibilityDeps({ work: null });
+    const workNotFound = await evaluateTaskRetryEligibility(BASE_PARAMS, workNotFoundDeps);
+
+    const { deps: taskNotFoundDeps } = makeRetryEligibilityDeps({ tasks: [] });
+    const taskNotFound = await evaluateTaskRetryEligibility(BASE_PARAMS, taskNotFoundDeps);
+
+    results.push(
+      check(
+        "[RUNS-P1b retry-eligibility 8/9] Work不明はblocked(work_not_found)、Task不明はblocked(task_not_found)(fail closed)",
+        workNotFound.status === "blocked" && workNotFound.reasonCode === "work_not_found" &&
+          taskNotFound.status === "blocked" && taskNotFound.reasonCode === "task_not_found"
+      )
+    );
+  }
+
+}
+
 export async function run(): Promise<{ pass: number; fail: number }> {
 
   const results: CheckResult[] = [];
@@ -826,6 +1161,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   testPureFunctions(results);
   await testReconcileStrandedTaskProjection(results);
   await testPrepareRunForExecution(results);
+  await testRetryEligibility(results);
 
   return summarize("work/taskRunReconciliation", results);
 

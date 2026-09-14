@@ -446,9 +446,11 @@ async function prepareRunForExecution(
   const { workId, userId, accessToken, taskId, connection, action } = params;
 
   // Architecture Migration Phase C2.1c-a-fix(絶対条件、read/write共通):
-  // 新規external executionを開始できるTask stateはpendingだけである。
-  // 単一Task取得APIが無いため、既存listTasksForWork()を再利用する
-  // (新しいDB queryを追加しない)。
+  // 新規external executionを開始できるTask stateはpending、または
+  // RUNS-P1bで追加されたwaiting_for_retry(直近のRun failureが
+  // retryableだった、既存Approval/frozen actionはそのまま再利用する
+  // retry attempt)だけである。単一Task取得APIが無いため、既存
+  // listTasksForWork()を再利用する(新しいDB queryを追加しない)。
   const tasksForWork = await deps.listTasksForWork(workId, userId, accessToken);
   const task = tasksForWork.find((t) => t.id === taskId);
 
@@ -456,7 +458,7 @@ async function prepareRunForExecution(
     return { ok: false, outcome: { status: "not_found" } };
   }
 
-  if (task.status !== "pending") {
+  if (task.status !== "pending" && task.status !== "waiting_for_retry") {
     return { ok: false, outcome: { status: "task_not_executable", taskStatus: task.status } };
   }
 
@@ -746,7 +748,31 @@ async function executeIntegrationActionCore(
     accessToken
   );
 
-  await deps.updateTaskStatus(workId, userId, accessToken, taskId, "failed");
+  // RUNS-P1b(Section6、Run failure → Task projection): result.error.
+  // retryable(Provider/Adapterが既に確定させたfailure、絶対条件Section7:
+  // 「requestが実際に届いたか不明」なambiguousなoutcomeはここに一切
+  // 到達しない——そちらはdeps.executeIntegrationAction()自身が例外を
+  // 投げるか、Runtime dispatch層(dispatchIntegrationReadToRuntime()の
+  // "ambiguous"分岐)で個別に扱われ、Runをrunningのまま維持する。この
+  // 分岐に到達した時点で「provider/adapterが明確にfailedを返した」
+  // ことが確定しているため、result.error.retryableをそのまま判断材料
+  // として使ってよい)を見て、Task.statusをterminal"failed"にするか
+  // non-terminal"waiting_for_retry"にするかを決める。
+  //
+  // 絶対条件(fail safe、Section6): retryable===trueが明示されている
+  // 場合のみwaiting_for_retryへ倒す。false・型不正な値のいずれも
+  // 安全側のfailed(既存の唯一の挙動)のまま——このcommit時点の実際の
+  // composio adapter(core/tact-integration/providers/composio/
+  // adapter.ts)は常にretryable:falseを返すため、既存の全production
+  // Taskの挙動はこのcommitで一切変わらない。
+  //
+  // IntegrationActionExecutionOutcome自体には新しいstatusを追加しない
+  // (このfile冒頭の既存絶対条件、dispatchIntegrationReadToRuntime()の
+  // コメント参照)——Run自体は変わらず"failed"、変わるのはTask.status
+  // だけである。
+  const nextTaskStatus: TaskStatus = result.error.retryable === true ? "waiting_for_retry" : "failed";
+
+  await deps.updateTaskStatus(workId, userId, accessToken, taskId, nextTaskStatus);
 
   await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
 

@@ -108,7 +108,16 @@ export type TaskResumeEligibilityBlockedReasonCode =
   | "pending_clarification_exists"
   | "clarification_cancelled"
   | "clarification_expired"
-  | "active_run_exists";
+  | "active_run_exists"
+  // RUNS-P1b: waiting_for_retryは、Approval/Clarification解決
+  // (このfileが扱うtrigger)とは別種のtrigger(直近のRun failureが
+  // retryableだった)によるresumeを待つ状態であり、このfileの
+  // resume対象ではない——混同を防ぐため、"pending"と同じ扱いに
+  // フォールスルーさせず、専用のblocked reasonを明示する
+  // (core/tact-work/taskRunReconciliation.tsの
+  // evaluateTaskRetryEligibility()がこのTask用の別のeligibility判定を
+  // 持つ)。
+  | "task_waiting_for_retry";
 
 export type TaskResumeTerminalReasonCode =
   | "task_completed"
@@ -201,6 +210,15 @@ export async function evaluateTaskResumeEligibility(
   // ない(絶対条件Step2「active/running Runの存在」、二重resume防止)。
   if (task.status === "running") {
     return { status: "blocked", reasonCode: "task_already_running" };
+  }
+
+  // RUNS-P1b: task.status==="waiting_for_retry"は、Run failure
+  // retryabilityというこのfileが扱わない別種のtriggerによる状態
+  // ——"pending"と同じ扱いにフォールスルーさせない(このfileの
+  // Approval/Clarification-driven resumeが、意図せずretry-waiting
+  // Taskへ介入しないようにする)。
+  if (task.status === "waiting_for_retry") {
+    return { status: "blocked", reasonCode: "task_waiting_for_retry" };
   }
 
   // ここまで到達した時点でtask.status==="pending"のみ。

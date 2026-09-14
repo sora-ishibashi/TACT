@@ -18,6 +18,8 @@
 //     (Execution deduplication)
 //   - 所有権を偽装したuserId(cross-user)では一切実行に到達しない
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   executeApprovedIntegrationAction,
   executeReadIntegrationAction,
@@ -626,6 +628,130 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           calls.executeIntegrationActionCalls === 0 &&
           calls.createRunCalls === 0 &&
           calls.failRunCalls === 0
+      )
+    );
+  }
+
+  // ---- RUNS-P1b(Section6、Run failure -> Task projection、live wiring):
+  // retryable=trueの明示的なfailureは、Task.statusをterminal"failed"では
+  // なくnon-terminal"waiting_for_retry"へ進める ----
+  {
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async (): Promise<IntegrationExecutionResult> => {
+        calls.executeIntegrationActionCalls += 1;
+        return {
+          status: "failed",
+          error: { code: "temporary_failure", message: "gateway timeout", retryable: true },
+        };
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b] retryable=trueのProvider失敗は、Taskをterminal'failed'ではなくnon-terminal'waiting_for_retry'へ進める",
+        outcome.status === "failed" &&
+          calls.updateTaskStatusCalls[calls.updateTaskStatusCalls.length - 1]?.status === "waiting_for_retry"
+      )
+    );
+
+    results.push(
+      check(
+        "[RUNS-P1b] waiting_for_retryへ進んでもRun自体は'failed'のまま(IntegrationActionExecutionOutcomeに新しいstatusは追加しない、既存絶対条件)",
+        outcome.status === "failed" && outcome.run.status === "failed"
+      )
+    );
+  }
+
+  // ---- RUNS-P1b(regression、既存"[失敗系]"と同じ入力): retryable=false
+  // (このcommit時点の実際のcomposio adapterが常に返す値)は、従来通り
+  // terminal'failed'のまま——既存productionの挙動は一切変わらない ----
+  {
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async (): Promise<IntegrationExecutionResult> => {
+        calls.executeIntegrationActionCalls += 1;
+        return { status: "failed", error: { code: "provider_execution_failed", message: "boom", retryable: false } };
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b regression] retryable=false(既存composio adapterの実際の挙動)は従来通りTaskをterminal'failed'へ進める(既存production挙動は不変)",
+        outcome.status === "failed" &&
+          calls.updateTaskStatusCalls[calls.updateTaskStatusCalls.length - 1]?.status === "failed"
+      )
+    );
+  }
+
+  // ---- RUNS-P1b(Section8、retry start): prepareRunForExecution()の
+  // precondition(このfile冒頭のexecuteApprovedIntegrationAction()経由)が
+  // Task.status==='waiting_for_retry'からも新規Run claimを開始できる
+  // (canonical transition: waiting_for_retry -> claim new Run -> running)。
+  // 既存の失敗Run(attempt=1)はそのままfailedとして残り、新しいRunは
+  // attempt=2として作られる ----
+  {
+    const { deps, calls } = makeDeps({
+      listTasksForWork: async () => {
+        calls.listTasksForWorkCalls += 1;
+        return [makeTask({ status: "waiting_for_retry" })];
+      },
+      listRunsForTask: async () => {
+        calls.listRunsForTaskCalls += 1;
+        return [
+          makeRun({
+            id: "run-attempt-1",
+            attempt: 1,
+            status: "failed",
+            externalRef: { errorCode: "temporary_failure", errorRetryable: true },
+          }),
+        ];
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b] Task.status='waiting_for_retry'からも新規Run claimを開始できる(task_not_executableにならない)、新しいRunはattempt=2として作られ、Taskはrunning->completedへ進む",
+        outcome.status === "completed" &&
+          calls.createRunCalls === 1 &&
+          calls.updateTaskStatusCalls[0]?.status === "running" &&
+          calls.updateTaskStatusCalls[calls.updateTaskStatusCalls.length - 1]?.status === "completed"
+      )
+    );
+  }
+
+  // ---- RUNS-P1b(Section11、terminal Run immutability): store.tsの
+  // completeRun()/failRun()が、UPDATE自体のWHERE句へ
+  // `.eq("status", "running")`を持つこと(compare-and-set guard)の
+  // source-level構造的証拠。fakeベースのDIでは実DB query文を検証できない
+  // ため(このtest fileの既存方針通り、実Supabaseへは一切接続しない)、
+  // 既存tests/tact/orchestrator/capabilityInvocationDecoupling.test.tsの
+  // import-line走査と同じ手法でsource自体を確認する ----
+  {
+    const storeSource = readFileSync(
+      join(__dirname, "..", "..", "..", "core", "tact-work", "store.ts"),
+      "utf-8"
+    );
+
+    const completeRunBody = storeSource.slice(
+      storeSource.indexOf("export async function completeRun"),
+      storeSource.indexOf("export interface FailRunParams")
+    );
+
+    const failRunBody = storeSource.slice(
+      storeSource.indexOf("export async function failRun"),
+      storeSource.length
+    );
+
+    results.push(
+      check(
+        '[RUNS-P1b] completeRun()/failRun()のUPDATE queryはいずれも`.eq("status", "running")`を含む(terminal Runを上書きしないcompare-and-set guard)',
+        completeRunBody.includes('.eq("status", "running")') &&
+          failRunBody.includes('.eq("status", "running")')
       )
     );
   }

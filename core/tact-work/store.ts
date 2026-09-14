@@ -942,6 +942,31 @@ export interface CompleteRunParams {
   externalRef?: Run["externalRef"] | null;
 }
 
+// RUNS-P1b(Section11、terminal Run immutability): completeRun()/
+// failRun()は元々`.eq("id", runId).eq("work_id", workId)`だけを
+// WHERE条件とするUPDATEであり、Runの現在statusを一切確認しないまま
+// 無条件に上書きしていた——既にterminal("completed"/"failed")な
+// Runへ、後から誤って(または並行呼び出しで)completeRun()/failRun()が
+// 再度呼ばれた場合、terminal Run historyが書き換わってしまう
+// (絶対条件: running → completed / running → failed という一方向の
+// 遷移以外を許さない)。
+//
+// 最小の安全策(絶対条件: 新しいqueue/lease/atomic CAS machineryは
+// 追加しない、既存パターンをそのまま踏襲): WHERE句へ
+// `.eq("status", "running")`を追加し、`.select("id")`で実際に更新された
+// 行を確認する。既にterminalなRun(WHERE句が0行にしか一致しない)への
+// 呼び出しはUPDATE自体が0行に終わり、この関数はcreateRun()の既存の
+// 「Run attempt already exists」throwと同じ形式で、安全に例外を投げる
+// (silent no-opにしない——呼び出し元がこの結果を誤って「成功した」と
+// 解釈しないようにするため)。
+//
+// 既知の関連コメント(このcommitで解消する既存debt、core/tact-
+// integration/execution.tsのexecuteRuntimeIntegrationRead()、Fast Port
+// P5d Step18/39): 「同一Runに対してほぼ同時に2つのTrigger execution が
+// このentrypointへ到達した場合、両方がrun.status==="running"を観測して
+// どちらもprovider実行へ進む可能性が構造的に残る」と明記されていた
+// 残存リスクを、この2関数のDB層guardが閉じる(read-then-actではなく、
+// UPDATE自体のWHERE句による正しいcompare-and-set)。
 export async function completeRun(
   workId: string,
   userId: string,
@@ -959,7 +984,7 @@ export async function completeRun(
 
   const client = createRequestScopedClient(accessToken);
 
-  const { error } = await client
+  const { data, error } = await client
     .from("tact_runs")
     .update({
       status: "completed",
@@ -969,10 +994,19 @@ export async function completeRun(
       external_ref: params.externalRef ?? null,
     })
     .eq("id", runId)
-    .eq("work_id", workId);
+    .eq("work_id", workId)
+    .eq("status", "running")
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     throw error;
+  }
+
+  if (!data) {
+    throw new Error(
+      `Run is not running (already terminal or not found), refusing to overwrite (runId=${runId}).`
+    );
   }
 
 }
@@ -983,6 +1017,8 @@ export interface FailRunParams {
   externalRef?: Run["externalRef"] | null;
 }
 
+// RUNS-P1b(Section11): completeRun()と同じ理由・同じ形の
+// terminal immutability guard(上のcompleteRun()のコメント参照)。
 export async function failRun(
   workId: string,
   userId: string,
@@ -1000,7 +1036,7 @@ export async function failRun(
 
   const client = createRequestScopedClient(accessToken);
 
-  const { error } = await client
+  const { data, error } = await client
     .from("tact_runs")
     .update({
       status: "failed",
@@ -1010,10 +1046,19 @@ export async function failRun(
       external_ref: params.externalRef ?? null,
     })
     .eq("id", runId)
-    .eq("work_id", workId);
+    .eq("work_id", workId)
+    .eq("status", "running")
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     throw error;
+  }
+
+  if (!data) {
+    throw new Error(
+      `Run is not running (already terminal or not found), refusing to overwrite (runId=${runId}).`
+    );
   }
 
 }

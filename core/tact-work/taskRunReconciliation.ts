@@ -8,6 +8,120 @@ import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus }
 import type { Run } from "./types";
 
 // =========================
+// evaluateTaskRetryEligibility (RUNS-P1b)
+// =========================
+//
+// core/tact-work/resume.tsのevaluateTaskResumeEligibility()(Fast Port
+// P6a)とは意図的に別の関数にする——resume.tsはApproval/Clarification
+// 解決という別種のtrigger(「人間の判断が下りたので再開してよいか」)を
+// 扱い、waiting_for_retryはこのfileが既に扱う「直近のRun failureが
+// retryableだったので新しいattemptが意味論的に許されるか」という
+// 別種の判定である(RUNS-P1b指示Section12、両者を混同しない)。
+//
+// 絶対条件(resume.tsと同じ設計判断を踏襲): Approval/Policyの
+// live re-verificationはこの関数の責務にしない——既存の実行境界
+// (core/tact-integration/execution.tsのexecuteApprovedIntegrationAction()/
+// executeReadIntegrationAction())が、実行直前に既に独立してPolicy
+// live recheck・Approval Integrity検証を行う。ここでApproval/Policyを
+// 再評価すると、判断の権威点が2箇所に分散する(resume.tsの既存
+// コメント「Policy判断の権威点が2箇所に分散する」と同じ理由)。
+export type TaskRetryEligibilityBlockedReasonCode =
+  | "work_not_found"
+  | "task_not_found"
+  | "task_not_waiting_for_retry"
+  | "active_run_exists"
+  | "latest_run_missing_or_not_failed"
+  | "latest_failure_not_retryable";
+
+export type TaskRetryEligibility =
+  | { status: "eligible" }
+  | { status: "blocked"; reasonCode: TaskRetryEligibilityBlockedReasonCode };
+
+export interface EvaluateTaskRetryEligibilityParams {
+
+  workId: string;
+
+  userId: string;
+
+  accessToken: string;
+
+  taskId: string;
+
+}
+
+export interface TaskRetryEligibilityDeps {
+
+  getWork: typeof getWork;
+
+  listTasksForWork: typeof listTasksForWork;
+
+  listRunsForTask: typeof listRunsForTask;
+
+}
+
+const defaultTaskRetryEligibilityDeps: TaskRetryEligibilityDeps = {
+  getWork,
+  listTasksForWork,
+  listRunsForTask,
+};
+
+// Section12の判定順そのまま: Task status = waiting_for_retry → 現在
+// active Runが無い → 最新Runがfailed → その失敗が明示的にretryable →
+// eligible。1つでも満たさなければblocked(fail closed、推測で
+// eligibleにしない)。
+export async function evaluateTaskRetryEligibility(
+  params: EvaluateTaskRetryEligibilityParams,
+  deps: TaskRetryEligibilityDeps = defaultTaskRetryEligibilityDeps
+): Promise<TaskRetryEligibility> {
+
+  const { workId, userId, accessToken, taskId } = params;
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return { status: "blocked", reasonCode: "work_not_found" };
+  }
+
+  const tasks = await deps.listTasksForWork(workId, userId, accessToken);
+  const task = tasks.find((candidate) => candidate.id === taskId && candidate.workId === workId);
+
+  if (!task) {
+    return { status: "blocked", reasonCode: "task_not_found" };
+  }
+
+  if (task.status !== "waiting_for_retry") {
+    return { status: "blocked", reasonCode: "task_not_waiting_for_retry" };
+  }
+
+  const runs = await deps.listRunsForTask(workId, userId, accessToken, taskId);
+
+  if (runs.some((run) => run.status === "running")) {
+    return { status: "blocked", reasonCode: "active_run_exists" };
+  }
+
+  const latest = findLatestRun(runs);
+
+  if (!latest || latest.status !== "failed") {
+    // waiting_for_retryのTaskは、定義上「最新Runがretryableに
+    // failedした」ことの結果であるはずだが、この関数はTask.status
+    // だけを信用せず、Run実体そのものからも再確認する(defense-in-
+    // depth、resume.tsのevaluateTaskResumeEligibility()と同じ
+    // 設計精神)。
+    return { status: "blocked", reasonCode: "latest_run_missing_or_not_failed" };
+  }
+
+  if (isRetryableIntegrationFailure(latest) !== true) {
+    // 絶対条件(RUNS-P1b Section12、fail safe): trueであることが
+    // 明示されている場合のみeligible。undefined(不明)・falseの
+    // いずれもeligibleにしない——推測でretry可能とみなさない。
+    return { status: "blocked", reasonCode: "latest_failure_not_retryable" };
+  }
+
+  return { status: "eligible" };
+
+}
+
+// =========================
 // TACT Work — Stranded Task/Run Projection Reconciliation
 // (DUR-P1: Stranded Task State Integrity Fix)
 // =========================
@@ -54,8 +168,10 @@ export type StrandedTaskProjectionOutcome =
   | { status: "not_applicable"; reason: string }
   // Task.statusは既にRunの実体と一致している(修復不要)。
   | { status: "no_drift" }
-  // Task.statusを、最新Runの実体に合わせて修復した。
-  | { status: "projected"; taskStatus: "running" | "completed" | "failed" };
+  // Task.statusを、最新Runの実体に合わせて修復した。RUNS-P1b:
+  // "waiting_for_retry"が追加された(最新Runがretryableにfailedした
+  // 場合の非terminal projection)。
+  | { status: "projected"; taskStatus: "running" | "waiting_for_retry" | "completed" | "failed" };
 
 export interface ReconcileStrandedTaskProjectionDeps {
 
@@ -182,8 +298,14 @@ export function isRetryableIntegrationFailure(
 // 純粋関数(DBアクセス自体はreconcileStrandedTaskProjection()側で行う、
 // core/tact-work/completion.tsと同じ「判定はpure、副作用は呼び出し元」
 // という分離)。
+//
+// RUNS-P1b: taskStatusの型に"waiting_for_retry"を追加した。この関数は
+// 「最新Runの実体に対してTask.statusが正しく追従しているか」を判定する
+// ため、"waiting_for_retry"も"pending"/"running"と同じく「まだ最終
+// 結果が確定していない、Runの実体を優先して信用すべき状態」として
+// 扱う——後述の各分岐参照。
 export function evaluateStrandedTaskProjection(
-  taskStatus: "pending" | "running" | "completed" | "failed" | "cancelled",
+  taskStatus: "pending" | "running" | "waiting_for_retry" | "completed" | "failed" | "cancelled",
   runs: Run[]
 ): StrandedTaskProjectionOutcome {
 
@@ -205,8 +327,12 @@ export function evaluateStrandedTaskProjection(
 
   if (run.status === "running") {
 
-    if (taskStatus === "pending") {
-      // state B: Run running / Task pending。
+    // RUNS-P1b: retry claim(waiting_for_retry → 新しいRun作成 →
+    // running)がRun claim成功後・Task projection更新前でcrashした
+    // 場合も、既存state B(Run running / Task pending)と全く同じ
+    // 理由でrunningへ修復する(Runを信用する、DUR-P1の既存原則を
+    // waiting_for_retry起点のretryへもそのまま適用するだけ)。
+    if (taskStatus === "pending" || taskStatus === "waiting_for_retry") {
       return { status: "projected", taskStatus: "running" };
     }
 
@@ -214,12 +340,36 @@ export function evaluateStrandedTaskProjection(
 
   }
 
-  const projectedStatus: "completed" | "failed" = run.status === "completed" ? "completed" : "failed";
+  // RUNS-P1b: run.status==="failed"の場合、Run failure Section6と
+  // 全く同じ判定(isRetryableIntegrationFailure())を使い、terminal
+  // "failed"かnon-terminal "waiting_for_retry"かを決める——Run failure
+  // → Task projectionのロジックを2箇所(live path/crash-repair path)で
+  // 別々に実装しない(単一の情報源、core/tact-integration/types.tsの
+  // IntegrationExecutionError.retryableが永続化されたexternalRef)。
+  const projectedStatus: "completed" | "failed" | "waiting_for_retry" =
+    run.status === "completed"
+      ? "completed"
+      : isRetryableIntegrationFailure(run) === true
+        ? "waiting_for_retry"
+        : "failed";
 
-  if (taskStatus === "running" || taskStatus === "pending") {
+  // RUNS-P1b: Task.statusが既にprojectedStatusと一致している場合は
+  // no_drift(修復不要)——taskStatusの取りうる値が増えた
+  // (waiting_for_retryが新たにprojectedStatusにもなり得る)ため、
+  // 「running/pending/waiting_for_retryのいずれかから、Run側の最終
+  // statusへ向けてprojectする」という条件と、「既に一致していれば
+  // 何もしない」という条件を明示的に分離する。
+  if (taskStatus === projectedStatus) {
+    return { status: "no_drift" };
+  }
+
+  if (taskStatus === "running" || taskStatus === "pending" || taskStatus === "waiting_for_retry") {
     // state C/D(Task running時にRunが先にterminal化)、state E
-    // (Task pendingのままRunだけがterminal化)。いずれもRun側の
-    // terminal statusをTaskへ反映する。
+    // (Task pendingのままRunだけがterminal化)、および新設: Task
+    // waiting_for_retryのままRunの実体がそれ以降変化した場合
+    // (例: 別経路でこのRunがcompletedへ確定した、または再分類により
+    // 非retryableへ変わった)。いずれもRun側の最終statusをTaskへ
+    // 反映する。
     return { status: "projected", taskStatus: projectedStatus };
   }
 

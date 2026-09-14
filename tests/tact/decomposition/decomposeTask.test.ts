@@ -100,6 +100,75 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     )
   );
 
+  // ---- RUNS-P1b(Section10、dependency propagation audit lock):
+  // 現在decomposeTask()が生成しうる全パターンのうち、TaskDependencyが
+  // 実際に作られるのはSEQUENTIAL_PATTERN(research → 後続要約Task)
+  // だけであり、その依存先(dependsOnTaskId)は常にresearch Task
+  // (assignedCapability="research")である——Integration Capability
+  // (assignedCapability.startsWith("integration."))が他Taskの依存先に
+  // なることは、現在のdecomposeTask()の出力からは構造的に発生しない
+  // (Context Resolution Plan由来のNotion/Gmail Taskは常に独立した
+  // sibling Taskとして生成され、dependenciesを一切持たない)。
+  //
+  // これは、RUNS-P1bのSection10が懸念する「waiting_for_retryなTaskに
+  // 依存する後続Taskの扱い」が、現時点のTask分解パターンでは到達
+  // 不可能であることのrepository realityに基づく直接的な証拠であり
+  // (waiting_for_retryはIntegration Capability経由のTaskだけが到達
+  // しうる状態のため)、将来decomposeTask()に新しい分解パターンが
+  // 追加され、Integration Capability Taskが他Taskの依存先になり得る
+  // ようになった場合には、このcheckが失敗して知らせる(絶対条件:
+  // 存在しないシナリオ向けの実装を先回りして作らない、代わりに
+  // 前提が崩れたことを検知するregressionを残す)。
+  {
+
+    const allOutputs = [
+      decomposeTask({ input: "トヨタについて調べて、その結果をもとに要約してください" }),
+      decomposeTask({ input: "トヨタについて調べて、ホンダと比較して" }),
+      decomposeTask({ input: "トヨタとホンダについてそれぞれ調べて比較して" }),
+      decomposeTask({ input: "日本の首相は誰ですか？" }),
+      decomposeTask({ input: "コードは何ですか？" }),
+      decomposeTask({
+        input: "(context-derived)",
+        contextResolutionPlan: {
+          kind: "ready",
+          requestText: "更新案件を確認して",
+          sources: { notion: { query: "更新案件" }, gmail: { query: "更新案件" } },
+        },
+      }),
+    ];
+
+    let dependencyEdgeCount = 0;
+    let integrationUpstreamCount = 0;
+
+    for (const tasks of allOutputs) {
+
+      const byId = new Map(tasks.map((t) => [t.id, t]));
+
+      for (const task of tasks) {
+        for (const dependsOnId of task.dependencies ?? []) {
+
+          dependencyEdgeCount++;
+
+          const upstream = byId.get(dependsOnId);
+
+          if (upstream?.assignedCapability?.startsWith("integration.")) {
+            integrationUpstreamCount++;
+          }
+
+        }
+      }
+
+    }
+
+    results.push(
+      check(
+        "[RUNS-P1b dependency-audit] decomposeTask()が生成するTaskDependencyの依存先(upstream)は、現時点でIntegration Capability(gmail/notion/slack)のTaskになることが無い(dependencyは1件以上観測され、そのうちIntegration Capability依存は0件)",
+        dependencyEdgeCount > 0 && integrationUpstreamCount === 0
+      )
+    );
+
+  }
+
   return summarize("decomposeTask", results);
 
 }

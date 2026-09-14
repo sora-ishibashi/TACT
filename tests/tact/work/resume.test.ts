@@ -354,6 +354,23 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- [RUNS-P1b] Task.status==='waiting_for_retry'はblocked
+  // (task_waiting_for_retry)であり、'pending'と同じ扱いにフォールス
+  // ルーしてeligibleにならない(Approval/Clarification-driven resumeが
+  // 意図せずRun-failure-driven retry-waitingのTaskへ介入しないこと) ----
+  {
+    const { deps } = makeDeps({ tasks: [makeTask({ status: "waiting_for_retry" })] });
+
+    const eligibility = await evaluateTaskResumeEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b] Task.status==='waiting_for_retry'はblocked(task_waiting_for_retry)、'pending'と同じ扱いにならない",
+        eligibility.status === "blocked" && eligibility.reasonCode === "task_waiting_for_retry"
+      )
+    );
+  }
+
   // ---- [11/12/13] resume.ts自身がProvider実行/Trigger dispatch/createRunのAPIを一切importしていない(source-level構造的証拠) ----
   {
     const resumeSourceRaw = readFileSync(

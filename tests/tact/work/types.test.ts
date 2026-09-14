@@ -47,14 +47,36 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   results.push(
     check(
-      "[Task] TASK_STATUSESは既存core/tact-orchestrator/task.tsのTaskStatusと同じ5値を持つ",
+      "[Task] TASK_STATUSESはmigrationのCHECK制約(RUNS-P1bで追加されたwaiting_for_retryを含む)と同じ6値を持つ",
       sameSet(TASK_STATUSES, [
         "pending",
         "running",
+        "waiting_for_retry",
         "completed",
         "failed",
         "cancelled",
       ])
+    )
+  );
+
+  // RUNS-P1b: core/tact-orchestrator/task.tsのTaskStatus(ephemeral、
+  // 1 turn内でしか存在しないOrchestrator Task用)は意図的に5値のまま
+  // 変更していない——"waiting_for_retry"はcross-turnで永続化された
+  // WorkTaskだけが持ちうる状態であり、turnをまたいで存在しない
+  // Orchestrator Taskには意味を持たない(Repository Reality Audit
+  // finding)。したがって、この2つのTaskStatusはもはや「同じ値集合」
+  // ではなく「core/tact-work側が意図的に1値多いsuperset」であることを
+  // 明示的にlockする(以前はこのfileの上のcheckが「両者は完全に同じ
+  // 5値」と誤って主張していた——今回、両者が別の型として意図的に
+  // 分岐したことをこのtestで正しく記録する)。
+  results.push(
+    check(
+      '[Task] TASK_STATUSES(core/tact-work)は、core/tact-orchestrator/task.tsのTaskStatus(ephemeral、5値、変更なし)のsupersetであり、差分は"waiting_for_retry"の1値だけである',
+      ["pending", "running", "completed", "failed", "cancelled"].every((value) =>
+        TASK_STATUSES.includes(value as typeof TASK_STATUSES[number])
+      ) &&
+        TASK_STATUSES.length === 6 &&
+        TASK_STATUSES.includes("waiting_for_retry")
     )
   );
 

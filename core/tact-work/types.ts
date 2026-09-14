@@ -233,9 +233,21 @@ export interface Work {
 // Provider/ModelはRunの責務(ARCH-R2 Section4、Retryごとに変わり
 // うる実行時の事実であり、計画時点の属性ではないため)。
 
+// RUNS-P1b(Retryable Task Lifecycle): "waiting_for_retry"は、直近のRunが
+// retryable(core/tact-integration/types.tsのIntegrationExecutionError.
+// retryable、RUNS-P1でtact_runs.external_refへ永続化済み)に失敗した
+// ことを表す、非terminalな状態。"failed"は既存のまま「terminal・
+// 回復不能」という意味を一切変えない——一度"failed"になったTaskを
+// 後から"waiting_for_retry"や他のstatusへ戻す経路は、このcommitでは
+// 一切実装しない(絶対条件、Section1: failed remains terminal and
+// monotonic)。"waiting_for_retry"は「自動的にretryされる」ことを
+// 意味しない——scheduler/timer/cronはこのphaseでは一切追加しない
+// (WHENの判断はTIME-P1へ委譲、RUNS-P1bはWHETHER(retryが意味論的に
+// 許されるか)だけを扱う)。
 export type TaskStatus =
   | "pending"
   | "running"
+  | "waiting_for_retry"
   | "completed"
   | "failed"
   | "cancelled";
@@ -243,6 +255,7 @@ export type TaskStatus =
 export const TASK_STATUSES: readonly TaskStatus[] = [
   "pending",
   "running",
+  "waiting_for_retry",
   "completed",
   "failed",
   "cancelled",

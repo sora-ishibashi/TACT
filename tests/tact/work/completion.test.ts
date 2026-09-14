@@ -186,6 +186,72 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- RUNS-P1b Case A: Task 2件(completed + waiting_for_retry) ->
+  // Workはterminalへ遷移しない(waiting_for_retryはnon-terminal、
+  // completion.ts自体は一切変更していない——TERMINAL_TASK_STATUSESに
+  // waiting_for_retryを含めていないだけで、既存の「全Taskがterminal」
+  // 判定が自動的に正しく機能する) ----
+  {
+    const { deps, calls } = makeDeps([
+      makeTask({ id: "task-1", status: "completed" }),
+      makeTask({ id: "task-2", status: "waiting_for_retry" }),
+    ]);
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b CaseA] Task 2件(completed+waiting_for_retry) -> Workはcompleted/failedいずれにも確定しない(retryable failureだけでWork全体を終わらせない)",
+        outcome.status === "no_change" &&
+          outcome.reason === "tasks_not_all_terminal" &&
+          calls.updateWorkStatusCalls.length === 0
+      )
+    );
+  }
+
+  // ---- RUNS-P1b Case B: waiting_for_retryだったTaskが、後続の
+  // (別turnの)retryで最終的にcompletedへ確定した -> 他のTaskも
+  // completedなら、この時点で初めてWork completed ----
+  {
+    const { deps, calls } = makeDeps([
+      makeTask({ id: "task-1", status: "completed" }),
+      makeTask({ id: "task-2", status: "completed" }), // 元waiting_for_retry、retry成功後の状態
+    ]);
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b CaseB] waiting_for_retryだったTaskが後続retryでcompletedになれば、他が全てcompletedである限りWorkはcompletedへ確定する(retry成功後にWork completionが到達可能であることの確認)",
+        outcome.status === "reconciled" &&
+          outcome.workStatus === "completed" &&
+          calls.updateWorkStatusCalls[calls.updateWorkStatusCalls.length - 1] === "completed"
+      )
+    );
+  }
+
+  // ---- RUNS-P1b Case C: waiting_for_retryだったTaskが、最終的に
+  // (retry不可と判断され)failedへ確定した -> Work全体もfailedへ確定する
+  // (waiting_for_retryを経由しても、最終的な確定ロジック自体は
+  // completion.tsの既存ルールのまま変わらない) ----
+  {
+    const { deps, calls } = makeDeps([
+      makeTask({ id: "task-1", status: "completed" }),
+      makeTask({ id: "task-2", status: "failed" }), // 元waiting_for_retry、最終的に非retryableと確定した状態
+    ]);
+
+    const outcome = await reconcileWorkCompletionStatus("work-1", "user-1", "token", deps);
+
+    results.push(
+      check(
+        "[RUNS-P1b CaseC] waiting_for_retryだったTaskが最終的にfailedへ確定すれば、既存ルール通りWork全体もfailedへ確定する",
+        outcome.status === "reconciled" &&
+          outcome.workStatus === "failed" &&
+          calls.updateWorkStatusCalls[calls.updateWorkStatusCalls.length - 1] === "failed"
+      )
+    );
+  }
+
   // ---- Case 5: Task 2件(completed + completed) -> Work completed ----
   {
     const { deps, calls } = makeDeps([
