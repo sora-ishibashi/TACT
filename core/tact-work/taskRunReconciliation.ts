@@ -95,6 +95,89 @@ export function findLatestRun(runs: Run[]): Run | undefined {
 
 }
 
+// =========================
+// computeNextAttemptNumber (RUNS-P1)
+// =========================
+//
+// Repository Reality Audit(RUNS-P1実装前)で判明した事実: 「あるTaskの
+// 次のattempt番号は何か」という計算は、既にcore/tact-integration/
+// execution.tsのprepareRunForExecution()内に
+// `existingRuns.reduce((max, run) => Math.max(max, run.attempt), 0) + 1`
+// として実装済みだった(DUR-P1、Run claimをTask.status projectionより
+// 先に行う設計の一部)。この関数はその既存ロジックをそのまま
+// (計算内容を一切変更せず)独立したpure functionへ切り出しただけ
+// ——挙動変更は無い。
+//
+// 絶対条件(attempt allocationの安全性、RUNS-P1 Section8): 常にTask
+// スコープで計算する(呼び出し元がそのTaskのRunだけを渡す前提、Work
+// 全体のglobal counterにしない)。同時に2箇所から呼ばれて同じ
+// (task_id, attempt)を計算してしまうrace自体は、この関数だけでは
+// 防げない——最終的な排他は既存DB unique index
+// (idx_tact_runs_task_id_attempt、supabase/migrations/
+// 20260905000000_create_tact_work_tables.sqlで既に存在、この関数は
+// 一切変更しない)がcreateRun()呼び出し時に保証する(片方が
+// application-level throwまたはPostgres unique_violationで安全に
+// 失敗する、core/tact-conversation/orchestration.tsの
+// isConcurrentRunClaimError()が既にこれを検出・正規化している)。
+export function computeNextAttemptNumber(runs: readonly Run[]): number {
+
+  return runs.reduce((max, run) => Math.max(max, run.attempt), 0) + 1;
+
+}
+
+// =========================
+// isRetryableIntegrationFailure (RUNS-P1)
+// =========================
+//
+// Repository Reality Audit finding(最重要): core/tact-integration/
+// types.tsのIntegrationExecutionError.retryableは、「将来、Provider側で
+// backend-honored idempotency keyが提供された時点で、呼び出し元
+// (上位layer/人間)がこの値を判断材料として使うための情報にとどめる」
+// という明示的な設計意図を既に持っていた値だが、実際には
+// executeIntegrationActionCore()のfailRun()呼び出しでmessageだけが
+// 抽出され、code/retryable自体はRunへ一切永続化されていなかった
+// (RUNS-P1でexternalRef.errorCode/externalRef.errorRetryableとして
+// 保存するよう修正——同じcommitのcore/tact-integration/execution.ts
+// 変更を参照)。
+//
+// この関数は、そうして保存されたRunから「この特定のfailureは
+// (将来のretry判断のための情報として)retryableと分類されていたか」を
+// 読み取るだけの、read-only・side-effect-freeな分類ヘルパーである。
+//
+// 絶対条件(RUNS-P1 Section9/11、最重要): この関数の戻り値がtrueで
+// あっても、それ自体はいかなるretry実行もauthorizeしない——単なる
+// 判断材料(judgment material)にとどまる。Task.statusをterminalから
+// 非terminalへ戻す操作、新しいRunを作る操作のいずれもこの関数は
+// 一切行わない(そのような操作は既存の「terminal stateから非terminalへ
+// 戻る非単調な遷移をTask status historyへ持ち込まない」という
+// core/tact-work/execution.tsの既存絶対条件と衝突するため、RUNS-P1の
+// scopeから意図的に除外した——完了報告のKnown Limitations参照)。
+//
+// 絶対条件(fail closed): externalRef自体が無い(RUNS-P1以前に作られた
+// 既存Run、または非Integration Capabilityが作ったRun)・
+// errorRetryableが真偽値でない場合はundefinedを返す——「retryableでは
+// ない」と「わからない」を混同しない(既存パターン、
+// resolveTaskCapabilities()のfail closed設計と同じ精神)。
+export function isRetryableIntegrationFailure(
+  run: Pick<Run, "status" | "externalRef">
+): boolean | undefined {
+
+  if (run.status !== "failed") {
+    return undefined;
+  }
+
+  const externalRef = run.externalRef;
+
+  if (typeof externalRef !== "object" || externalRef === null) {
+    return undefined;
+  }
+
+  const retryable = (externalRef as Record<string, unknown>).errorRetryable;
+
+  return typeof retryable === "boolean" ? retryable : undefined;
+
+}
+
 // 与えられたTask.statusと最新Runの実体から、修復すべきoutcomeを導出する
 // 純粋関数(DBアクセス自体はreconcileStrandedTaskProjection()側で行う、
 // core/tact-work/completion.tsと同じ「判定はpure、副作用は呼び出し元」

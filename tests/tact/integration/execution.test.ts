@@ -37,6 +37,7 @@ import {
   hashApprovalSubject,
   type ApprovalSubject,
 } from "../../../core/tact-work/approvalIntegrity";
+import { isRetryableIntegrationFailure } from "../../../core/tact-work/taskRunReconciliation";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 const OWNER_USER_ID = "user-1";
@@ -516,6 +517,115 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Phase C2.1a] 失敗後も、reconcileWorkCompletionStatus()が呼ばれる(architecture debt A解消)",
         calls.reconcileWorkCompletionStatusCalls === 1
+      )
+    );
+  }
+
+  // ---- RUNS-P1(Failure Recording): Provider失敗時、
+  // IntegrationExecutionError.code/.retryableがRun.externalRefへ
+  // 永続化される(以前はmessageだけが抽出され、Run自体からは
+  // 二度と読み取れなかった)。isRetryableIntegrationFailure()が
+  // それをそのまま読み取れることも合わせて確認する(単体でではなく、
+  // 実際にexecuteApprovedIntegrationAction()を通した結果で確認する) ----
+  {
+    const failRunCalls: { runId: string; error: string; externalRef?: Record<string, unknown> | null }[] = [];
+
+    const { deps, calls } = makeDeps({
+      executeIntegrationAction: async (): Promise<IntegrationExecutionResult> => {
+        calls.executeIntegrationActionCalls += 1;
+        return {
+          status: "failed",
+          error: { code: "temporary_failure", message: "gateway timeout", retryable: true },
+        };
+      },
+      failRun: async (_workId, _userId, _accessToken, runId, params) => {
+        calls.failRunCalls += 1;
+        failRunCalls.push({
+          runId,
+          error: params.error,
+          externalRef: params.externalRef as Record<string, unknown> | null | undefined,
+        });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[RUNS-P1] failRun()へ渡されるexternalRefにerrorCode(temporary_failure)とerrorRetryable(true)が含まれる(新しい列・migrationなし、既存externalRef jsonbへの追記のみ)",
+        failRunCalls.length === 1 &&
+          failRunCalls[0].externalRef?.errorCode === "temporary_failure" &&
+          failRunCalls[0].externalRef?.errorRetryable === true
+      )
+    );
+
+    results.push(
+      check(
+        "[RUNS-P1] isRetryableIntegrationFailure()が、この失敗したRunをretryable=trueとして正しく分類する(read-only、side effect無し)",
+        outcome.status === "failed" &&
+          isRetryableIntegrationFailure(outcome.run) === true
+      )
+    );
+  }
+
+  // ---- RUNS-P1(Failure Recording、non-retryableの場合): 既存の
+  // composio adapterが現状常にretryable:falseを返す(Repository
+  // Reality Audit finding)ことを踏まえ、その場合も安全に
+  // false(「retryableではないと明示されている」)として分類され、
+  // undefined(不明)と混同されないことを確認する ----
+  {
+    const failRunCalls: { externalRef?: Record<string, unknown> | null }[] = [];
+
+    const { deps } = makeDeps({
+      executeIntegrationAction: async (): Promise<IntegrationExecutionResult> => {
+        return {
+          status: "failed",
+          error: { code: "authentication_error", message: "invalid credentials", retryable: false },
+        };
+      },
+      failRun: async (_workId, _userId, _accessToken, _runId, params) => {
+        failRunCalls.push({ externalRef: params.externalRef as Record<string, unknown> | null | undefined });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[RUNS-P1] authentication_error等の非retryable failureはexternalRef.errorRetryable=falseとして永続化され、isRetryableIntegrationFailure()はfalseを返す(undefinedと混同しない)",
+        failRunCalls[0]?.externalRef?.errorRetryable === false &&
+          outcome.status === "failed" &&
+          isRetryableIntegrationFailure(outcome.run) === false
+      )
+    );
+  }
+
+  // ---- RUNS-P1: Approval rejected / Integrity failedはこの境界に
+  // 一切到達しない(=そもそもRun/failRunが作られない)ことを確認する
+  // ——「providerが失敗した」ことと「Approvalが却下された/整合性検証に
+  // 失敗した」ことは、既存コードの構造上そもそも異なるcode pathであり、
+  // isRetryableIntegrationFailure()のようなprovider failure分類の対象に
+  // すらならない(RUNS-P1 Section9/11/17: Approval rejection/Integrity
+  // failureをretryable provider failureとして扱わない、という絶対条件の
+  // 構造的な保証)----
+  {
+    const { deps, calls } = makeDeps({
+      getApproval: async (workId, userId, accessToken, approvalId) => {
+        calls.getApprovalCalls += 1;
+        if (userId !== OWNER_USER_ID) return undefined;
+        return makeApproval({ id: approvalId, workId, status: "rejected" });
+      },
+    });
+
+    const outcome = await executeApprovedIntegrationAction("work-1", OWNER_USER_ID, "token", "approval-1", deps);
+
+    results.push(
+      check(
+        "[RUNS-P1] rejected Approvalはprovider呼び出し前に安全に停止する(provider call=0・createRun=0・failRun=0、providerのfailureとして分類されない)",
+        outcome.status === "approval_not_approved" &&
+          calls.executeIntegrationActionCalls === 0 &&
+          calls.createRunCalls === 0 &&
+          calls.failRunCalls === 0
       )
     );
   }

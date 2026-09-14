@@ -17,12 +17,15 @@ import {
   evaluateStrandedTaskProjection,
   findLatestRun,
   reconcileStrandedTaskProjection,
+  computeNextAttemptNumber,
+  isRetryableIntegrationFailure,
   type ReconcileStrandedTaskProjectionDeps,
 } from "../../../core/tact-work/taskRunReconciliation";
 import {
   dispatchIntegrationReadToRuntime,
   type ExecuteApprovedIntegrationActionDeps,
 } from "../../../core/tact-integration/execution";
+import { toRun, type RunRow } from "../../../core/tact-work/store";
 import type { Run, Work, WorkTask, TaskStatus } from "../../../core/tact-work/types";
 import type { Connection, IntegrationExecutionResult } from "../../../core/tact-integration/types";
 import type { RuntimeAdapter, RuntimeStartOutcome, RuntimeExecutionRequest } from "../../../core/tact-runtime/types";
@@ -64,6 +67,156 @@ function testPureFunctions(results: CheckResult[]): void {
       findLatestRun([]) === undefined
     )
   );
+
+  // =========================
+  // computeNextAttemptNumber (RUNS-P1)
+  // =========================
+  //
+  // 挙動自体はcore/tact-integration/execution.tsのprepareRunForExecution()
+  // に元々inline実装されていたものと完全に同じ(切り出しただけ)。
+
+  results.push(
+    check(
+      "[RUNS-P1] computeNextAttemptNumber(): Runが0件のTaskは常にattempt=1から始まる",
+      computeNextAttemptNumber([]) === 1
+    )
+  );
+
+  results.push(
+    check(
+      "[RUNS-P1] computeNextAttemptNumber(): 既存Runの最大attempt+1を返す(配列の順序に依存しない)",
+      computeNextAttemptNumber([makeRun({ attempt: 1 }), makeRun({ attempt: 3 }), makeRun({ attempt: 2 })]) === 4
+    )
+  );
+
+  results.push(
+    check(
+      "[RUNS-P1] computeNextAttemptNumber(): 単一Runのみの場合はattempt+1",
+      computeNextAttemptNumber([makeRun({ attempt: 1, status: "failed" })]) === 2
+    )
+  );
+
+  results.push(
+    check(
+      "[RUNS-P1] computeNextAttemptNumber(): statusに関わらずattempt番号だけを見る(failed/completed/runningいずれも対象)",
+      computeNextAttemptNumber([
+        makeRun({ attempt: 1, status: "failed" }),
+        makeRun({ attempt: 2, status: "completed" }),
+      ]) === 3
+    )
+  );
+
+  // =========================
+  // isRetryableIntegrationFailure (RUNS-P1)
+  // =========================
+  //
+  // このRunのexternalRefは、core/tact-integration/execution.tsの
+  // executeIntegrationActionCore()が実際に書き込むものと同じ形
+  // (tests/tact/integration/execution.test.tsのend-to-end確認と対称的な、
+  // このfile側の純粋関数単体確認)。
+
+  results.push(
+    check(
+      '[RUNS-P1] isRetryableIntegrationFailure(): status="failed" かつ externalRef.errorRetryable=trueならtrue',
+      isRetryableIntegrationFailure(
+        makeRun({ status: "failed", externalRef: { errorCode: "temporary_failure", errorRetryable: true } })
+      ) === true
+    )
+  );
+
+  results.push(
+    check(
+      '[RUNS-P1] isRetryableIntegrationFailure(): status="failed" かつ externalRef.errorRetryable=falseならfalse(undefinedと混同しない)',
+      isRetryableIntegrationFailure(
+        makeRun({ status: "failed", externalRef: { errorCode: "authentication_error", errorRetryable: false } })
+      ) === false
+    )
+  );
+
+  results.push(
+    check(
+      "[RUNS-P1] isRetryableIntegrationFailure(): status=\"completed\"のRunは(externalRefに何があっても)undefined(retryability判定の対象外)",
+      isRetryableIntegrationFailure(
+        makeRun({ status: "completed", externalRef: { errorCode: "temporary_failure", errorRetryable: true } })
+      ) === undefined
+    )
+  );
+
+  results.push(
+    check(
+      "[RUNS-P1] isRetryableIntegrationFailure(): externalRefが無い(RUNS-P1以前の既存Run、または非Integration Capability由来)failed Runはundefined(fail closed、falseと混同しない)",
+      isRetryableIntegrationFailure(makeRun({ status: "failed", externalRef: null })) === undefined &&
+        isRetryableIntegrationFailure(makeRun({ status: "failed", externalRef: undefined })) === undefined
+    )
+  );
+
+  results.push(
+    check(
+      "[RUNS-P1] isRetryableIntegrationFailure(): errorRetryableが真偽値でない(壊れた/想定外のexternalRef)場合もundefined",
+      isRetryableIntegrationFailure(
+        makeRun({ status: "failed", externalRef: { errorRetryable: "yes" } })
+      ) === undefined
+    )
+  );
+
+  // =========================
+  // Retry preserves canonical capability / execution binding (RUNS-P1
+  // Section14/23-#11)
+  // =========================
+  //
+  // toRun()(core/tact-work/store.ts、CAP-P1b)はcapability(execution
+  // binding)からcanonicalCapabilitiesを都度導出する純粋関数。同じTaskの
+  // 複数attempt(retry)が同じcapability文字列を持つ限り、
+  // canonicalCapabilitiesも常に同じ値へ解決されることを、実際に2件の
+  // Run(attempt=1 failed, attempt=2 completed、同じtask_id/capability)を
+  // 使って確認する——「retryが新しいcapability/bindingへ黙って変質しない」
+  // ことの直接証拠。
+  {
+
+    const attempt1Row: RunRow = {
+      id: "run-1",
+      work_id: "work-1",
+      task_id: "task-1",
+      attempt: 1,
+      capability: "integration.gmail.search_messages",
+      provider: "composio",
+      model: null,
+      status: "failed",
+      started_at: "2026-09-14T00:00:00.000Z",
+      completed_at: "2026-09-14T00:01:00.000Z",
+      error: "temporary network error",
+      cost: null,
+      external_ref: { errorCode: "temporary_failure", errorRetryable: true },
+      result: null,
+      created_at: "2026-09-14T00:00:00.000Z",
+    };
+
+    const attempt2Row: RunRow = {
+      ...attempt1Row,
+      id: "run-2",
+      attempt: 2,
+      status: "completed",
+      completed_at: "2026-09-14T00:02:00.000Z",
+      error: null,
+      external_ref: null,
+      result: { success: true },
+    };
+
+    const run1 = toRun(attempt1Row);
+    const run2 = toRun(attempt2Row);
+
+    results.push(
+      check(
+        "[RUNS-P1] Retry(attempt 1 failed -> attempt 2 completed)の前後で、実toRun()を通してもRun.capability(execution binding)とcanonicalCapabilities(communication.read)が変質せず同一に保たれる(retryが新しいCapability/bindingへ黙って変質しない、CAP-P1b/CAP-P1c traceabilityの継続)",
+        run1.taskId === run2.taskId &&
+          run1.capability === run2.capability &&
+          run1.attempt !== run2.attempt &&
+          JSON.stringify(run1.canonicalCapabilities) === JSON.stringify(["communication.read"]) &&
+          JSON.stringify(run1.canonicalCapabilities) === JSON.stringify(run2.canonicalCapabilities)
+      )
+    );
+
+  }
 
   // state A(Task running / Run 0)は、Run無しの場合は常にnot_applicable
   // (=修復不要)として扱われる——prepareRunForExecution()の新しい順序

@@ -257,6 +257,43 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- RUNS-P1(Section20: safe read execution retry): 上のtestは
+  // 任意の作り物のcapability名("phase-a-retry-capability")で一時的
+  // 失敗のRetryを確認しているが、RUNS-P1は明示的に"research/Gmail
+  // search/Notion read/search等のsafe read executionでretry semantics
+  // を確認する"ことを求めている。実際の本番dispatch key
+  // ("integration.gmail.search_messages"、core/tact-orchestrator/
+  // capabilityPlan.tsのCAPABILITY_BINDING_TABLEに登録済みのCanonical
+  // Capability=communication.read)で同じRetry経路が正しく機能する
+  // ことを直接確認する(Category B、実Gmail APIへは一切接続しない)。 ----
+  {
+    let callCount = 0;
+
+    registerCapability<CapabilityInvocationRequest, CapabilityInvocationResult>(
+      "integration.gmail.search_messages",
+      async () => {
+        callCount++;
+        if (callCount === 1) {
+          throw new LLMProviderError("openai", "network_error", "mock gmail search timeout");
+        }
+        return { success: true, output: "Gmail検索(retry後に成功)" };
+      }
+    );
+
+    const task = makeTask({ assignedCapability: "integration.gmail.search_messages" });
+    const summary = await executeTask(task, core, emptyTaskContext);
+
+    results.push(
+      check(
+        '[RUNS-P1 read-retry] 実dispatch key"integration.gmail.search_messages"も、一時的失敗(network_error)を1回だけRetryして成功する(Run1 failed -> Run2 completed相当)',
+        callCount === 2 &&
+          summary.status === "completed" &&
+          summary.retried === true &&
+          summary.capability === "integration.gmail.search_messages"
+      )
+    );
+  }
+
   // ---- design-mock-callable: "design"(既存の登録、Phase Aで変更して
   // いない)も、Capability名決め打ちの分岐無しに引き続き例外を投げずに
   // 呼び出せる(Design自体の実装は今回のPhaseの対象外) ----

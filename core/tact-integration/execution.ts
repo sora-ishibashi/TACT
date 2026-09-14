@@ -9,6 +9,11 @@ import {
   updateTaskStatus,
 } from "../tact-work/store";
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "../tact-work/completion";
+// RUNS-P1: Task-scoped next attempt number計算(既存のTask.status
+// projection更新より前にRun claimを行う、というDUR-P1の設計はそのまま
+// 変更しない——このimportは、以前このfile内にinline実装されていた
+// 計算を、独立したtested pure functionへ切り出しただけの置き換え)。
+import { computeNextAttemptNumber } from "../tact-work/taskRunReconciliation";
 import { executeIntegrationAction as defaultExecuteIntegrationAction } from "./gateway";
 import { getConnection as defaultGetConnection } from "./connection";
 import { evaluatePolicyDecision } from "./policy";
@@ -474,7 +479,11 @@ async function prepareRunForExecution(
     return { ok: false, outcome: { status: "task_not_executable", taskStatus: "running" } };
   }
 
-  const nextAttempt = existingRuns.reduce((max, run) => Math.max(max, run.attempt), 0) + 1;
+  // RUNS-P1: 以前はここに直接`existingRuns.reduce((max, run) =>
+  // Math.max(max, run.attempt), 0) + 1`とinline実装されていた。計算
+  // 内容は一切変更せず、core/tact-work/taskRunReconciliation.tsの
+  // 独立したtested pure functionへ切り出しただけ(挙動変更なし)。
+  const nextAttempt = computeNextAttemptNumber(existingRuns);
 
   // DUR-P1: 既存はTask→running projection更新(updateTaskStatus)を
   // 先に行い、その後でcreateRun()(atomic claim)を行っていた。この
@@ -672,6 +681,20 @@ async function executeIntegrationActionCore(
   }
 
   externalRef.providerExecutionRef = result.providerExecutionRef ?? null;
+
+  // RUNS-P1(Failure Recording、Section15/16): result.error.code/
+  // .retryableは、core/tact-integration/types.tsのIntegrationExecutionError
+  // が既に持っていた値だが、これまでmessageだけが抽出されRun自体には
+  // 一切永続化されていなかった(Run.errorはplain textのmessageのみ)。
+  // externalRef(既存のjsonb列、無制約)へ両方をそのまま追記する
+  // ——新しい列・新しいmigrationは不要。secretやraw provider payload
+  // は含めない(machine-readable codeとbooleanのみ、既存の
+  // providerDetailsフィルタリングとは別に、これ自体は元々安全な値)。
+  // core/tact-work/taskRunReconciliation.tsのisRetryableIntegrationFailure()
+  // が、このexternalRef.errorRetryableを読み取るだけの
+  // read-only分類ヘルパーとして、この値を消費する。
+  externalRef.errorCode = result.error.code;
+  externalRef.errorRetryable = result.error.retryable;
 
   // Fast Port P4b(Step10)/LIVE-1A(Composio Error Cause Observability):
   // provider.failedのcanonical emitter。raw provider error全文
