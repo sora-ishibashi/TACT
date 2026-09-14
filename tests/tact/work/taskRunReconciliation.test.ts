@@ -1251,6 +1251,79 @@ async function testRetryEligibility(results: CheckResult[]): Promise<void> {
     );
   }
 
+  // ---- TIME-P1a FIX1(Section4、COMBINED TEMPORAL RULE): waitUntilと
+  // nextRetryAtの両方が設定されている場合、両方を満たして初めて
+  // eligibleになる ----
+
+  // [14] waitUntilは過去(満たされている)だがnextRetryAtが未来 -> blocked
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      tasks: [{
+        id: "task-1", workId: "work-1", description: "test", status: "waiting_for_retry",
+        assignedCapability: "integration.gmail.search_messages",
+        waitUntil: "2026-09-13T00:00:00.000Z", // 過去(満たされている)
+        nextRetryAt: "2026-09-15T00:00:00.000Z", // 未来(未成立)
+        createdAt: "x", updatedAt: "x",
+      } as WorkTask],
+      now: new Date("2026-09-14T00:00:00.000Z"),
+    });
+
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a FIX1 combined-14] waitUntilは満たされているがnextRetryAtが未来 -> blocked(temporal_gate_not_satisfied、片方だけでは不十分)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "temporal_gate_not_satisfied"
+      )
+    );
+  }
+
+  // [15] nextRetryAtは過去(満たされている)だがwaitUntilが未来 -> blocked
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      tasks: [{
+        id: "task-1", workId: "work-1", description: "test", status: "waiting_for_retry",
+        assignedCapability: "integration.gmail.search_messages",
+        waitUntil: "2026-09-15T00:00:00.000Z", // 未来(未成立)
+        nextRetryAt: "2026-09-13T00:00:00.000Z", // 過去(満たされている)
+        createdAt: "x", updatedAt: "x",
+      } as WorkTask],
+      now: new Date("2026-09-14T00:00:00.000Z"),
+    });
+
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a FIX1 combined-15] nextRetryAtは満たされているがwaitUntilが未来 -> blocked(temporal_gate_not_satisfied、片方だけでは不十分)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "temporal_gate_not_satisfied"
+      )
+    );
+  }
+
+  // [16] 両方とも満たされている -> eligible
+  {
+    const { deps } = makeRetryEligibilityDeps({
+      tasks: [{
+        id: "task-1", workId: "work-1", description: "test", status: "waiting_for_retry",
+        assignedCapability: "integration.gmail.search_messages",
+        waitUntil: "2026-09-13T00:00:00.000Z",
+        nextRetryAt: "2026-09-13T12:00:00.000Z",
+        createdAt: "x", updatedAt: "x",
+      } as WorkTask],
+      now: new Date("2026-09-14T00:00:00.000Z"),
+    });
+
+    const eligibility = await evaluateTaskRetryEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a FIX1 combined-16] waitUntil/nextRetryAtの両方が満たされている -> eligible",
+        eligibility.status === "eligible"
+      )
+    );
+  }
+
 }
 
 export async function run(): Promise<{ pass: number; fail: number }> {

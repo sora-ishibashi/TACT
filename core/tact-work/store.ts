@@ -856,6 +856,17 @@ export async function listTasksForWork(
 // statusを更新するために追加した。supabase/migrations/
 // 20260906000000_add_tact_tasks_update_policy.sqlでtact_tasksへ
 // updateポリシーを追加済み。
+// TIME-P1a FIX1(Step3、最小の中央集約点): next_retry_atは
+// "waiting_for_retry"であることの間だけ意味を持つ(setTaskNextRetryAt()
+// 自身がこの前提を強制済み)。したがって不変条件として、Task.statusが
+// "waiting_for_retry"以外へ遷移する瞬間(waiting_for_retry→running
+// というretry claim成功時も、completed/failed/cancelledという
+// terminal化も含む)、next_retry_atは常にnullへ戻してよい——このfile
+// 内でTask.statusを変更する経路は常にこの1関数だけを通るため、ここに
+// 1箇所だけ書けば、呼び出し元ごとに個別のclear処理を散らばらせずに
+// 済む(絶対条件Step3「Do not scatter cleanup across unrelated
+// code」)。waitUntilはこの不変条件の対象外(絶対条件Step3
+// 「Do not touch waitUntil cleanup」)。
 export async function updateTaskStatus(
   workId: string,
   userId: string,
@@ -873,9 +884,15 @@ export async function updateTaskStatus(
 
   const client = createRequestScopedClient(accessToken);
 
+  const update: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
+
+  if (status !== "waiting_for_retry") {
+    update.next_retry_at = null;
+  }
+
   const { error } = await client
     .from("tact_tasks")
-    .update({ status, updated_at: new Date().toISOString() })
+    .update(update)
     .eq("id", taskId)
     .eq("work_id", workId);
 

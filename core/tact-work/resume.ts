@@ -69,6 +69,11 @@ import {
   listApprovalsForWork,
   listClarificationsForWork,
 } from "./store";
+// TIME-P1a FIX1: waitUntilを、このfileが扱うApproval/Clarification
+// 解決by resumeの最後のgateとして追加する。時間はgateを追加するだけで
+// あり、Approval/Clarification/active Run保護のいずれもbypassしない
+// (このfileの既存チェックが全て通過した後にだけ評価される)。
+import { isWaitUntilSatisfied } from "./temporal";
 
 // =========================
 // Step4 — Resume Trigger Reason Model
@@ -117,7 +122,12 @@ export type TaskResumeEligibilityBlockedReasonCode =
   // (core/tact-work/taskRunReconciliation.tsの
   // evaluateTaskRetryEligibility()がこのTask用の別のeligibility判定を
   // 持つ)。
-  | "task_waiting_for_retry";
+  | "task_waiting_for_retry"
+  // TIME-P1a FIX1: WorkTask.waitUntilが未来を指しているため、他の
+  // 全条件(Approval/Clarification未解決なし・active Run無し等)を
+  // 満たしていても、まだ時間的にresumeが許されていない。waitUntil
+  // 未設定(null)の場合はこの理由に到達しない。
+  | "temporal_gate_not_satisfied";
 
 export type TaskResumeTerminalReasonCode =
   | "task_completed"
@@ -154,6 +164,11 @@ export interface TaskResumeEligibilityDeps {
 
   listClarificationsForWork: typeof listClarificationsForWork;
 
+  // TIME-P1a FIX1: core/tact-work/taskRunReconciliation.tsの
+  // TaskRetryEligibilityDeps.nowと同じ、注入可能な現在時刻(絶対条件:
+  // 内部でnew Date()を直接呼ばない、決定論的なtestを可能にする)。
+  now: () => Date;
+
 }
 
 const defaultDeps: TaskResumeEligibilityDeps = {
@@ -162,6 +177,7 @@ const defaultDeps: TaskResumeEligibilityDeps = {
   listRunsForTask,
   listApprovalsForWork,
   listClarificationsForWork,
+  now: () => new Date(),
 };
 
 export async function evaluateTaskResumeEligibility(
@@ -281,6 +297,13 @@ export async function evaluateTaskResumeEligibility(
 
   if (runs.some((run) => run.status === "running")) {
     return { status: "blocked", reasonCode: "active_run_exists" };
+  }
+
+  // TIME-P1a FIX1(最後のgate、Approval/Clarification/active Run
+  // 保護のいずれも通過した後にだけ評価する): task.waitUntil未設定
+  // (null)の場合、isWaitUntilSatisfied()はtrueを返す(gateなし)。
+  if (!isWaitUntilSatisfied(deps.now(), task.waitUntil)) {
+    return { status: "blocked", reasonCode: "temporal_gate_not_satisfied" };
   }
 
   return { status: "eligible" };

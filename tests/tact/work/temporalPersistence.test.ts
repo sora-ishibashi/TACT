@@ -386,6 +386,57 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- TIME-P1a FIX1(Step3、nextRetryAt cleanup): updateTaskStatus()
+  // が、status!=="waiting_for_retry"への遷移(retry claim成功時の
+  // waiting_for_retry→running含む、およびcompleted/failed/cancelledの
+  // いずれも)で next_retry_at を null にする、という不変条件のsource
+  // レベル構造的証拠(実DB接続なしにquery文自体を検証できないため、
+  // 上のsetter guard確認と同じ手法)。 ----
+  {
+    const storeSource = readFileSync(
+      join(__dirname, "..", "..", "..", "core", "tact-work", "store.ts"),
+      "utf-8"
+    );
+
+    const updateTaskStatusBody = storeSource.slice(
+      storeSource.indexOf("export async function updateTaskStatus"),
+      storeSource.indexOf("// TIME-P1a: WorkTask.waitUntil")
+    );
+
+    results.push(
+      check(
+        '[TIME-P1a FIX1 source] updateTaskStatus()はstatus!=="waiting_for_retry"の場合にnext_retry_at:nullをUPDATEへ含める(単一の中央集約点、waiting_for_retry→running/completed/failed/cancelledいずれの遷移でも自動的にクリアされる)',
+        updateTaskStatusBody.includes('status !== "waiting_for_retry"') &&
+          updateTaskStatusBody.includes("next_retry_at = null")
+      )
+    );
+  }
+
+  // ---- TIME-P1a FIX1: updateTaskStatus()呼び出しがWork不明で安全に
+  // 停止する場合(実DB到達前)でも、例外を投げずreturnする既存挙動が
+  // このcommitで壊れていないことの最小確認(実DB接続なしで到達できる
+  // 唯一のupdateTaskStatus()経路) ----
+  {
+    const { updateTaskStatus } = await import("../../../core/tact-work/store");
+
+    let threw = false;
+
+    try {
+      await updateTaskStatus("work-1", OWNER_USER_ID, "token", "task-1", "completed", {
+        getWork: async () => undefined,
+      });
+    } catch {
+      threw = true;
+    }
+
+    results.push(
+      check(
+        "[TIME-P1a FIX1] updateTaskStatus(): Work不明の場合、例外を投げず安全にreturnする(next_retry_at clear追加後も既存のfail-safe挙動は不変)",
+        !threw
+      )
+    );
+  }
+
   return summarize("work/temporalPersistence", results);
 
 }

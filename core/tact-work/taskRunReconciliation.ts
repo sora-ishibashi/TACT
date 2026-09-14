@@ -5,10 +5,13 @@ import {
   updateTaskStatus as defaultUpdateTaskStatus,
 } from "./store";
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "./completion";
-// TIME-P1a: nextRetryAtという時間的なgateを、既存の非時間的なretry
-// eligibility条件(Task状態・active Run有無・直近failureのretryability)
-// と組み合わせるためだけに使う、決定論的なpure function。
-import { isRetryTimeSatisfied } from "./temporal";
+// TIME-P1a: nextRetryAt/waitUntilという時間的なgateを、既存の
+// 非時間的なretry eligibility条件(Task状態・active Run有無・直近
+// failureのretryability)と組み合わせるためだけに使う、決定論的な
+// pure function。TIME-P1a FIX1(Section4「COMBINED TEMPORAL RULE」):
+// waitUntil/nextRetryAtの両方が設定されている場合、両方を満たして
+// 初めてretryが時間的に許される。
+import { isRetryTimeSatisfied, isWaitUntilSatisfied } from "./temporal";
 import type { Run } from "./types";
 
 // =========================
@@ -133,11 +136,16 @@ export async function evaluateTaskRetryEligibility(
     return { status: "blocked", reasonCode: "latest_failure_not_retryable" };
   }
 
-  // TIME-P1a(Section8/12): 非時間的な全条件を満たした後、最後に時間的
-  // gateを確認する。task.nextRetryAt未設定(null)の場合、
-  // isRetryTimeSatisfied()はtrueを返す(Section12の明示的preferred
-  // default: 時間による制約なし、他の条件さえ揃えば手動trigger可)。
-  if (!isRetryTimeSatisfied(deps.now(), task.nextRetryAt)) {
+  // TIME-P1a(Section8/12)/FIX1(Section4): 非時間的な全条件を満たした
+  // 後、最後に時間的gateを確認する。task.nextRetryAt未設定(null)の
+  // 場合、isRetryTimeSatisfied()はtrueを返す(Section12の明示的
+  // preferred default: 時間による制約なし、他の条件さえ揃えば手動
+  // trigger可)。FIX1のCOMBINED TEMPORAL RULE: waitUntilも設定されて
+  // いる場合、両方のgateを満たして初めてeligibleになる(片方だけでは
+  // 不十分)。
+  const now = deps.now();
+
+  if (!isRetryTimeSatisfied(now, task.nextRetryAt) || !isWaitUntilSatisfied(now, task.waitUntil)) {
     return { status: "blocked", reasonCode: "temporal_gate_not_satisfied" };
   }
 

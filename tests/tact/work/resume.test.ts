@@ -106,6 +106,7 @@ interface MakeDepsOptions {
   runs?: Run[];
   approvals?: Approval[];
   clarifications?: Clarification[];
+  now?: Date;
 }
 
 function makeDeps(options: MakeDepsOptions = {}) {
@@ -139,6 +140,8 @@ function makeDeps(options: MakeDepsOptions = {}) {
     listApprovalsForWork: async () => approvals,
 
     listClarificationsForWork: async () => clarifications,
+
+    now: () => options.now ?? new Date("2026-09-09T00:00:00.000Z"),
 
   };
 
@@ -367,6 +370,90 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[RUNS-P1b] Task.status==='waiting_for_retry'はblocked(task_waiting_for_retry)、'pending'と同じ扱いにならない",
         eligibility.status === "blocked" && eligibility.reasonCode === "task_waiting_for_retry"
+      )
+    );
+  }
+
+  // ---- TIME-P1a FIX1: waitUntilが未来を指す場合、他の全条件
+  // (Approval/Clarification未解決なし・active Run無し等)を満たして
+  // いてもblocked(temporal_gate_not_satisfied) ----
+  {
+    const { deps } = makeDeps({
+      tasks: [makeTask({ waitUntil: "2026-09-10T00:00:00.000Z" })], // makeDeps既定のnow(2026-09-09)より未来
+    });
+
+    const eligibility = await evaluateTaskResumeEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a FIX1] waitUntilが未来 -> 他の条件を満たしていてもblocked(temporal_gate_not_satisfied)",
+        eligibility.status === "blocked" && eligibility.reasonCode === "temporal_gate_not_satisfied"
+      )
+    );
+  }
+
+  // ---- TIME-P1a FIX1: waitUntilがちょうどnow -> gate成立(>=境界) ----
+  {
+    const { deps } = makeDeps({
+      tasks: [makeTask({ waitUntil: "2026-09-09T00:00:00.000Z" })], // makeDeps既定のnowと同時刻
+    });
+
+    const eligibility = await evaluateTaskResumeEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a FIX1] waitUntilがちょうどnow -> eligible(>=境界でgate成立)",
+        eligibility.status === "eligible"
+      )
+    );
+  }
+
+  // ---- TIME-P1a FIX1: waitUntilが過去 -> eligible ----
+  {
+    const { deps } = makeDeps({
+      tasks: [makeTask({ waitUntil: "2026-09-08T00:00:00.000Z" })],
+    });
+
+    const eligibility = await evaluateTaskResumeEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a FIX1] waitUntilが過去 -> eligible",
+        eligibility.status === "eligible"
+      )
+    );
+  }
+
+  // ---- TIME-P1a FIX1: waitUntil未設定(null/undefined) -> 制約なし、
+  // eligible(既存挙動のregression確認) ----
+  {
+    const { deps } = makeDeps({ tasks: [makeTask({ waitUntil: null })] });
+
+    const eligibility = await evaluateTaskResumeEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a FIX1] waitUntil未設定(null) -> 制約なし、eligible",
+        eligibility.status === "eligible"
+      )
+    );
+  }
+
+  // ---- TIME-P1a FIX1: waitUntilが過去でも、pending Approvalが残って
+  // いればblocked(pending_approval_exists) -> 時間的gateがApproval等の
+  // 既存条件をbypassしないことの確認(絶対条件Step2/5) ----
+  {
+    const { deps } = makeDeps({
+      tasks: [makeTask({ waitUntil: "2020-01-01T00:00:00.000Z" })], // gateは満たされている
+      approvals: [makeApproval({ status: "pending" })],
+    });
+
+    const eligibility = await evaluateTaskResumeEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[TIME-P1a FIX1] waitUntilのgateが満たされていても、pending Approvalが残っていればblocked(pending_approval_exists)——時間的gateは既存条件をbypassしない",
+        eligibility.status === "blocked" && eligibility.reasonCode === "pending_approval_exists"
       )
     );
   }
