@@ -22,6 +22,7 @@ import type {
 // 検証・変換する、tact-referentのpure runtime validator。
 import { parseCandidateSnapshot, type CandidateSnapshotEntry } from "../tact-referent/clarification";
 import type { JsonValue } from "./approvalIntegrity";
+import type { TemporalRequirementMetadata } from "./temporalRequirements";
 // CAP-P1b: DB rowが持つ既存のexecution binding(assigned_capability/
 // capability、いずれもCapability Registry dispatch key)から、
 // provider名を含まないCanonical Capabilityを決定論的に導出する
@@ -776,26 +777,37 @@ export async function updateWorkStatus(
 // Task
 // =========================
 
-// Narrow metadata update used for durable, provider-neutral request facts.
-// Callers provide the complete merged object; lifecycle fields are untouched.
-export async function updateWorkMetadata(
+// This deliberately exposes no arbitrary metadata patch API. It reads the
+// latest owned Work, merges only the temporal key, and uses updated_at as an
+// optimistic-concurrency guard so a concurrent writer is never overwritten.
+export async function updateWorkTemporalRequirementMetadata(
   workId: string,
   userId: string,
   accessToken: string,
-  metadata: Record<string, unknown>,
+  temporalRequirement: TemporalRequirementMetadata,
   deps: WorkOwnershipDeps = { getWork }
 ): Promise<boolean> {
-  const work = await deps.getWork(workId, userId, accessToken);
-  if (!work) return false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const work = await deps.getWork(workId, userId, accessToken);
+    if (!work) return false;
 
-  const client = createRequestScopedClient(accessToken);
-  const { error } = await client
-    .from("tact_works")
-    .update({ metadata, updated_at: new Date().toISOString() })
-    .eq("id", workId)
-    .eq("user_id", userId);
-  if (error) throw error;
-  return true;
+    const client = createRequestScopedClient(accessToken);
+    const { data, error } = await client
+      .from("tact_works")
+      .update({
+        metadata: { ...(work.metadata ?? {}), temporalRequirement },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", workId)
+      .eq("user_id", userId)
+      .eq("updated_at", work.updatedAt)
+      .select("id")
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return true;
+  }
+
+  return false;
 }
 
 export interface CreateWorkTaskParams {

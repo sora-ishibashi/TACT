@@ -9,6 +9,9 @@ export type TemporalDateConstraint =
 
 export interface TemporalRequirement {
   readonly durationMinutes?: number;
+  // A delay is distinct from a meeting duration. It is intentionally not
+  // mapped to TIME-P1a waitUntil/nextRetryAt in this phase.
+  readonly delayMinutes?: number;
   readonly date?: TemporalDateConstraint;
   // Without a reliable account timezone, a date and a clock time must not be
   // combined into an ambiguous timestamp.
@@ -16,7 +19,7 @@ export interface TemporalRequirement {
   readonly deadline?: TemporalDateConstraint;
 }
 
-export type TemporalRequiredField = "duration" | "date" | "specific_time" | "deadline";
+export type TemporalRequiredField = "duration" | "delay" | "date" | "specific_time" | "deadline";
 
 export interface TemporalRequirementPolicy {
   readonly kind: "meeting_candidates" | "specific_calendar_action" | "deadline_work" | "retry_request" | "none";
@@ -35,6 +38,22 @@ const DURATION_MINUTES = /(\d+)\s*(?:分|minutes?|mins?)/i;
 const CLOCK_TIME = /\b([01]?\d|2[0-3])(?::([0-5]\d))\b|([01]?\d|2[0-3])時(?:([0-5]\d)分?)?/;
 const DATE_RANGE = /(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:〜|～|-|–|to)\s*(\d{1,2})(?:\s*\/\s*(\d{1,2}))?/i;
 const DATE = /(?:\b(20\d{2})[-/.])?(\d{1,2})[\/.月](\d{1,2})(?:日)?/;
+
+function extractDelayMinutes(input: string): number | undefined {
+  const japanese = input.match(/(\d+)\s*(時間|分)後/);
+  if (japanese) return Number(japanese[1]) * (japanese[2] === "時間" ? 60 : 1);
+  const english = input.match(/(?:in|after)\s+(\d+)\s*(hours?|hrs?|minutes?|mins?)\b/i) ??
+    input.match(/(\d+)\s*(hours?|hrs?|minutes?|mins?)\s+later\b/i);
+  if (!english) return undefined;
+  return Number(english[1]) * (/^h/i.test(english[2]) ? 60 : 1);
+}
+
+function withoutDelayExpressions(input: string): string {
+  return input
+    .replace(/\d+\s*(?:時間|分)後/g, "")
+    .replace(/(?:in|after)\s+\d+\s*(?:hours?|hrs?|minutes?|mins?)\b/gi, "")
+    .replace(/\d+\s*(?:hours?|hrs?|minutes?|mins?)\s+later\b/gi, "");
+}
 
 function toDate(month: string, day: string, year?: string): string {
   return `${year ?? ""}${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
@@ -72,14 +91,17 @@ function extractSpecificTime(input: string): string | undefined {
 }
 
 export function extractTemporalRequirement(input: string): TemporalRequirement {
-  const hours = input.match(DURATION_HOURS);
-  const minutes = input.match(DURATION_MINUTES);
+  const durationInput = withoutDelayExpressions(input);
+  const hours = durationInput.match(DURATION_HOURS);
+  const minutes = durationInput.match(DURATION_MINUTES);
   const durationMinutes = (hours ? Number(hours[1]) * 60 : 0) + (minutes ? Number(minutes[1]) : 0);
+  const delayMinutes = extractDelayMinutes(input);
   const date = extractDateConstraint(input);
   const specificTime = extractSpecificTime(input);
   const hasDeadlineLanguage = /(?:締切(?:まで)?|期限(?:まで)?|[月火水木金土日]曜(?:日)?まで|deadline|by\s+(?:friday|\d))/i.test(input);
   return {
     ...(Number.isFinite(durationMinutes) && durationMinutes > 0 && durationMinutes <= 24 * 60 ? { durationMinutes } : {}),
+    ...(delayMinutes !== undefined && Number.isFinite(delayMinutes) && delayMinutes > 0 && delayMinutes <= 24 * 60 ? { delayMinutes } : {}),
     ...(date ? { date } : {}),
     ...(specificTime ? { specificTime } : {}),
     ...(hasDeadlineLanguage && date ? { deadline: date } : {}),
@@ -102,7 +124,7 @@ export function deriveTemporalRequirementPolicy(input: string): TemporalRequirem
   if (/(?:締切(?:まで)?|期限(?:まで)?|[月火水木金土日]曜(?:日)?まで|deadline|by\s+(?:friday|\d))/i.test(input)) {
     return { kind: "deadline_work", required: ["deadline"] };
   }
-  if (/(?:再試行|retry)/i.test(input)) return { kind: "retry_request", required: ["duration"] };
+  if (/(?:再試行|retry)/i.test(input)) return { kind: "retry_request", required: ["delay"] };
   return { kind: "none", required: [] };
 }
 
@@ -110,6 +132,7 @@ export function findMissingTemporalRequirements(requirement: TemporalRequirement
   return policy.required.filter((field) => {
     switch (field) {
       case "duration": return requirement.durationMinutes === undefined;
+      case "delay": return requirement.delayMinutes === undefined;
       case "date": return requirement.date === undefined;
       case "specific_time": return requirement.specificTime === undefined;
       case "deadline": return requirement.deadline === undefined;
@@ -120,6 +143,7 @@ export function findMissingTemporalRequirements(requirement: TemporalRequirement
 export function buildTemporalClarificationQuestion(field: TemporalRequiredField): string {
   switch (field) {
     case "duration": return "会議の所要時間を教えてください。";
+    case "delay": return "再試行までの待ち時間を教えてください。";
     case "date": return "候補を探す日程の範囲を教えてください。";
     case "specific_time": return "予定する時刻を教えてください。";
     case "deadline": return "締切を教えてください。";
@@ -136,7 +160,7 @@ function isTemporalRequirementPolicy(value: unknown): value is TemporalRequireme
   return (candidate.kind === "meeting_candidates" || candidate.kind === "specific_calendar_action" ||
     candidate.kind === "deadline_work" || candidate.kind === "retry_request" || candidate.kind === "none") &&
     Array.isArray(candidate.required) &&
-    candidate.required.every((field) => field === "duration" || field === "date" || field === "specific_time" || field === "deadline");
+    candidate.required.every((field) => field === "duration" || field === "delay" || field === "date" || field === "specific_time" || field === "deadline");
 }
 
 export function readTemporalRequirementMetadata(metadata: Record<string, unknown> | null | undefined): TemporalRequirementMetadata | undefined {

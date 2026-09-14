@@ -31,7 +31,7 @@ import {
   listClarificationsForWork,
   updateClarificationStatus,
   updateWorkStatus,
-  updateWorkMetadata,
+  updateWorkTemporalRequirementMetadata,
   requestClarification,
   requestReferentClarification,
   resolveClarification,
@@ -606,11 +606,15 @@ async function findPendingTemporalClarification(
 ): Promise<TemporalClarificationLookup> {
   const work = await getWork(workId, userId, accessToken);
   const metadata = readTemporalRequirementMetadata(work?.metadata);
-  if (!metadata?.activeClarificationId) return {};
+  if (!metadata) return {};
   const clarifications = await listClarificationsForWork(workId, userId, accessToken);
-  const pending = clarifications.find(
-    (clarification) => clarification.id === metadata.activeClarificationId && clarification.status === "pending"
-  );
+  const pending = metadata.activeClarificationId
+    ? clarifications.find(
+        (clarification) => clarification.id === metadata.activeClarificationId && clarification.status === "pending"
+      )
+    : clarifications.find(
+        (clarification) => clarification.status === "pending" && clarification.requestedByActorId === "temporal-understanding"
+      );
   return pending ? { pending, metadata } : {};
 }
 
@@ -2776,7 +2780,6 @@ export async function resolveAndRunWork(
   const missingTemporal = findMissingTemporalRequirements(temporalRequirement, temporalPolicy);
 
   if (temporalPolicy.kind !== "none" || Object.keys(temporalRequirement).length > 0) {
-    const existingMetadata = { ...(work.metadata ?? {}) };
     const activeTemporalClarificationId = storedTemporal?.activeClarificationId;
     const existingPending = activeTemporalClarificationId
       ? (await listClarificationsForWork(work.id, conversation.userId, accessToken)).find(
@@ -2795,17 +2798,25 @@ export async function resolveAndRunWork(
         question,
       }, conversation.userId, accessToken);
       if (clarification) {
-        await updateWorkMetadata(work.id, conversation.userId, accessToken, {
-          ...existingMetadata,
-          temporalRequirement: toTemporalRequirementMetadata(temporalRequirement, temporalPolicy, clarification.id),
-        });
+        await updateWorkTemporalRequirementMetadata(
+          work.id,
+          conversation.userId,
+          accessToken,
+          toTemporalRequirementMetadata(temporalRequirement, temporalPolicy, clarification.id)
+        );
+        // The canonical clarification is already durable. A retry can recover
+        // it by requester identity if optimistic metadata persistence loses a
+        // concurrent-update race, so this turn never executes work.
         return makeTemporalClarificationResult(question);
       }
     } else {
-      await updateWorkMetadata(work.id, conversation.userId, accessToken, {
-        ...existingMetadata,
-        temporalRequirement: toTemporalRequirementMetadata(temporalRequirement, temporalPolicy),
-      });
+      const persisted = await updateWorkTemporalRequirementMetadata(
+        work.id,
+        conversation.userId,
+        accessToken,
+        toTemporalRequirementMetadata(temporalRequirement, temporalPolicy)
+      );
+      if (!persisted) throw new Error("Unable to persist temporal requirement");
     }
   }
 
@@ -3852,9 +3863,6 @@ async function runTemporalClarificationAnswerTurn(
 
   const requirement = mergeTemporalRequirements(metadata.requirement, extractTemporalRequirement(answerInput));
   const missing = findMissingTemporalRequirements(requirement, metadata.policy);
-  const work = await getWork(clarification.workId, conversation.userId, accessToken);
-  const workMetadata = { ...(work?.metadata ?? {}) };
-
   if (missing.length > 0) {
     const question = buildTemporalClarificationQuestion(missing[0]);
     const next = await requestClarification({
@@ -3864,10 +3872,18 @@ async function runTemporalClarificationAnswerTurn(
       question,
     }, conversation.userId, accessToken);
     if (next) {
-      await updateWorkMetadata(clarification.workId, conversation.userId, accessToken, {
-        ...workMetadata,
-        temporalRequirement: toTemporalRequirementMetadata(requirement, metadata.policy, next.id),
-      });
+      const persisted = await updateWorkTemporalRequirementMetadata(
+        clarification.workId,
+        conversation.userId,
+        accessToken,
+        toTemporalRequirementMetadata(requirement, metadata.policy, next.id)
+      );
+      if (!persisted) {
+        const message = await appendConversationMessage(
+          conversation, accessToken, "assistant", "時間条件を安全に更新できませんでした。もう一度お試しください。"
+        );
+        return { conversation, userMessage, message };
+      }
       const message = await appendConversationMessage(conversation, accessToken, "assistant", question);
       return { conversation, userMessage, message };
     }
@@ -3878,10 +3894,18 @@ async function runTemporalClarificationAnswerTurn(
     return { conversation, userMessage, message };
   }
 
-  await updateWorkMetadata(clarification.workId, conversation.userId, accessToken, {
-    ...workMetadata,
-    temporalRequirement: toTemporalRequirementMetadata(requirement, metadata.policy),
-  });
+  const persisted = await updateWorkTemporalRequirementMetadata(
+    clarification.workId,
+    conversation.userId,
+    accessToken,
+    toTemporalRequirementMetadata(requirement, metadata.policy)
+  );
+  if (!persisted) {
+    const message = await appendConversationMessage(
+      conversation, accessToken, "assistant", "時間条件を安全に更新できませんでした。もう一度お試しください。"
+    );
+    return { conversation, userMessage, message };
+  }
   const message = await appendConversationMessage(
     conversation, accessToken, "assistant", "時間条件を記録しました。必要な情報がそろいました。"
   );

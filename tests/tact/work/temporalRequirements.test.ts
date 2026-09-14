@@ -7,6 +7,8 @@ import {
   toTemporalRequirementMetadata,
   readTemporalRequirementMetadata,
 } from "../../../core/tact-work/temporalRequirements";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 export async function run(): Promise<{ pass: number; fail: number }> {
@@ -49,6 +51,26 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   const malformed = extractTemporalRequirement("99:99に会議、0分");
   results.push(check("[safety] malformed time and zero duration are ignored", malformed.specificTime === undefined && malformed.durationMinutes === undefined));
+
+  const delay = extractTemporalRequirement("1時間後に再試行して");
+  const retryPolicy = deriveTemporalRequirementPolicy("1時間後に再試行して");
+  results.push(check("[ambiguity] 1時間後 is a delay, never a meeting duration", delay.delayMinutes === 60 && delay.durationMinutes === undefined && findMissingTemporalRequirements(delay, retryPolicy).length === 0));
+
+  const delayedThirtyMinutes = extractTemporalRequirement("30分後に通知して");
+  results.push(check("[ambiguity] 30分後 is not blindly treated as a meeting duration", delayedThirtyMinutes.delayMinutes === 30 && delayedThirtyMinutes.durationMinutes === undefined));
+
+  const deadlineAndDuration = extractTemporalRequirement("金曜までに30分の会議を準備して");
+  results.push(check("[extract] deadline and meeting duration remain independent facts", deadlineAndDuration.deadline?.kind === "relative" && deadlineAndDuration.durationMinutes === 30));
+
+  const source = readFileSync(join(__dirname, "..", "..", "..", "core", "tact-work", "temporalRequirements.ts"), "utf8");
+  results.push(check("[timezone] relative/local expressions are never converted through Date or server timezone", !source.includes("new Date(") && !source.includes("Date.parse(") && !source.includes("getTimezoneOffset")));
+
+  const storeSource = readFileSync(join(__dirname, "..", "..", "..", "core", "tact-work", "store.ts"), "utf8");
+  const temporalMetadataWriter = storeSource.slice(
+    storeSource.indexOf("export async function updateWorkTemporalRequirementMetadata"),
+    storeSource.indexOf("export interface CreateWorkTaskParams")
+  );
+  results.push(check("[metadata] temporal persistence preserves unrelated metadata and guards concurrent writes", temporalMetadataWriter.includes("...(work.metadata ?? {})") && temporalMetadataWriter.includes("temporalRequirement") && temporalMetadataWriter.includes('.eq("updated_at", work.updatedAt)')));
 
   results.push(check("[boundary] request facts do not expose TIME-P1a execution state", !("waitUntil" in afterAnswer) && !("nextRetryAt" in afterAnswer)));
 
