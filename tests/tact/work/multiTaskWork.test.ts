@@ -427,6 +427,56 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   }
 
+  // ---- CAP-P1b由来の追加edge case: 「最後に完了したTaskが、より
+  // 早く作られた(=配列の先頭にある)Taskの未完了を覆い隠さない」こと。
+  // 既存4/5は「先頭2件が先に完了し、末尾1件が未着手のまま残る」という
+  // 順序だったため、reconcileWorkCompletionStatus()が仮に「配列の
+  // 最後のTask」だけを見て判定する実装だったとしても誤って
+  // 見逃されない(先頭2件はterminalで末尾1件がterminalでない、という
+  // 自然な失敗ケース)。ここでは逆に、先に作られたTask Aが未完了のまま、
+  // 後から作られたTask Bだけが先にcompleteする——
+  // reconcileWorkCompletionStatus()が実際に全Taskを.every()で見ており
+  // (「最後に処理したTaskの状態」や「配列の末尾要素」に依存しない)
+  // ことを直接確認する。 ----
+  {
+    const taskA = makeTask({ description: "先に作られるが、まだ完了しないTask" });
+    const taskB = makeTask({ description: "後から作られるが、先に完了するTask" });
+
+    const fakeOrchestration = async (
+      _request: OrchestrationRequest,
+      hooks?: OrchestrationHooks
+    ): Promise<OrchestrationResult> => {
+
+      await hooks?.onTasksPlanned?.([taskA, taskB]);
+
+      // Task A(先に作られた方)はまだ一切finishしない。Task B(後から
+      // 作られた方)だけが先にcompletedとして記録される。
+      await hooks?.onTaskFinished?.(taskB, makeSummary({ taskId: taskB.id, status: "completed" }));
+
+      return {
+        answer: "", executionId: "exec-work-p2-6",
+        tasks: [makeSummary({ taskId: taskB.id, status: "completed" })],
+        memoryUsed: [], toolsUsed: [], memoryWrites: [],
+        learningSignals: ["successful_execution"],
+        metadata: { executionMode: "parallel-swarm" },
+      };
+
+    };
+
+    const { deps, calls } = makeMultiTaskDeps(fakeOrchestration);
+
+    await runWorkTurn(
+      { work: makeWork(), userId: "user-1", accessToken: "fake-token", orchestrationRequest: baseOrchestrationRequest },
+      deps
+    );
+
+    results.push(check(
+      "[WORK-P2 edge case] 後から作られたTask Bが先にcompletedしても、先に作られたTask Aが未完了である限りWorkはcompleted/failedのいずれにも確定しない(「最後に完了したTask」ではなく全Taskを見て判定する)",
+      !calls.workStatusUpdates.includes("completed") && !calls.workStatusUpdates.includes("failed")
+    ));
+
+  }
+
   // ---- 9: Approval待ちの間、後続のprotected actionが実行されず、Work
   // completionもブロックされる(複数Task構成のWorkでも汎用Approval
   // 機構の絶対条件が保たれる) ----

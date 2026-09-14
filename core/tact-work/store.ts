@@ -22,6 +22,13 @@ import type {
 // 検証・変換する、tact-referentのpure runtime validator。
 import { parseCandidateSnapshot, type CandidateSnapshotEntry } from "../tact-referent/clarification";
 import type { JsonValue } from "./approvalIntegrity";
+// CAP-P1b: DB rowが持つ既存のexecution binding(assigned_capability/
+// capability、いずれもCapability Registry dispatch key)から、
+// provider名を含まないCanonical Capabilityを決定論的に導出する
+// pure関数。toWorkTask()/toRun()はいずれもこのfile内の既存の
+// pure変換関数であり、resolveTaskCapabilities()を呼んでも新しい
+// 副作用・新しいDB呼び出しは一切発生しない。
+import { resolveTaskCapabilities } from "./capability";
 
 // =========================
 // TACT Work Store (Architecture Migration Phase B1)
@@ -264,6 +271,12 @@ export function toWorkTask(row: WorkTaskRow): WorkTask {
     description: row.description,
     status: row.status,
     assignedCapability: row.assigned_capability,
+    // CAP-P1b: assigned_capability(既存のexecution binding/dispatch
+    // key)から、read-onlyなCanonical Capabilityをその都度導出する。
+    // 新しい列は一切追加しない(resolveTaskCapabilities()が未知の
+    // dispatch keyに対してundefinedを返した場合はnullへ正規化する
+    // ——既存のnull/undefinedの扱いと揃える)。
+    canonicalCapabilities: resolveTaskCapabilities(row.assigned_capability) ?? null,
     tableSchema: row.table_schema,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -289,6 +302,10 @@ export function toRun(row: RunRow): Run {
     taskId: row.task_id,
     attempt: row.attempt,
     capability: row.capability,
+    // CAP-P1b: WorkTask.canonicalCapabilitiesと同じ理由・同じ設計
+    // (read-only、DBへ永続化しない派生値)。RunはTask経由でJOINしなくても
+    // 単体でCanonical Capabilityを保持する。
+    canonicalCapabilities: resolveTaskCapabilities(row.capability) ?? null,
     provider: row.provider,
     model: row.model,
     status: row.status,

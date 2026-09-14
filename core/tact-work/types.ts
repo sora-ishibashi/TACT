@@ -117,6 +117,29 @@ export type WorkCapabilityRequirement =
   | "communication.read"
   | "communication.write";
 
+// =========================
+// CAP-P1b: Canonical Task/Run Capability (semantic, provider-neutral)
+// =========================
+//
+// WorkCapabilityRequirement(直上)はWork.requiredCapabilitiesという
+// DB CHECK制約付き列(supabase/migrations/
+// 20260921000000_add_gmail_work_semantics.sql)へ実際に永続化できる
+// 値に限定された語彙であり、そのDB制約を経由しないResearch
+// Capability("research.perform")を含められない。WorkTask/Runが
+// 「このTask/Runは意味論的に何の能力を必要としたか」を保持するには
+// この3値だけでは不足するため、CAP-P1(core/tact-work/capability.ts)の
+// CanonicalCapabilityと同じ値集合をここで独立して宣言する。
+//
+// cross-module importで循環参照を作らない、という既存パターン
+// (core/tact-orchestrator/task.tsのTaskIntegrationRiskClassSnapshot
+// コメント参照: 「値だけを独立に再宣言する」)をそのまま踏襲する
+// ——core/tact-work/capability.tsは型のみこのファイルをimportして
+// おり(WorkCapabilityRequirement等)、その逆方向(このファイルが
+// capability.tsをimportする)は行わない。capability.ts側の
+// CanonicalCapability型はこの型のaliasとして定義し、値集合の
+// 単一の真実の情報源(source of truth)はこちらに置く。
+export type CanonicalTaskCapability = WorkCapabilityRequirement | "research.perform";
+
 export type WorkCompletionCondition =
   | "subject_identified"
   | "organizational_context_checked"
@@ -245,7 +268,22 @@ export interface WorkTask {
 
   status: TaskStatus;
 
+  // 実行binding(WHAT/HOWのHOW側): このTaskをどのCapability Registry
+  // dispatch key/Provider操作で実行するか(例:
+  // "integration.gmail.search_messages")。CAP-P1a/CAP-P1b以前から
+  // 存在する既存フィールドで、意味・値は一切変更しない
+  // (core/tact-orchestrator/decomposer.tsが決定論的に設定する)。
   assignedCapability?: string | null;
+
+  // CAP-P1b: 意味論的Capability(WHAT側): assignedCapability
+  // (dispatch key)から、core/tact-work/capability.tsの
+  // resolveTaskCapabilities()によって決定論的に導出される、
+  // provider名を含まないCanonical Capability。DBへは永続化されない
+  // (assigned_capability列のみが真実の情報源であり、この値は
+  // toWorkTask()がDB row → domain変換の都度、副作用なく再計算する
+  // read-onlyな派生値)。未知のdispatch key・assignedCapability
+  //未設定の場合はnull(fail closed、推測で埋めない)。
+  canonicalCapabilities?: readonly CanonicalTaskCapability[] | null;
 
   tableSchema?: WorkTaskTableSchema | null;
 
@@ -298,6 +336,16 @@ export interface Run {
   attempt: number;
 
   capability: string;
+
+  // CAP-P1b: 意味論的Capability(WHAT側)。上のcapability(dispatch key、
+  // 例: "integration.gmail.search_messages")から
+  // resolveTaskCapabilities()で決定論的に導出される、provider名を
+  // 含まないCanonical Capability。DBへは永続化されない、toRun()が
+  // DB row → domain変換の都度再計算するread-onlyな派生値
+  // (WorkTask.canonicalCapabilitiesと同じ設計)。「なぜこのRunが
+  // 実行されたか」をRun単体から辿れるようにする(Run → Task経由の
+  // 追加JOINを必要としない)。未知のdispatch keyの場合はnull。
+  canonicalCapabilities?: readonly CanonicalTaskCapability[] | null;
 
   // Architecture Migration Phase C1: capability(既にstring、Capability
   // Registryの登録名を自由文字列で持つ)と対称に、providerも自由

@@ -1,4 +1,4 @@
-import type { Work, WorkCapabilityRequirement, WorkTask } from "./types";
+import type { CanonicalTaskCapability, Work, WorkCapabilityRequirement, WorkTask } from "./types";
 
 // =========================
 // TACT Work — Canonical Capability Router (CAP-P1)
@@ -47,7 +47,13 @@ import type { Work, WorkCapabilityRequirement, WorkTask } from "./types";
 // ——"research.perform"がWork.requiredCapabilitiesへ書き込まれることは
 // 構造的に無い(このfileにWork書き込みの関数が存在しない)。
 
-export type CanonicalCapability = WorkCapabilityRequirement | "research.perform";
+// CAP-P1b: 値集合の単一の真実の情報源(source of truth)は
+// core/tact-work/types.tsのCanonicalTaskCapabilityへ移した
+// (WorkTask.canonicalCapabilities/Run.canonicalCapabilitiesという
+// domain型のfieldとして正式に使うため)。このfileの既存の
+// CanonicalCapabilityという名前は、既存の呼び出し元(このfile自身の
+// 関数群・既存test)を壊さないためのaliasとしてそのまま維持する。
+export type CanonicalCapability = CanonicalTaskCapability;
 
 export const CANONICAL_CAPABILITIES: readonly CanonicalCapability[] = [
   "organizational_context.read",

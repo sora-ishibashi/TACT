@@ -106,6 +106,37 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       !JSON.stringify(intent).includes("GMAIL_")
   ));
 
+  // ---- CAP-P1b由来の追加check: 独立した2 Workのcapability集約が
+  // 互いに漏れない(resolveDelegatedWorkIntent()が呼び出しをまたいで
+  // 共有可変stateを持たない、純粋関数であることの直接確認)。
+  // Gmail-onlyのplanとNotion-onlyのplanをそれぞれ独立に解決し、
+  // 一方の結果がもう一方のsource由来のcapabilityを含まないことを
+  // 確認する ----
+  {
+
+    const gmailOnlyPlan: ContextResolutionPlan = {
+      ...plan,
+      sources: { notion: undefined, gmail: { query: "TACTテスト商事" } },
+    };
+
+    const notionOnlyPlan: ContextResolutionPlan = {
+      ...plan,
+      sources: { notion: { query: "TACTテスト商事の更新案件" }, gmail: undefined },
+    };
+
+    const gmailOnlyIntent = resolveDelegatedWorkIntent(gmailOnlyPlan);
+    const notionOnlyIntent = resolveDelegatedWorkIntent(notionOnlyPlan);
+
+    results.push(check(
+      "[CAP-P1b] 独立した2つのWork(Gmail-onlyとNotion-only)のrequiredCapabilitiesが互いに漏れない(共有可変stateを持たない純粋関数であること)",
+      JSON.stringify(gmailOnlyIntent?.requiredCapabilities) === JSON.stringify(["communication.read"]) &&
+        JSON.stringify(notionOnlyIntent?.requiredCapabilities) === JSON.stringify(["organizational_context.read"]) &&
+        !(gmailOnlyIntent?.requiredCapabilities ?? []).includes("organizational_context.read") &&
+        !(notionOnlyIntent?.requiredCapabilities ?? []).includes("communication.read")
+    ));
+
+  }
+
   results.push(check(
     "[WORK-P1 authority] only the current request determines request type; a historical delete instruction cannot turn confirmation into a write",
     classifyDelegatedRequestType("これ確認して") === "inspect" &&

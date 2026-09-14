@@ -157,6 +157,95 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- Test3-CAP-P1b: toWorkTask() — 実際のTask createシーケンス
+  // (createTask() → toWorkTask())が、既存のexecution binding
+  // (assignedCapability、dispatch key)を一切変更・削除せずに保持した
+  // まま、read-only なCanonical Capability(canonicalCapabilities)を
+  // 併記すること。resolveTaskCapabilities()を独立に呼ぶ単体testでは
+  // なく、実際のDB row → domain変換関数(core/tact-work/store.tsの
+  // createTask()が内部で呼ぶのと同じtoWorkTask())を直接通す ----
+  {
+
+    const gmailSearchRow: WorkTaskRow = {
+      id: "task-gmail-search",
+      work_id: "work-1",
+      parent_task_id: null,
+      description: "Gmailから対象案件を確認",
+      status: "pending",
+      assigned_capability: "integration.gmail.search_messages",
+      table_schema: null,
+      created_at: "2026-09-14T00:00:00.000Z",
+      updated_at: "2026-09-14T00:00:00.000Z",
+    };
+
+    const gmailSearchTask = toWorkTask(gmailSearchRow);
+
+    results.push(
+      check(
+        "[Test3-CAP-P1b 1] Gmail search Task: canonical capability(communication.read)とexecution binding(integration.gmail.search_messages)が両方保持され、どちらか一方に潰れない",
+        gmailSearchTask.assignedCapability === "integration.gmail.search_messages" &&
+          JSON.stringify(gmailSearchTask.canonicalCapabilities) === JSON.stringify(["communication.read"])
+      )
+    );
+
+    const gmailSendRow: WorkTaskRow = {
+      ...gmailSearchRow,
+      id: "task-gmail-send",
+      assigned_capability: "integration.gmail.send_message",
+    };
+
+    const gmailSendTask = toWorkTask(gmailSendRow);
+
+    results.push(
+      check(
+        "[Test3-CAP-P1b 2] Gmail send Task: canonical capability(communication.write)とexecution binding(integration.gmail.send_message)が両方保持される",
+        gmailSendTask.assignedCapability === "integration.gmail.send_message" &&
+          JSON.stringify(gmailSendTask.canonicalCapabilities) === JSON.stringify(["communication.write"])
+      )
+    );
+
+    const notionSearchTask = toWorkTask({ ...gmailSearchRow, id: "task-notion-search", assigned_capability: "integration.notion.search" });
+    const notionReadTask = toWorkTask({ ...gmailSearchRow, id: "task-notion-read", assigned_capability: "integration.notion.read_page" });
+
+    results.push(
+      check(
+        "[Test3-CAP-P1b 3] Notion search/read_page Taskは既存語彙のorganizational_context.readへ解決される",
+        JSON.stringify(notionSearchTask.canonicalCapabilities) === JSON.stringify(["organizational_context.read"]) &&
+          JSON.stringify(notionReadTask.canonicalCapabilities) === JSON.stringify(["organizational_context.read"])
+      )
+    );
+
+    const researchTask = toWorkTask({ ...gmailSearchRow, id: "task-research", assigned_capability: "research" });
+
+    results.push(
+      check(
+        '[Test3-CAP-P1b 4] Research Taskはresearch.performへ解決される(Work.requiredCapabilitiesへは一切書き込まれない、このfileはWorkへの書き込みを一切行わない)',
+        JSON.stringify(researchTask.canonicalCapabilities) === JSON.stringify(["research.perform"])
+      )
+    );
+
+    const unknownTask = toWorkTask({ ...gmailSearchRow, id: "task-unknown", assigned_capability: "integration.unknown_provider.some_action" });
+
+    results.push(
+      check(
+        "[Test3-CAP-P1b 5] 未登録のexecution binding(dispatch key)はcanonicalCapabilities=null(fail closed、推測しない)。ただしTask自体(assignedCapability・id等)は変更されずそのまま残る——canonical capabilityが解決できないことがTaskの存在/実行を妨げない",
+          unknownTask.canonicalCapabilities === null &&
+          unknownTask.assignedCapability === "integration.unknown_provider.some_action" &&
+          unknownTask.id === "task-unknown"
+      )
+    );
+
+    const chatTask = toWorkTask({ ...gmailSearchRow, id: "task-chat", assigned_capability: null });
+
+    results.push(
+      check(
+        "[Test3-CAP-P1b 6] assignedCapability未設定(chatフォールバック)のTaskはcanonicalCapabilities=null",
+        chatTask.canonicalCapabilities === null
+      )
+    );
+
+  }
+
   // ---- Test4: toWorkTask() — 全TaskStatusが正しく往復する ----
   for (const status of TASK_STATUSES) {
 
@@ -240,6 +329,62 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           run.result?.success === true
       )
     );
+  }
+
+  // ---- Test6-CAP-P1b: toRun() — Run traceability(「なぜこのRunが
+  // 実行されたか」をRun単体から辿れる)。実際のcreateRun()が内部で
+  // 呼ぶのと同じtoRun()を直接通す ----
+  {
+
+    const gmailSearchRunRow: RunRow = {
+      id: "run-gmail-search",
+      work_id: "work-1",
+      task_id: "task-gmail-search",
+      attempt: 1,
+      capability: "integration.gmail.search_messages",
+      provider: "composio",
+      model: null,
+      status: "completed",
+      started_at: "2026-09-14T00:00:00.000Z",
+      completed_at: "2026-09-14T00:01:00.000Z",
+      error: null,
+      cost: null,
+      external_ref: null,
+      result: { success: true },
+      created_at: "2026-09-14T00:00:00.000Z",
+    };
+
+    const gmailSearchRun = toRun(gmailSearchRunRow);
+
+    results.push(
+      check(
+        "[Test6-CAP-P1b 1] Gmail search Run: capability(execution binding、既存値、providerと結びついたdispatch key)とcanonicalCapabilities(communication.read)が両方保持され、Run単体からTask経由の追加JOINなしにcanonical capabilityを読める",
+        gmailSearchRun.capability === "integration.gmail.search_messages" &&
+          gmailSearchRun.provider === "composio" &&
+          JSON.stringify(gmailSearchRun.canonicalCapabilities) === JSON.stringify(["communication.read"])
+      )
+    );
+
+    const unknownRun = toRun({ ...gmailSearchRunRow, id: "run-unknown", capability: "integration.unknown_provider.some_action" });
+
+    results.push(
+      check(
+        "[Test6-CAP-P1b 2] 未登録のexecution binding(dispatch key)を持つRunもcanonicalCapabilities=null(fail closed)のまま、Run自体(capability/provider/result等)は変更されず記録される",
+        unknownRun.canonicalCapabilities === null &&
+          unknownRun.capability === "integration.unknown_provider.some_action" &&
+          unknownRun.result?.success === true
+      )
+    );
+
+    const chatRun = toRun({ ...gmailSearchRunRow, id: "run-chat", capability: "chat" });
+
+    results.push(
+      check(
+        '[Test6-CAP-P1b 3] "chat"(Capability Registry未経由の既定経路)のRunもcanonicalCapabilities=null(chatはWorkCapabilityRequirement/research.performのいずれにも該当しない)',
+        chatRun.canonicalCapabilities === null
+      )
+    );
+
   }
 
   // ---- Test7: toRun() — 全RunStatusが正しく往復する(cancelledは無い) ----
