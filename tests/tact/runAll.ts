@@ -183,6 +183,7 @@ import { run as runWorkReferentClarification } from "./work/referentClarificatio
 import { run as runWorkGmailReferentCandidates } from "./work/gmailReferentCandidates.test";
 import { run as runWorkExecutionPreview } from "./work/executionPreview.test";
 import { run as runWorkMultiTaskWork } from "./work/multiTaskWork.test";
+import { run as runWorkCapability } from "./work/capability.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -341,6 +342,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/gmailReferentCandidates", run: runWorkGmailReferentCandidates },
   { name: "work/executionPreview", run: runWorkExecutionPreview },
   { name: "work/multiTaskWork", run: runWorkMultiTaskWork },
+  { name: "work/capability", run: runWorkCapability },
 ];
 
 async function main() {
