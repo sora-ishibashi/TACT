@@ -130,8 +130,18 @@ function appendConnectionIdToCallbackUrl(callbackUrl: string, connectionId: stri
 // Phase C1のIntegrationService("slack"|"gmail")と同じcanonical
 // serviceだけをサポートする——unsupported serviceはfail closedする
 // (絶対条件、TRUST BOUNDARY「fail closed for unsupported service」)。
+//
+// TIME-P1c: "google_calendar"を追加。このfile自体はservice単位の
+// 汎用OAuth Connect/Disconnect/Refresh経路(既存Slack/Gmail/Notionと
+// 同じ形)を提供するだけで、「READ専用に制限する」判断はここでは
+// 行わない——それはcore/tact-integration/policy.tsのPOLICY_ALLOWLIST
+// (google_calendar.availability_readのみ登録、write系operationは
+// 一切登録しない)とproviders/composio/adapter.tsのdispatch分岐が
+// 構造的に担保する(絶対条件: 「Calendarへの接続」自体は他serviceと
+// 同じ汎用catalogエントリでよいが、「接続後に何を実行できるか」は
+// 常にPolicy/Adapter層の狭いallowlistで縛る)。
 function isSupportedIntegrationService(service: string): service is IntegrationService {
-  return service === "slack" || service === "gmail" || service === "notion";
+  return service === "slack" || service === "gmail" || service === "notion" || service === "google_calendar";
 }
 
 export type CreateIntegrationConnectionLinkOutcome =

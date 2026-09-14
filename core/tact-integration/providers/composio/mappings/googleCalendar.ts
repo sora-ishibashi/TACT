@@ -356,6 +356,16 @@ export function mapComposioErrorToCalendarAvailabilityErrorCode(error: unknown):
     case "provider_execution_failed":
     case "temporary_failure":
       return { code: "provider_failure", message: normalized.message };
+    case "malformed_response":
+      // Defensive only: normalizeComposioError() (adapter.ts) only ever
+      // returns this code by narrowing a THROWN Composio SDK error, and the
+      // SDK never throws for "the response shape didn't match" — that case
+      // is instead detected downstream by normalizeGoogleCalendarFindFreeSlotsOutput()
+      // (this file, below), never routed through this function. Kept only
+      // for TypeScript exhaustiveness now that IntegrationErrorCode carries
+      // this value (added in the TIME-P1c Calendar Wiring phase for the
+      // OTHER direction of this mapping, in providers/composio/adapter.ts).
+      return { code: "malformed_response", message: normalized.message };
   }
 
 }

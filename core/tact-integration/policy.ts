@@ -77,6 +77,11 @@ const POLICY_ALLOWLIST: readonly IntegrationActionPolicy[] = [
   { service: "gmail", operation: "send_message", riskClass: "write" },
   { service: "notion", operation: "search", riskClass: "read" },
   { service: "notion", operation: "read_page", riskClass: "read" },
+  // TIME-P1c: Google Calendarはavailability read専用(READ ONLY)。
+  // 絶対条件: write系operation(create/update/delete/move/invite等)は
+  // このallowlistに一切登録しない——Approvalではなく、このallowlist
+  // 自体が「未知operationは実行不能」というfail-closedな構造を担保する。
+  { service: "google_calendar", operation: "availability_read", riskClass: "read" },
 ];
 
 // service+operationの組み合わせで完全一致するpolicyだけを返す。

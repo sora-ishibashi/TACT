@@ -28,7 +28,9 @@
 // =========================
 
 // Phase C1ではSlackのみ(絶対条件: 巨大なIntegrationを一度に作らない)。
-export type IntegrationService = "slack" | "gmail" | "notion";
+// TIME-P1c: "google_calendar" を追加(READ専用の calendar.availability.read のみ、
+// Write系Actionは構造的に到達不能。core/tact-work/calendarAvailability.ts / docs参照)。
+export type IntegrationService = "slack" | "gmail" | "notion" | "google_calendar";
 
 export interface IntegrationAction {
 
@@ -176,7 +178,16 @@ export type IntegrationErrorCode =
   | "invalid_action"
   | "provider_execution_failed"
   | "temporary_failure"
-  | "authorization_denied";
+  | "authorization_denied"
+  // TIME-P1c: providerからの応答自体は届いたが、検証済みcontractの
+  // 形と一致しない場合の専用code。既存"provider_execution_failed"
+  // (呼び出し自体が失敗)とは意図的に区別する——「応答の内容を
+  // 信用してよいか分からない」ことと「呼び出しが失敗した」ことは、
+  // 呼び出し元にとって異なる意味を持つ(前者を後者へ握り潰すと、
+  // core/tact-work/calendarAvailability.tsのCalendarAvailabilityErrorCode
+  // が既に区別している"malformed_response"という情報がこの境界を
+  // 越える際に失われてしまう)。
+  | "malformed_response";
 
 export interface IntegrationExecutionError {
 

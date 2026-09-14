@@ -11,16 +11,20 @@
 -- RLS, provider, status) needs to change to represent a Calendar
 -- connection's existence.
 --
--- This file exists so the change is ready when a verified Composio Google
--- Calendar adapter actually lands (TIME-P1c Section 7 requires verifying
--- GOOGLECALENDAR_FIND_FREE_SLOTS's exact schema before implementing that
--- adapter; this phase could not verify it — see the final report's
--- COMPOSIO_SCHEMA_UNVERIFIED finding). Deliberately NOT paired with a
--- core/tact-integration/types.ts IntegrationService union change in this
--- phase: adding the type value with no adapter/provisioning/policy/mapper
--- behind it would let something claim a "google_calendar" connection that
--- nothing can actually service — that pairing is left until the adapter is
--- real (TIME-P1c Section 13: no partial production wiring).
+-- Update (TIME-P1c Calendar Wiring phase): the verified Composio
+-- GOOGLECALENDAR_FIND_FREE_SLOTS adapter/mapper
+-- (core/tact-integration/providers/composio/mappings/googleCalendar.ts,
+-- googleCalendarFindFreeSlotsContract.ts) and the read-only Connection /
+-- Policy / Provisioning / CapabilityBinding wiring for
+-- "google_calendar" now exist in code (core/tact-integration/types.ts's
+-- IntegrationService union, policy.ts's POLICY_ALLOWLIST, provisioning.ts,
+-- connectionLink.ts, providers/composio/adapter.ts,
+-- core/tact-orchestrator/capabilityPlan.ts). This migration is the one
+-- remaining step to let a real "google_calendar" row exist in
+-- tact_connections — it is still LOCAL-ONLY / NOT applied to any
+-- database (including Preview/Production) as part of this phase; see the
+-- final report's migration preflight review for the recommended
+-- deployment order.
 --
 -- The identifier is "google_calendar" (not "calendar"), matching the
 -- existing product-name convention for this column ("gmail", not "email";

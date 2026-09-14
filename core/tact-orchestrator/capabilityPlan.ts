@@ -70,7 +70,11 @@ export type CanonicalCapabilityRequirement =
   | "organizational_context.read"
   | "communication.read"
   | "communication.write"
-  | "research.perform";
+  | "research.perform"
+  // TIME-P1c: core/tact-work/types.tsのCanonicalTaskCapabilityへ同時に
+  // 追加済みの値をこちらにも独立して再宣言する(このfile冒頭のコメント
+  // と同じ既存パターン)。
+  | "calendar.availability.read";
 
 export interface CapabilityPlan {
 
@@ -149,6 +153,21 @@ const CAPABILITY_BINDING_TABLE: readonly CapabilityBindingEntry[] = [
     capability: "organizational_context.read",
     binding: "integration.notion.read_page",
     intents: ["integration_notion_read_page"],
+  },
+
+  // TIME-P1c Calendar Wiring: Gmail send(REF-P1f)と全く同じ
+  // intents: []パターン。classifyIntent()/TactIntentの8値closed union
+  // には触れない(自然文からこのbindingへ直接遷移する経路は、この
+  // phaseでは意図的に作らない)——core/tact-conversation配下の
+  // 専用bridge関数が、既に解決済みの temporal range 等を渡して直接
+  // resolveCapabilityForBinding("integration.google_calendar.availability_read")
+  // を経由するのみ。未知のcapability("calendar.availability.read"
+  // 以外)がこのbindingへ到達することは無い(fail closed、
+  // isBindingCompatibleWithCapability()参照)。
+  {
+    capability: "calendar.availability.read",
+    binding: "integration.google_calendar.availability_read",
+    intents: [],
   },
 
 ];

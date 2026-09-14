@@ -148,6 +148,18 @@ export async function getSlackConnectionStatus(
 // Gmailは新規にCOMPOSIO_GMAIL_AUTH_CONFIG_IDを追加する(値は.envへ
 // 書き込まない——LIVE instructionsとしてユーザーへVercel環境変数の
 // 設定を依頼するだけ)。
+//
+// TIME-P1c: google_calendarはCOMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID。
+// 絶対条件(Section18 OAuth/Scope audit): このfileはComposio Auth
+// Config自体がどのGoogle OAuth scopeを要求するかを一切知らない・
+// 決定しない(scope名を推測してここへ書かない)——Auth Config ID
+// という不透明な参照を解決するだけで、scopeはComposio dashboard側の
+// 設定(TACT外部)がsource of truth。実際に読める範囲を最終的に決めて
+// いるのはこのAuth Configが持つscopeではなく、TACT側のPolicy
+// (google_calendar.availability_readのみallowlist登録)と
+// Adapter(availability read以外のoperationをdispatchしない)という
+// runtime boundaryである(credentialが理論上より広い権限を持ち得た
+// としても、TACTが実際に呼び出せる経路はREADのみに限定される)。
 function getComposioAuthConfigId(service: IntegrationService): string | undefined {
 
   switch (service) {
@@ -157,6 +169,8 @@ function getComposioAuthConfigId(service: IntegrationService): string | undefine
       return process.env.COMPOSIO_GMAIL_AUTH_CONFIG_ID;
     case "notion":
       return process.env.COMPOSIO_NOTION_AUTH_CONFIG_ID;
+    case "google_calendar":
+      return process.env.COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID;
   }
 
 }

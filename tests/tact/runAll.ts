@@ -90,6 +90,7 @@ import { run as runContextResolution } from "./context/contextResolution.test";
 import { run as runTactConversationClarificationAnswer } from "./conversation/tactConversationClarificationAnswer.test";
 import { run as runTactConversationResearchCapability } from "./conversation/tactConversationResearchCapability.test";
 import { run as runConnectionResolutionActiveOnly } from "./conversation/connectionResolutionActiveOnly.test";
+import { run as runCalendarAvailabilityExecution } from "./conversation/calendarAvailabilityExecution.test";
 import { run as runTaskResumeExecution } from "./conversation/taskResumeExecution.test";
 import { run as runGmailReferentWorkflow } from "./conversation/gmailReferentWorkflow.test";
 import { run as runTactArtifactMutation } from "./artifact/tactArtifactMutation.test";
@@ -164,6 +165,7 @@ import { run as runIntegrationConnectionSchema } from "./integration/connectionS
 import { run as runIntegrationGmail } from "./integration/gmail.test";
 import { run as runIntegrationNotion } from "./integration/notion.test";
 import { run as runIntegrationGoogleCalendarAvailability } from "./integration/googleCalendarAvailability.test";
+import { run as runIntegrationGoogleCalendarWiring } from "./integration/googleCalendarWiring.test";
 import { run as runIntegrationConnectionProvisioning } from "./integration/connectionProvisioning.test";
 import { run as runIntegrationConnectionsApi } from "./integration/connectionsApi.test";
 import { run as runIntegrationConnectionLifecycle } from "./integration/connectionLifecycle.test";
@@ -260,6 +262,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "conversation/tactConversationClarificationAnswer", run: runTactConversationClarificationAnswer },
   { name: "conversation/tactConversationResearchCapability", run: runTactConversationResearchCapability },
   { name: "conversation/connectionResolutionActiveOnly", run: runConnectionResolutionActiveOnly },
+  { name: "conversation/calendarAvailabilityExecution", run: runCalendarAvailabilityExecution },
   { name: "artifact/tactArtifactMutation", run: runTactArtifactMutation },
   { name: "artifact/tactArtifactBlocks", run: runTactArtifactBlocks },
   { name: "artifact/tactArtifactPhase77", run: runTactArtifactPhase77 },
@@ -332,6 +335,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "integration/gmail", run: runIntegrationGmail },
   { name: "integration/notion", run: runIntegrationNotion },
   { name: "integration/googleCalendarAvailability", run: runIntegrationGoogleCalendarAvailability },
+  { name: "integration/googleCalendarWiring", run: runIntegrationGoogleCalendarWiring },
   { name: "integration/connectionProvisioning", run: runIntegrationConnectionProvisioning },
   { name: "integration/connectionsApi", run: runIntegrationConnectionsApi },
   { name: "integration/connectionLifecycle", run: runIntegrationConnectionLifecycle },

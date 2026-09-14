@@ -23,10 +23,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   const migration = readRepoFile(MIGRATION_PATH);
   const originalSchema = readRepoFile("supabase/migrations/20260907000000_create_tact_connections.sql");
   const canonicalTypes = readRepoFile("core/tact-integration/types.ts");
+  const calendarMigration = readRepoFile("supabase/migrations/20261011000000_allow_google_calendar_tact_connections.sql");
   const allowedServices = extractAllowedServices(migration);
+  const allowedServicesAfterCalendarMigration = extractAllowedServices(calendarMigration);
   const gmail: IntegrationService = "gmail";
   const slack: IntegrationService = "slack";
   const notion: IntegrationService = "notion";
+  const googleCalendar: IntegrationService = "google_calendar";
 
   results.push(check(
     "[Connection schema] prior tact_connections constraint allowed exactly slack",
@@ -54,7 +57,29 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       gmail === "gmail" &&
       slack === "slack" &&
       notion === "notion" &&
-      /export type IntegrationService = "slack" \| "gmail" \| "notion";/.test(canonicalTypes)
+      /export type IntegrationService = "slack" \| "gmail" \| "notion" \| "google_calendar";/.test(canonicalTypes)
+  ));
+
+  // TIME-P1c Calendar Wiring: the LOCAL-ONLY, unapplied
+  // 20261011000000_allow_google_calendar_tact_connections.sql migration is
+  // the one that actually extends the DB allowlist to "google_calendar" —
+  // this repeats the exact same source-of-truth alignment check the block
+  // above does for slack/gmail/notion against the 20260917 migration, so a
+  // future TypeScript-only edit to IntegrationService (without a matching
+  // migration update) fails here rather than silently drifting.
+  results.push(check(
+    "[Connection schema] TypeScript IntegrationService includes google_calendar, matching the prepared (unapplied) migration",
+      googleCalendar === "google_calendar" &&
+      allowedServicesAfterCalendarMigration.length === 4 &&
+      allowedServicesAfterCalendarMigration.includes("slack") &&
+      allowedServicesAfterCalendarMigration.includes("gmail") &&
+      allowedServicesAfterCalendarMigration.includes("notion") &&
+      allowedServicesAfterCalendarMigration.includes("google_calendar")
+  ));
+
+  results.push(check(
+    "[Connection schema] the google_calendar migration is still NOT applied to any database — it exists only as a LOCAL-ONLY prepared file (documented in its own header, not enforced by tooling)",
+    /LOCAL-ONLY/i.test(calendarMigration) && /NOT applied/i.test(calendarMigration)
   ));
 
   results.push(check(

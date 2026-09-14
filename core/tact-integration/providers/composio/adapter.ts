@@ -14,6 +14,8 @@ import {
   toComposioUserId,
 } from "./client";
 import { mapSlackActionToComposioTool, mapComposioListChannelsResultToCanonical } from "./mappings/slack";
+import { createComposioGoogleCalendarAvailabilityProvider } from "./googleCalendarAvailabilityProvider";
+import type { CalendarAvailabilityErrorCode } from "../../../tact-work/calendarAvailability";
 import {
   mapComposioGmailSearchResultToCanonical,
   mapComposioGmailSendResultToCanonical,
@@ -511,6 +513,67 @@ export function buildExecutionResultFromToolResult(
 
 }
 
+// TIME-P1c: CalendarAvailabilityErrorCode(core/tact-work/calendarAvailability.ts、
+// 4値のREAD専用taxonomy)を、generic Integration層のIntegrationErrorCode
+// (core/tact-integration/types.ts)へ narrowing する唯一の場所。
+// "malformed_response"は握り潰さず同名のIntegrationErrorCodeへそのまま
+// 対応させる(types.ts側にこのphaseで追加済み)——provider呼び出しが
+// 失敗したこと(provider_execution_failed)と、応答は届いたが検証済み
+// contractの形と一致しなかったこと(malformed_response)を、この境界を
+// 越えた後も呼び出し元が区別できるようにするため。
+export function mapCalendarAvailabilityErrorToIntegrationError(error: {
+  readonly code: CalendarAvailabilityErrorCode;
+  readonly message: string;
+}): IntegrationExecutionError {
+
+  switch (error.code) {
+    case "connection_missing":
+      return { code: "connection_missing", message: error.message, retryable: false };
+    case "permission_denied":
+      return { code: "authorization_denied", message: error.message, retryable: false };
+    case "provider_failure":
+      return { code: "provider_execution_failed", message: error.message, retryable: false };
+    case "malformed_response":
+      return { code: "malformed_response", message: error.message, retryable: false };
+  }
+
+}
+
+// TIME-P1c: google_calendar.availability_readの入力検証だけを切り出した
+// 純粋関数(実Composio client構築を必要としない)。executeComposio()の
+// dispatch本体はこれを呼ぶだけにとどめ、「operationが正しいか」
+// 「rangeStartUtc/rangeEndUtc/timezoneが揃っているか」というロジック
+// 自体を、実Composio呼び出し無しに直接unit testできるようにする
+// (buildExecutionResultFromToolResult()と同じ既存パターン)。
+export type GoogleCalendarAvailabilityReadInputValidation =
+  | { readonly ok: true; readonly rangeStartUtc: string; readonly rangeEndUtc: string; readonly timezone: string }
+  | { readonly ok: false; readonly message: string };
+
+export function validateGoogleCalendarAvailabilityReadRequest(
+  action: IntegrationExecutionRequest["action"]
+): GoogleCalendarAvailabilityReadInputValidation {
+
+  if (action.operation !== "availability_read") {
+    return {
+      ok: false,
+      message: `Composio Google Calendar Adapterはoperation="availability_read"のみ対応しています(渡された値: "${action.operation}")`,
+    };
+  }
+
+  const { rangeStartUtc, rangeEndUtc, timezone } = action.input;
+
+  if (
+    typeof rangeStartUtc !== "string" ||
+    typeof rangeEndUtc !== "string" ||
+    typeof timezone !== "string"
+  ) {
+    return { ok: false, message: "availability_readにはrangeStartUtc/rangeEndUtc/timezone(すべてstring)が必要です。" };
+  }
+
+  return { ok: true, rangeStartUtc, rangeEndUtc, timezone };
+
+}
+
 async function executeComposio(
   request: IntegrationExecutionRequest
 ): Promise<IntegrationExecutionResult> {
@@ -533,7 +596,8 @@ async function executeComposio(
   if (
     request.action.service !== "slack" &&
     request.action.service !== "gmail" &&
-    request.action.service !== "notion"
+    request.action.service !== "notion" &&
+    request.action.service !== "google_calendar"
   ) {
 
     return {
@@ -544,6 +608,48 @@ async function executeComposio(
         retryable: false,
       },
     };
+
+  }
+
+  // TIME-P1c: google_calendarはavailability_read以外のoperationを一切
+  // 受け付けない、専用dispatch(絶対条件、hard read-only boundary)。
+  // 下のtoolkitVersion三項演算子・Slack/Gmail/Notion共有pathには
+  // 一切合流させない——google_calendarのtoolkit versionは
+  // createComposioGoogleCalendarAvailabilityProvider()内部
+  // (getGoogleCalendarToolkitVersion())が既に独立して解決する。
+  // ここで宣言されているoperation以外(create/update/delete/move/
+  // invite/rsvp/generic execute等)は、そもそもこのif文に到達する
+  // 経路自体が存在しない——「Approvalが無いからwriteを止めている」の
+  // ではなく、「その分岐が存在しない」という構造的な保証。
+  if (request.action.service === "google_calendar") {
+
+    const inputValidation = validateGoogleCalendarAvailabilityReadRequest(request.action);
+
+    if (!inputValidation.ok) {
+      return {
+        status: "failed",
+        error: { code: "invalid_action", message: inputValidation.message, retryable: false },
+      };
+    }
+
+    const { rangeStartUtc, rangeEndUtc, timezone } = inputValidation;
+
+    const calendarProvider = createComposioGoogleCalendarAvailabilityProvider({
+      client,
+      tactUserId: request.userId,
+      connectedAccountId: request.providerConnectionRef,
+    });
+
+    const availabilityResult = await calendarProvider.getAvailability({ rangeStartUtc, rangeEndUtc, timezone });
+
+    if (!availabilityResult.success) {
+      return {
+        status: "failed",
+        error: mapCalendarAvailabilityErrorToIntegrationError(availabilityResult.error),
+      };
+    }
+
+    return { status: "completed", output: availabilityResult.result };
 
   }
 
