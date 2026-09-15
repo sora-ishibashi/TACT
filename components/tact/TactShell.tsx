@@ -48,11 +48,12 @@ import ResearchWorkspace from "@/components/research/ResearchWorkspace";
 import CoreSection from "./CoreSection";
 import CodeSection from "./CodeSection";
 import SettingsSection from "./SettingsSection";
+import HomeSection from "./preview/HomeSection";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 export default function TactShell() {
 
-  const [section, setSection] = useState<TactSection>("research");
+  const [section, setSection] = useState<TactSection>("home");
 
   const { user, signOut } = useAuth();
 
@@ -146,6 +147,7 @@ export default function TactShell() {
             onSelectSection={setSection}
           />
         )}
+        {section === "home" && <HomeSection />}
         {section === "core" && <CoreSection />}
         {section === "code" && <CodeSection />}
         {section === "settings" && <SettingsSection />}
