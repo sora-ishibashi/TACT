@@ -121,6 +121,7 @@ type ConversationMessageView = {
 type Props = {
   activeSection: TactSection;
   onSelectSection: (section: TactSection) => void;
+  hideProductLauncher?: boolean;
 };
 
 function subscribeToArtifactPreview() {
@@ -758,6 +759,7 @@ function ArtifactBlockView({
 export default function ResearchWorkspace({
   activeSection,
   onSelectSection,
+  hideProductLauncher = false,
 }: Props) {
 
   const { user, getAccessToken, signOut } = useAuth();
@@ -1563,9 +1565,11 @@ export default function ResearchWorkspace({
         }`}
       >
 
-        <div className="border-b border-[#D9D9D9] px-3 py-0.5">
-          <ProductLauncher active={activeSection} onSelect={onSelectSection} />
-        </div>
+        {!hideProductLauncher && (
+          <div className="border-b border-[#D9D9D9] px-3 py-0.5">
+            <ProductLauncher active={activeSection} onSelect={onSelectSection} />
+          </div>
+        )}
 
         <div className="border-b border-[#D9D9D9] px-3 py-1">
 

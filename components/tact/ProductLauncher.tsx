@@ -38,7 +38,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
-export type TactSection = "research" | "core" | "code" | "settings";
+export type TactSection = "home" | "research" | "core" | "code" | "settings";
 
 type NavItem = {
   id: TactSection | string;
