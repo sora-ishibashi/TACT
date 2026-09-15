@@ -38,7 +38,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
-export type TactSection = "research" | "core" | "code" | "settings";
+export type TactSection = "home" | "research" | "core" | "code" | "settings";
 
 type NavItem = {
   id: TactSection | string;
@@ -50,6 +50,7 @@ const TACT_ICON_SRC = "/brand/tact-icon.svg";
 const TACT_WORDMARK_SRC = "/brand/tact-logo.svg";
 
 const NAV_ITEMS: NavItem[] = [
+  { id: "home", label: "Home", enabled: true },
   { id: "research", label: "Research", enabled: true },
   { id: "core", label: "Core", enabled: true },
   { id: "code", label: "Code", enabled: true },
