@@ -6,8 +6,14 @@ import WorkCard from "./WorkCard";
 import WorkDetailPreview from "./WorkDetailPreview";
 import { findMockWork, mockWorks } from "./mockWorks";
 
-export default function HomeSection() {
-  const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
+type HomeMode = "home" | "works" | "approvals" | "connections" | "research" | "core" | "code" | "settings";
+
+function selectedWorkForMode(mode: HomeMode) {
+  return mode === "approvals" ? mockWorks.find((work) => work.approval)?.id ?? null : null;
+}
+
+export default function HomeSection({ mode = "home" }: { mode?: HomeMode }) {
+  const [selectedWorkId, setSelectedWorkId] = useState<string | null>(() => selectedWorkForMode(mode));
   const selectedWork = selectedWorkId ? findMockWork(selectedWorkId) : undefined;
 
   if (selectedWork) {

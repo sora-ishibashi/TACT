@@ -43,17 +43,30 @@
 
 import { useEffect, useState } from "react";
 
-import ProductLauncher, { TactSection } from "./ProductLauncher";
+import ProductLauncher, { type TactSection } from "./ProductLauncher";
 import ResearchWorkspace from "@/components/research/ResearchWorkspace";
 import CoreSection from "./CoreSection";
 import CodeSection from "./CodeSection";
 import SettingsSection from "./SettingsSection";
 import HomeSection from "./preview/HomeSection";
+import TactSidebar, { type TactNavigationItemId } from "./navigation/TactSidebar";
 import { useAuth } from "@/components/auth/AuthProvider";
+
+const sectionForNavigationItem: Record<TactNavigationItemId, TactSection> = {
+  home: "home",
+  works: "home",
+  approvals: "home",
+  connections: "settings",
+  research: "research",
+  core: "core",
+  code: "code",
+  settings: "settings",
+};
 
 export default function TactShell() {
 
   const [section, setSection] = useState<TactSection>("home");
+  const [activeNavigationItem, setActiveNavigationItem] = useState<TactNavigationItemId>("home");
 
   const { user, signOut } = useAuth();
 
@@ -77,6 +90,7 @@ export default function TactShell() {
 
       if (params.get("section") === "settings") {
         setSection("settings");
+        setActiveNavigationItem("settings");
       }
 
     }
@@ -85,14 +99,24 @@ export default function TactShell() {
 
   }, []);
 
+  const selectNavigationItem = (item: TactNavigationItemId) => {
+    setActiveNavigationItem(item);
+    setSection(sectionForNavigationItem[item]);
+  };
+
   return (
 
-    <div className="flex h-screen w-full bg-white">
+    <div className="flex h-screen min-w-0 w-full bg-white">
+
+      <TactSidebar
+        activeItem={activeNavigationItem}
+        onSelect={selectNavigationItem}
+        userEmail={user?.email}
+        onSignOut={signOut}
+      />
 
       {/* 左: コンパクトなサイドバー(TACTブランド+プロダクト切替+アカウント) */}
-      <aside className={`flex h-full w-44 shrink-0 flex-col justify-between border-r border-[#D9D9D9] bg-white px-2 py-3 ${
-        section === "research" ? "hidden" : ""
-      }`}>
+      <aside className="hidden">
 
         <ProductLauncher active={section} onSelect={setSection} />
 
@@ -145,9 +169,10 @@ export default function TactShell() {
           <ResearchWorkspace
             activeSection={section}
             onSelectSection={setSection}
+            hideProductLauncher
           />
         )}
-        {section === "home" && <HomeSection />}
+        {section === "home" && <HomeSection key={activeNavigationItem} mode={activeNavigationItem} />}
         {section === "core" && <CoreSection />}
         {section === "code" && <CodeSection />}
         {section === "settings" && <SettingsSection />}
