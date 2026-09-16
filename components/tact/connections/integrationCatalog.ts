@@ -20,8 +20,17 @@
 // (core/tact-integration/types.ts)がserver側で既にサポートされて
 // いることを確認してからentryを追加すること(このcatalogはUI表示
 // 専用であり、server側のサポート状況を保証するものではない)。
+//
+// TIME-P1c Calendar Connections UI: "google_calendar"を追加。server側
+// (IntegrationService/Policy/Provisioning/Adapter/CapabilityBinding)は
+// 既に完成済み(TIME-P1c Calendar Wiring)——このfileはUI表示専用の
+// 追加であり、server側の能力を一切変更しない。絶対条件(最重要):
+// Google Calendarは読み取り専用(空き時間の確認のみ)であり、
+// 予定の作成・変更・削除・招待のいずれも実行できない。この事実が
+// description文だけで確実に伝わるようにする(UI上に書き込み系の
+// 操作を想起させるボタン・アイコン・文言を一切追加しない)。
 
-export type CanonicalIntegrationService = "gmail" | "slack" | "notion";
+export type CanonicalIntegrationService = "gmail" | "slack" | "notion" | "google_calendar";
 
 export interface IntegrationCatalogEntry {
 
@@ -58,6 +67,12 @@ export const INTEGRATION_CATALOG: readonly IntegrationCatalogEntry[] = [
     service: "notion",
     name: "Notion",
     description: "社内情報やドキュメントの参照に使用",
+    enabled: true,
+  },
+  {
+    service: "google_calendar",
+    name: "Google Calendar",
+    description: "カレンダーの空き時間確認に使用(予定の作成・変更は行いません)",
     enabled: true,
   },
 ];
