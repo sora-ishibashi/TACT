@@ -27,6 +27,7 @@ import {
   runIntegrationGmailSearchMessagesCapability,
   runIntegrationNotionSearchCapability,
   runIntegrationNotionReadPageCapability,
+  runIntegrationGoogleCalendarAvailabilityReadCapability,
 } from "./tact-integration";
 
 let bootstrapped = false;
@@ -64,6 +65,12 @@ export function bootstrapTactCapabilities(): void {
 
   registerCapability("integration.notion.search", runIntegrationNotionSearchCapability);
   registerCapability("integration.notion.read_page", runIntegrationNotionReadPageCapability);
+
+  // TIME-P1c Final Wiring: safety-net placeholder registration only(実際の
+  // production dispatchはcore/tact-conversation/orchestration.tsの
+  // runCalendarAvailabilityBridge()を経由する、capability.ts内の
+  // 関数コメント参照)。
+  registerCapability("integration.google_calendar.availability_read", runIntegrationGoogleCalendarAvailabilityReadCapability);
 
   bootstrapped = true;
 

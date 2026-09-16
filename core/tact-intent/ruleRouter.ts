@@ -149,6 +149,51 @@ export function extractSlackSendIntent(input: string): SlackSendExtractionResult
 
 }
 
+// =========================
+// calendar_availability検出 (TIME-P1c Final Wiring)
+// =========================
+//
+// 目的: 「空いている時間を探して」「Google Calendarを確認して候補を
+// 出して」のような、接続済みCalendarの空き時間確認を求める入力から、
+// 狭いcalendar_availability intentを検出する。write系の依頼
+// (「予定を作って/入れて」「予定を削除して」「会議を登録して」)は
+// 対象外とする(絶対条件: 書き込みは一切表さない)。
+//
+// 2つの独立したpattern(Accuracy > Coverage、既存のSlack/Gmail/Notion
+// 検出と同じ設計哲学):
+//   1. 「空いている時間/空き時間」+ 検索を表す動詞語幹+依頼の活用形。
+//      カレンダーという語を含まなくても、空き時間確認という意図自体が
+//      十分に明確なため(Section10の「明日30分空いてるところ探して」も
+//      対象に含める)。
+//   2. 「カレンダー/calendar」+「候補」+ 検索を表す動詞語幹+依頼の
+//      活用形。候補という語が無いカレンダー関連の依頼
+//      (「カレンダーの使い方を教えて」「Google Calendarって何?」)を
+//      誤って一致させないよう、候補という語を必須にする。
+//
+// どちらのpatternも、動詞語幹の直後([^。]{0,10〜15}の範囲内)に
+// 検索を表す活用形が続くことを要求する(Phase82-C/Phase86と同じ
+// 「節スコープに近い限定」の考え方)。
+const CALENDAR_AVAILABILITY_FREE_TIME_PATTERN =
+  /(?:空いて(?:い)?る?(?:時間|とき|ところ)|空き時間)[^。]{0,15}?(?:探し|見つけ|出し|教え)(?:て|てください|てほしい|てもらえる)/;
+
+const CALENDAR_AVAILABILITY_CANDIDATE_PATTERN =
+  /(?:カレンダー|calendar)[^。]{0,20}?候補[^。]{0,10}?(?:出し|探し|教え)(?:て|てください|てほしい|てもらえる)/i;
+
+// Phase88相当: 他所(temporalRequirements.tsのderiveTemporalRequirementPolicy())
+// でも同じ「calendar availability shaped input」の判定が必要になるが、
+// tact-workはdependency-free leaf moduleとしての既存設計方針(temporalRequirements.ts
+// 冒頭コメント参照)を保つため、このロジックをimportさせず、同じ趣旨の
+// pattern判定を各層で独立に持つ(既存のRESEARCH_PATTERN vs
+// isSchedulingCandidateIntent()の関係と同じ、意図的な重複)。
+export function looksLikeCalendarAvailabilityRequest(trimmed: string): boolean {
+
+  return (
+    CALENDAR_AVAILABILITY_FREE_TIME_PATTERN.test(trimmed) ||
+    CALENDAR_AVAILABILITY_CANDIDATE_PATTERN.test(trimmed)
+  );
+
+}
+
 // 「調べ/調査/リサーチ」+ 依頼を表す活用形の組み合わせ。
 // 「調べるって」のような辞書形+「って」には一致しない
 // (「調べ」の直後が「て」ではなく「る」のため)。
@@ -508,6 +553,17 @@ export function classifyIntent(input: string, previousInput?: string): IntentDec
     return {
       intent: "integration_notion_search",
       reason: "matched Notion search pattern",
+    };
+
+  }
+
+  // TIME-P1c Final Wiring: Slack/Gmail/Notionと同じ優先順位(明確な
+  // read intentは、コストを伴うresearchより先に判定する)。
+  if (looksLikeCalendarAvailabilityRequest(trimmed)) {
+
+    return {
+      intent: "calendar_availability",
+      reason: "matched calendar availability pattern (空いている時間/空き時間、またはカレンダー+候補 + 探し/出し/教え等)",
     };
 
   }

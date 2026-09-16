@@ -42,10 +42,19 @@ export interface TemporalRequirement {
   readonly candidateCount?: number;
 }
 
-export type TemporalRequiredField = "duration" | "delay" | "date" | "specific_time" | "deadline";
+// TIME-P1c Final Wiring: "timezone"/"daily_window"を追加する。既存の
+// "calendar_availability" policy(下記)専用の必須fieldであり、他の
+// policy kindはこの2値を要求しない。
+export type TemporalRequiredField = "duration" | "delay" | "date" | "specific_time" | "deadline" | "timezone" | "daily_window";
 
 export interface TemporalRequirementPolicy {
-  readonly kind: "meeting_candidates" | "specific_calendar_action" | "deadline_work" | "retry_request" | "none";
+  // TIME-P1c Final Wiring: "calendar_availability"を追加する。既存の
+  // "meeting_candidates"(会議の日程候補、Task/Run実行までは配線されて
+  // いない)とは意図的に区別する——"calendar_availability"は接続済み
+  // Google Calendarの実際の空き時間確認(read)を表し、timezone/
+  // dailyWindowという追加の必須fieldを持つ(Section7/8絶対条件:
+  // タイムゾーン・検索時間帯を推測しない)。
+  readonly kind: "meeting_candidates" | "specific_calendar_action" | "deadline_work" | "retry_request" | "calendar_availability" | "none";
   readonly required: readonly TemporalRequiredField[];
 }
 
@@ -59,6 +68,25 @@ export interface TemporalRequirementMetadata {
 const DURATION_HOURS = /(\d+)\s*(?:時間|hours?|hrs?)/i;
 const DURATION_MINUTES = /(\d+)\s*(?:分|minutes?|mins?)/i;
 const CLOCK_TIME = /\b([01]?\d|2[0-3])(?::([0-5]\d))\b|([01]?\d|2[0-3])時(?:([0-5]\d)分?)?/;
+
+// TIME-P1c Final Wiring: 明示的なIANA timezone識別子("Asia/Tokyo"形式、
+// "Continent/City")のみを抽出する。都市名単体・略称(JST等)・offset
+// (+09:00等)は対象外(Section7絶対条件: タイムゾーンを推測しない、
+// core/tact-work/timezone.tsのisKnownTimeZone()と同じ設計思想)。
+// 実際の妥当性検証(isKnownTimeZone())はcore/tact-work/temporalRange.ts
+// (resolveTemporalDateRange())が既に行う——このfileはdependency-free
+// leaf moduleの既存設計方針(このfile冒頭コメント参照)を保つため、
+// ここでは形状だけを抽出し、意味的な検証はimportしない。
+const TIMEZONE_IDENTIFIER = /\b([A-Z][A-Za-z]+\/[A-Z][A-Za-z_]+)\b/;
+
+// TIME-P1c Final Wiring: 「10:00〜18:00」「10:00-18:00」「10時から18時」
+// のような、1日のうちの検索時間帯(daily search window)を抽出する。
+// Section8絶対条件: これは「イベントの開始時刻〜終了時刻」ではなく
+// 「候補を探す時間帯」を表す——extractSpecificTime()がこの部分文字列を
+// 誤って単一の時刻として抽出しないよう、下記withoutDailyWindowExpression()
+// で先に取り除く。
+const TIME_TOKEN_SOURCE = "(?:([01]?\\d|2[0-3]):([0-5]\\d)|([01]?\\d|2[0-3])時(?:([0-5]\\d)分?)?)";
+const DAILY_WINDOW_RANGE = new RegExp(`${TIME_TOKEN_SOURCE}\\s*(?:〜|～|-|–|から)\\s*${TIME_TOKEN_SOURCE}`);
 const DATE_RANGE = /(\d{1,2})\s*\/\s*(\d{1,2})\s*(?:〜|～|-|–|to)\s*(\d{1,2})(?:\s*\/\s*(\d{1,2}))?/i;
 // TIME-P1c FIX (explicit-year date bug, root cause part 1 of 2): the year
 // separator class previously only recognized "-", "/", "." (e.g.
@@ -95,7 +123,13 @@ const DATE = /(?:\b(20\d{2})[-/.年])?(\d{1,2})[-/.月](\d{1,2})(?:日)?/;
 // match anchors on "候補を2つ", never on the unrelated "3つ" — without
 // reintroducing broad generic numeric extraction (a bare "Nつ" with no
 // preceding 候補-family word anywhere still never matches at all).
-const CANDIDATE_COUNT_JA = /候補(?:日)?(?:を|の)?\s*(\d+)\s*(?:つ|件|個)/;
+// TIME-P1c Final Wiring: 既存の「候補」family(候補/候補日/日程候補/
+// 打ち合わせ候補)に加え、「空いている時間/空き時間」directly attached
+// countも対象に含める(Section9: 「30分空いている時間を3つ探して」の
+// ような、候補という語を含まない空き時間確認依頼でも件数を正しく
+// 抽出できるようにするため)。既存の「直接構文的に接続している場合
+// のみ」という設計方針はそのまま維持する。
+const CANDIDATE_COUNT_JA = /(?:候補(?:日)?|空いている時間|空き時間)(?:を|の)?\s*(\d+)\s*(?:つ|件|個)/;
 // English "candidate slots/options", supporting the count on either side
 // (e.g. "3 candidate slots" / "candidate slots: 3") — kept intentionally
 // simple per instruction not to overbuild NLP; not exercised by any
@@ -203,6 +237,56 @@ function extractSpecificTime(input: string): string | undefined {
   return hour ? `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}` : undefined;
 }
 
+// TIME-P1c Final Wiring: Section8絶対条件により、抽出したdaily window
+// の部分文字列はextractSpecificTime()から隠す(「10:00〜18:00の間」を
+// イベント開始時刻10:00と誤解釈しない)。
+function withoutDailyWindowExpression(input: string): string {
+  return input.replace(DAILY_WINDOW_RANGE, " ");
+}
+
+function minuteOfDayFromTimeToken(
+  colonHour: string | undefined,
+  colonMinute: string | undefined,
+  kanjiHour: string | undefined,
+  kanjiMinute: string | undefined
+): number | undefined {
+  const hour = colonHour ?? kanjiHour;
+  if (hour === undefined) return undefined;
+  const minute = colonMinute ?? kanjiMinute ?? "0";
+  return Number(hour) * 60 + Number(minute);
+}
+
+// TIME-P1c Final Wiring: fail closed(絶対条件、Section8: 「Do not
+// overbuild」)。終了が開始以下の場合(例: 入力の誤り)は、overnight
+// windowとして無理に解釈せず抽出しない——core/tact-work/candidateSchedule.ts
+// のextractDailyWindowAnswer()(Clarification回答専用)とは異なる、
+// このfile自身の独立した最小実装(dependency-free leaf moduleの既存
+// 設計方針、このfile冒頭コメント参照)。
+function extractDailyWindow(input: string): TemporalDailyWindow | undefined {
+
+  const match = input.match(DAILY_WINDOW_RANGE);
+
+  if (!match) return undefined;
+
+  const startMinuteOfDay = minuteOfDayFromTimeToken(match[1], match[2], match[3], match[4]);
+  const endMinuteOfDay = minuteOfDayFromTimeToken(match[5], match[6], match[7], match[8]);
+
+  if (startMinuteOfDay === undefined || endMinuteOfDay === undefined || endMinuteOfDay <= startMinuteOfDay) {
+    return undefined;
+  }
+
+  return { startMinuteOfDay, endMinuteOfDay };
+
+}
+
+// TIME-P1c Final Wiring: 形状だけの抽出(IANA識別子らしい文字列)。
+// 実際に既知のtimezoneかどうかの検証はcore/tact-work/temporalRange.ts
+// (resolveTemporalDateRange())が既に行う(timezone_unrecognizedとして
+// fail closed)——このfileでは重複した検証ロジックを持たない。
+function extractTimezone(input: string): string | undefined {
+  return input.match(TIMEZONE_IDENTIFIER)?.[1];
+}
+
 function isReasonableCandidateCount(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
   const count = Number(raw);
@@ -237,7 +321,12 @@ export function extractTemporalRequirement(input: string): TemporalRequirement {
   const durationMinutes = (hours ? Number(hours[1]) * 60 : 0) + (minutes ? Number(minutes[1]) : 0);
   const delayMinutes = extractDelayMinutes(input);
   const date = extractDateConstraint(input);
-  const specificTime = extractSpecificTime(input);
+  const dailyWindow = extractDailyWindow(input);
+  // TIME-P1c Final Wiring (Section8): a daily search window ("10:00〜
+  // 18:00の間") must never be misread as a single specific event time —
+  // strip the matched window text before looking for a bare clock time.
+  const specificTime = extractSpecificTime(withoutDailyWindowExpression(input));
+  const timezone = extractTimezone(input);
   const candidateCount = extractCandidateCount(input);
   const hasDeadlineLanguage = /(?:締切(?:まで)?|期限(?:まで)?|[月火水木金土日]曜(?:日)?まで|deadline|by\s+(?:friday|\d))/i.test(input);
   return {
@@ -247,6 +336,8 @@ export function extractTemporalRequirement(input: string): TemporalRequirement {
     ...(specificTime ? { specificTime } : {}),
     ...(hasDeadlineLanguage && date ? { deadline: date } : {}),
     ...(candidateCount !== undefined ? { candidateCount } : {}),
+    ...(timezone ? { timezone } : {}),
+    ...(dailyWindow ? { dailyWindow } : {}),
   };
 }
 
@@ -269,9 +360,29 @@ function isSchedulingCandidateIntent(input: string): boolean {
   );
 }
 
+// TIME-P1c Final Wiring: core/tact-intent/ruleRouter.tsの
+// looksLikeCalendarAvailabilityRequest()と同じ趣旨(空き時間確認の
+// natural language検出)を、このfile自身のdependency-free leaf module
+// 設計方針(このfile冒頭コメント参照)を保つため独立に再実装する
+// (isSchedulingCandidateIntent()と同じ、意図的な重複)。
+function isCalendarAvailabilityRequest(input: string): boolean {
+  return (
+    /(?:空いて(?:い)?る?(?:時間|とき|ところ)|空き時間)[^。]{0,15}?(?:探し|見つけ|出し|教え)(?:て|てください|てほしい|てもらえる)/.test(input) ||
+    /(?:カレンダー|calendar)[^。]{0,20}?候補[^。]{0,10}?(?:出し|探し|教え)(?:て|てください|てほしい|てもらえる)/i.test(input)
+  );
+}
+
 export function deriveTemporalRequirementPolicy(input: string): TemporalRequirementPolicy {
   if (/(?:カレンダー|予定|calendar).{0,20}(?:登録|追加|入れ|create|add)/i.test(input)) {
     return { kind: "specific_calendar_action", required: ["specific_time"] };
+  }
+  // TIME-P1c Final Wiring: specific_calendar_action(書き込み)の後、
+  // meeting_candidates(会議候補、Task/Run実行までは配線されていない
+  // 既存policy)より前に判定する。既存のmeeting_candidatesとは意図的に
+  // 別のkindとして扱う(Section7/8: timezone/dailyWindowという追加の
+  // 必須fieldを持つため)。
+  if (isCalendarAvailabilityRequest(input)) {
+    return { kind: "calendar_availability", required: ["duration", "date", "timezone", "daily_window"] };
   }
   if (isSchedulingCandidateIntent(input)) return { kind: "meeting_candidates", required: ["duration", "date"] };
   if (/(?:締切(?:まで)?|期限(?:まで)?|[月火水木金土日]曜(?:日)?まで|deadline|by\s+(?:friday|\d))/i.test(input)) {
@@ -289,6 +400,8 @@ export function findMissingTemporalRequirements(requirement: TemporalRequirement
       case "date": return requirement.date === undefined;
       case "specific_time": return requirement.specificTime === undefined;
       case "deadline": return requirement.deadline === undefined;
+      case "timezone": return requirement.timezone === undefined;
+      case "daily_window": return requirement.dailyWindow === undefined;
     }
   });
 }
@@ -300,6 +413,8 @@ export function buildTemporalClarificationQuestion(field: TemporalRequiredField)
     case "date": return "候補を探す日程の範囲を教えてください。";
     case "specific_time": return "予定する時刻を教えてください。";
     case "deadline": return "締切を教えてください。";
+    case "timezone": return "タイムゾーンを教えてください(例: Asia/Tokyo)。";
+    case "daily_window": return "何時から何時までの間で探しますか?(例: 10:00〜18:00)。";
   }
 }
 
@@ -311,9 +426,10 @@ function isTemporalRequirementPolicy(value: unknown): value is TemporalRequireme
   if (!value || typeof value !== "object") return false;
   const candidate = value as { kind?: unknown; required?: unknown };
   return (candidate.kind === "meeting_candidates" || candidate.kind === "specific_calendar_action" ||
-    candidate.kind === "deadline_work" || candidate.kind === "retry_request" || candidate.kind === "none") &&
+    candidate.kind === "deadline_work" || candidate.kind === "retry_request" ||
+    candidate.kind === "calendar_availability" || candidate.kind === "none") &&
     Array.isArray(candidate.required) &&
-    candidate.required.every((field) => field === "duration" || field === "delay" || field === "date" || field === "specific_time" || field === "deadline");
+    candidate.required.every((field) => field === "duration" || field === "delay" || field === "date" || field === "specific_time" || field === "deadline" || field === "timezone" || field === "daily_window");
 }
 
 export function readTemporalRequirementMetadata(metadata: Record<string, unknown> | null | undefined): TemporalRequirementMetadata | undefined {

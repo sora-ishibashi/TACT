@@ -20,6 +20,14 @@
 //
 // Architecture Migration Phase C2.2(Read/Write Policy): 同じ理由で
 // "integration_slack_list_channels"を追加する(read capability第1号)。
+//
+// TIME-P1c Final Wiring: "calendar_availability"を追加する。既存の
+// calendar.availability.read Capability(core/tact-orchestrator/
+// capabilityPlan.ts、TIME-P1c Calendar Wiringで既に登録済みだが
+// intents: []のまま到達不能だった)へ到達する、唯一かつ狭いnatural
+// language入口。read-onlyのCalendar空き時間確認のみを表し、
+// Calendar書き込み(登録/更新/削除)は一切表さない
+// (絶対条件: 書き込みIntentをこの値へ混在させない)。
 export type TactIntent =
   | "chat"
   | "research"
@@ -28,7 +36,8 @@ export type TactIntent =
   | "integration_slack_list_channels"
   | "integration_gmail_search_messages"
   | "integration_notion_search"
-  | "integration_notion_read_page";
+  | "integration_notion_read_page"
+  | "calendar_availability";
 
 // STEP212のDirect Push契約(type: "knowledge"|"memory"|"example")と
 // 同じ型をここでも再利用する。Intent Routerがcore_pushと判定した際、

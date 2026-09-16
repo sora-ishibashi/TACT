@@ -68,6 +68,37 @@ const cases: Case[] = [
   { phase: "Phase82-K", input: "自分の文章から具体例を5つ作って", expected: "chat" },
   { phase: "Phase82-K", input: "適当な事例を考えて", expected: "chat" },
 
+  // TIME-P1c Final Wiring: calendar_availability(空き時間確認、read
+  // only)の狭い検出。Section18の完全な本番リクエストと、Section19
+  // A/B/H(chat/write-disguised-as-readが誤ってcalendar_availabilityへ
+  // 到達しないこと)を確認する。
+  {
+    phase: "TIME-P1c-18",
+    input: "2026年9月17日、Asia/Tokyoで、10:00〜18:00の間から30分空いている時間を3つ探して。Google Calendarの予定を確認して。",
+    expected: "calendar_availability",
+  },
+  { phase: "TIME-P1c-4", input: "空いている時間を探して", expected: "calendar_availability" },
+  { phase: "TIME-P1c-4", input: "空き時間を探して", expected: "calendar_availability" },
+  { phase: "TIME-P1c-4", input: "Google Calendarを確認して候補を出して", expected: "calendar_availability" },
+  { phase: "TIME-P1c-4", input: "カレンダーを見て候補日時を探して", expected: "calendar_availability" },
+  { phase: "TIME-P1c-4", input: "明日30分空いてるところ探して", expected: "calendar_availability" },
+  // Section19-A: 定義質問はchatのまま(候補/空いている時間のいずれも
+  // 含まないため、そもそもcalendar_availabilityへは一致しない)。
+  { phase: "TIME-P1c-19A", input: "Google Calendarって何？", expected: "chat" },
+  { phase: "TIME-P1c-19A", input: "カレンダーの使い方を教えて", expected: "chat" },
+  // Section19-B/H: 書き込み依頼はcalendar_availabilityへ絶対に
+  // 到達しない(disguised writeとしてread capabilityへ誤って
+  // ルーティングされないことの確認)。
+  { phase: "TIME-P1c-19B", input: "明日の予定をGoogle Calendarに入れて", expected: "chat" },
+  { phase: "TIME-P1c-19H", input: "明日の予定を作って", expected: "chat" },
+  { phase: "TIME-P1c-19H", input: "予定を削除して", expected: "chat" },
+  // 「登録して」は既存のCORE_PUSH_PATTERN(覚え/記憶/保存/登録+依頼表現)
+  // に一致する既存(TIME-P1c以前からの)挙動——このphaseはこれを変更
+  // しない。ここで確認したいのはcalendar_availabilityへ誤って到達
+  // しないことだけ(Section19-H絶対条件、Do NOT implement Calendar
+  // write)。
+  { phase: "TIME-P1c-19H", input: "会議を登録して", expected: "core_push" },
+
 ];
 
 export async function run(): Promise<{ pass: number; fail: number }> {

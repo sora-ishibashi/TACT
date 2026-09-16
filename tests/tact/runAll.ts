@@ -91,6 +91,7 @@ import { run as runTactConversationClarificationAnswer } from "./conversation/ta
 import { run as runTactConversationResearchCapability } from "./conversation/tactConversationResearchCapability.test";
 import { run as runConnectionResolutionActiveOnly } from "./conversation/connectionResolutionActiveOnly.test";
 import { run as runCalendarAvailabilityExecution } from "./conversation/calendarAvailabilityExecution.test";
+import { run as runCalendarAvailabilityBridge } from "./conversation/calendarAvailabilityBridge.test";
 import { run as runTaskResumeExecution } from "./conversation/taskResumeExecution.test";
 import { run as runGmailReferentWorkflow } from "./conversation/gmailReferentWorkflow.test";
 import { run as runTactArtifactMutation } from "./artifact/tactArtifactMutation.test";
@@ -263,6 +264,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "conversation/tactConversationResearchCapability", run: runTactConversationResearchCapability },
   { name: "conversation/connectionResolutionActiveOnly", run: runConnectionResolutionActiveOnly },
   { name: "conversation/calendarAvailabilityExecution", run: runCalendarAvailabilityExecution },
+  { name: "conversation/calendarAvailabilityBridge", run: runCalendarAvailabilityBridge },
   { name: "artifact/tactArtifactMutation", run: runTactArtifactMutation },
   { name: "artifact/tactArtifactBlocks", run: runTactArtifactBlocks },
   { name: "artifact/tactArtifactPhase77", run: runTactArtifactPhase77 },

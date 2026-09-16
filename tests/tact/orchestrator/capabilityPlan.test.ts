@@ -188,14 +188,51 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[diagnostics] listKnownExecutionBindings()は既存の全既知execution binding(Gmail send含む)を認識している",
+        "[diagnostics] listKnownExecutionBindings()は既存の全既知execution binding(Gmail send・Calendar含む)を認識している",
         bindings.includes("research") &&
           bindings.includes("integration.gmail.search_messages") &&
           bindings.includes("integration.gmail.send_message") &&
           bindings.includes("integration.slack.send_message") &&
           bindings.includes("integration.slack.list_channels") &&
           bindings.includes("integration.notion.search") &&
-          bindings.includes("integration.notion.read_page")
+          bindings.includes("integration.notion.read_page") &&
+          bindings.includes("integration.google_calendar.availability_read")
+      )
+    );
+  }
+
+  // ---- TIME-P1c Final Wiring: calendar_availability intent →
+  // calendar.availability.read → integration.google_calendar.availability_read
+  // (Section18: "capability = calendar.availability.read"). decomposeTask()
+  // 経由でも到達できることを確認する(実際のproduction dispatchは
+  // core/tact-conversation/orchestration.tsの専用bridgeを通るが、この
+  // 表自体が単一の真実の情報源として正しいことは独立に検証する)。
+  {
+    const plan = planCapabilityForIntent("calendar_availability");
+
+    results.push(
+      check(
+        "[TIME-P1c-18] planCapabilityForIntent(\"calendar_availability\") -> calendar.availability.read / integration.google_calendar.availability_read",
+        plan?.capability === "calendar.availability.read" &&
+          plan?.binding === "integration.google_calendar.availability_read"
+      )
+    );
+
+    const tasks = decomposeTask({ input: "2026年9月17日、Asia/Tokyoで、10:00〜18:00の間から30分空いている時間を3つ探して。Google Calendarの予定を確認して。" });
+
+    results.push(
+      check(
+        "[TIME-P1c-18] decomposeTask() on the exact production request assigns canonicalCapability=calendar.availability.read / assignedCapability=integration.google_calendar.availability_read",
+        tasks.length === 1 &&
+          tasks[0].canonicalCapability === "calendar.availability.read" &&
+          tasks[0].assignedCapability === "integration.google_calendar.availability_read"
+      )
+    );
+
+    results.push(
+      check(
+        "[TIME-P1c-19H] Calendar write bindings are not registered under any intent (Do NOT implement write) — no execution binding contains \"create_event\"/\"update_event\"/\"delete_event\"",
+        !listKnownExecutionBindings().some((binding) => /create_event|update_event|delete_event/.test(binding))
       )
     );
   }

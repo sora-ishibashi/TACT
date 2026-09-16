@@ -250,5 +250,125 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     mixedUnrelatedAndScheduling.candidateCount === 2
   ));
 
+  // =========================
+  // TIME-P1c Final Wiring: Section18 exact production request regression
+  // =========================
+  //
+  // 「2026年9月17日、Asia/Tokyoで、10:00〜18:00の間から30分空いている
+  // 時間を3つ探して。Google Calendarの予定を確認して。」から、
+  // timezone/dailyWindow/duration/candidateCount/dateがすべて正しく
+  // 抽出され、かつpolicyがcalendar_availabilityとしてduration/date/
+  // timezone/daily_windowの4つを要求し、この完全なrequestに対しては
+  // 何も欠けていないことを確認する。
+
+  const productionRequest =
+    "2026年9月17日、Asia/Tokyoで、10:00〜18:00の間から30分空いている時間を3つ探して。Google Calendarの予定を確認して。";
+
+  const productionRequirement = extractTemporalRequirement(productionRequest);
+  const productionPolicy = deriveTemporalRequirementPolicy(productionRequest);
+
+  results.push(check(
+    "[TIME-P1c-18] the exact production request resolves date=2026-09-17",
+    productionRequirement.date?.kind === "date" && productionRequirement.date.date === "2026-09-17"
+  ));
+  results.push(check(
+    "[TIME-P1c-18] the exact production request resolves timezone=Asia/Tokyo",
+    productionRequirement.timezone === "Asia/Tokyo"
+  ));
+  results.push(check(
+    "[TIME-P1c-18] the exact production request resolves dailyWindow=10:00-18:00 (600-1080 minutes)",
+    productionRequirement.dailyWindow?.startMinuteOfDay === 600 && productionRequirement.dailyWindow?.endMinuteOfDay === 1080
+  ));
+  results.push(check(
+    "[TIME-P1c-18] the exact production request resolves durationMinutes=30",
+    productionRequirement.durationMinutes === 30
+  ));
+  results.push(check(
+    "[TIME-P1c-18] the exact production request resolves candidateCount=3",
+    productionRequirement.candidateCount === 3
+  ));
+  results.push(check(
+    "[TIME-P1c-18] the exact production request is NOT misread as a specific event start time (10:00 must not become specificTime)",
+    productionRequirement.specificTime === undefined
+  ));
+  results.push(check(
+    "[TIME-P1c-18] the exact production request derives policy kind = calendar_availability, requiring duration/date/timezone/daily_window",
+    productionPolicy.kind === "calendar_availability" &&
+      [...productionPolicy.required].sort().join(",") === ["date", "daily_window", "duration", "timezone"].sort().join(",")
+  ));
+  results.push(check(
+    "[TIME-P1c-18] the exact production request has nothing missing (all 4 required fields already present)",
+    findMissingTemporalRequirements(productionRequirement, productionPolicy).length === 0
+  ));
+
+  // =========================
+  // TIME-P1c Final Wiring: Section19-C/D — missing timezone / missing
+  // daily window triggers clarification (via findMissingTemporalRequirements,
+  // the exact function core/tact-conversation/orchestration.ts's
+  // resolveAndRunWork() gates on before ever calling runWorkTurn()).
+  // =========================
+
+  const missingTimezoneRequest = "明日30分空いてるところ探して";
+  const missingTimezonePolicy = deriveTemporalRequirementPolicy(missingTimezoneRequest);
+  const missingTimezoneRequirement = extractTemporalRequirement(missingTimezoneRequest);
+  results.push(check(
+    "[TIME-P1c-19C] a calendar availability request missing timezone/daily_window is classified as calendar_availability",
+    missingTimezonePolicy.kind === "calendar_availability"
+  ));
+  results.push(check(
+    "[TIME-P1c-19C] missing timezone is reported first (asked before daily_window, in required-field order)",
+    findMissingTemporalRequirements(missingTimezoneRequirement, missingTimezonePolicy)[0] === "timezone"
+  ));
+  results.push(check(
+    "[TIME-P1c-19C] the timezone clarification question is coherent",
+    buildTemporalClarificationQuestion("timezone").includes("タイムゾーン")
+  ));
+
+  const missingWindowRequirement = mergeTemporalRequirements(missingTimezoneRequirement, { timezone: "Asia/Tokyo" });
+  results.push(check(
+    "[TIME-P1c-19D] once timezone is answered, daily_window is still reported as missing",
+    findMissingTemporalRequirements(missingWindowRequirement, missingTimezonePolicy).join(",") === "daily_window"
+  ));
+  results.push(check(
+    "[TIME-P1c-19D] the daily_window clarification question is coherent",
+    buildTemporalClarificationQuestion("daily_window").includes("時間帯") || buildTemporalClarificationQuestion("daily_window").includes("何時")
+  ));
+
+  const answeredWindowRequirement = mergeTemporalRequirements(missingWindowRequirement, extractTemporalRequirement("10:00〜18:00"));
+  results.push(check(
+    "[TIME-P1c-19D] answering with \"10:00〜18:00\" completes the requirement (nothing left missing)",
+    findMissingTemporalRequirements(answeredWindowRequirement, missingTimezonePolicy).length === 0
+  ));
+
+  // =========================
+  // TIME-P1c Final Wiring: Section19-B/H — a disguised write request never
+  // derives the calendar_availability policy (existing specific_calendar_action
+  // policy, unaffected by this phase, still wins).
+  // =========================
+
+  results.push(check(
+    "[TIME-P1c-19B] \"明日の予定をGoogle Calendarに入れて\" (write, disguised as calendar+time language) is NOT calendar_availability",
+    deriveTemporalRequirementPolicy("明日の予定をGoogle Calendarに入れて").kind === "specific_calendar_action"
+  ));
+  results.push(check(
+    "[TIME-P1c-19H] \"会議を登録して\" (write) is NOT calendar_availability",
+    deriveTemporalRequirementPolicy("会議を登録して").kind !== "calendar_availability"
+  ));
+
+  // =========================
+  // TIME-P1c Final Wiring: timezone/daily-window round-trip through
+  // TemporalRequirementMetadata persistence (mirrors the existing
+  // "[persistence]" check above for the new fields).
+  // =========================
+
+  const calendarMetadata = toTemporalRequirementMetadata(productionRequirement, productionPolicy);
+  const restoredCalendar = readTemporalRequirementMetadata({ temporalRequirement: calendarMetadata });
+  results.push(check(
+    "[TIME-P1c-persistence] calendar_availability policy + timezone/dailyWindow round-trip through Work metadata",
+    restoredCalendar?.policy.kind === "calendar_availability" &&
+      restoredCalendar.requirement.timezone === "Asia/Tokyo" &&
+      restoredCalendar.requirement.dailyWindow?.startMinuteOfDay === 600
+  ));
+
   return summarize("work/temporalRequirements", results);
 }

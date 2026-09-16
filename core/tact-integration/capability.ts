@@ -494,3 +494,39 @@ export async function runIntegrationSlackListChannelsCapability(): Promise<Capab
   };
 
 }
+
+// =========================
+// runIntegrationGoogleCalendarAvailabilityReadCapability
+// (TIME-P1c Final Wiring)
+// =========================
+//
+// 他の登録済みCapability(上記のGmail/Notion/Slack)とは異なり、この
+// 関数は自由文字列の抽出も、integrationRequirementの宣言も一切行わない
+// ——実際のGoogle Calendar空き時間確認は、core/tact-orchestrator/
+// capabilityPlan.tsの冒頭コメントに記録した通りCapabilityInvocationRequest
+// (query文字列のみ)には解決済みTemporalRequirement/referenceInstantUtc
+// を運ぶfieldが存在しないため、この関数からは実行できない。実際の
+// production dispatchはcore/tact-conversation/orchestration.tsの
+// runCalendarAvailabilityBridge()が、Work.metadata(TemporalRequirement)
+// を直接読んでexecuteCalendarAvailabilityScheduling()を呼ぶ専用経路を
+// 通り、decomposeTask() → Capability Registryのこの経路を経由しない
+// (tact-work/tact-orchestratorはtact-conversationへ依存できないため、
+// 構造的にこの関数からは実行できない)。
+//
+// この関数が存在する理由は1つだけ: core/tact-core/capabilities/registry.ts
+// のinvokeCapability()が、万一decomposeTask()経由でこのTaskへ到達した
+// 場合に「未登録」として例外を投げないようにするための、安全な
+// fallback placeholderである(defense in depth)。
+export async function runIntegrationGoogleCalendarAvailabilityReadCapability(
+  request: CapabilityInvocationRequest
+): Promise<CapabilityInvocationResult> {
+
+  // 意図的に未使用(上記コメント参照、free-text抽出を一切行わない)。
+  void request;
+
+  return {
+    success: true,
+    output: "Googleカレンダーの空き時間を確認します。",
+  };
+
+}

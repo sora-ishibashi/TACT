@@ -155,19 +155,23 @@ const CAPABILITY_BINDING_TABLE: readonly CapabilityBindingEntry[] = [
     intents: ["integration_notion_read_page"],
   },
 
-  // TIME-P1c Calendar Wiring: Gmail send(REF-P1f)と全く同じ
-  // intents: []パターン。classifyIntent()/TactIntentの8値closed union
-  // には触れない(自然文からこのbindingへ直接遷移する経路は、この
-  // phaseでは意図的に作らない)——core/tact-conversation配下の
-  // 専用bridge関数が、既に解決済みの temporal range 等を渡して直接
-  // resolveCapabilityForBinding("integration.google_calendar.availability_read")
-  // を経由するのみ。未知のcapability("calendar.availability.read"
-  // 以外)がこのbindingへ到達することは無い(fail closed、
-  // isBindingCompatibleWithCapability()参照)。
+  // TIME-P1c Final Wiring: classifyIntent()が"calendar_availability"を
+  // 返せるようになったため、intents: []から更新する。ただし実際の
+  // production dispatchは、この表経由のdecomposeTask() →
+  // Capability Registryではなく、core/tact-conversation/orchestration.ts
+  // の専用bridge(runCalendarAvailabilityBridge())が
+  // executeCalendarAvailabilityScheduling()を直接呼ぶ経路を通る
+  // (calendarAvailabilityExecution.ts冒頭コメント参照: tact-work/
+  // tact-orchestratorはtact-conversationへ依存できないため、実際の
+  // Capability呼び出しはこの表の外側で行われる)。この表のintentsは
+  // 「意味論的に正しい対応関係」を1箇所で保つための単一の真実の
+  // 情報源、および万一decomposeTask()経由でこのbindingへ到達した
+  // 場合のfallback一貫性のために更新する(core/tact-integration/
+  // capability.tsの登録済みplaceholder handler参照)。
   {
     capability: "calendar.availability.read",
     binding: "integration.google_calendar.availability_read",
-    intents: [],
+    intents: ["calendar_availability"],
   },
 
 ];
@@ -206,6 +210,7 @@ const INTENT_TO_CAPABILITY_PLAN: Readonly<Record<TactIntent, CapabilityPlan | nu
     integration_gmail_search_messages: byIntent.get("integration_gmail_search_messages") ?? null,
     integration_notion_search: byIntent.get("integration_notion_search") ?? null,
     integration_notion_read_page: byIntent.get("integration_notion_read_page") ?? null,
+    calendar_availability: byIntent.get("calendar_availability") ?? null,
   };
 
   return table;
