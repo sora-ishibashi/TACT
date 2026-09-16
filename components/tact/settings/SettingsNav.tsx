@@ -1,13 +1,13 @@
 "use client";
 
 export const SETTINGS_CATEGORIES = [
-  { id: "general", label: "General" },
-  { id: "scheduling", label: "Scheduling" },
-  { id: "connections", label: "Connections" },
-  { id: "notifications", label: "Notifications" },
-  { id: "workspace", label: "Data & Workspace" },
-  { id: "security", label: "Security" },
-  { id: "advanced", label: "Advanced" },
+  { id: "general", label: "一般" },
+  { id: "scheduling", label: "スケジュール" },
+  { id: "connections", label: "接続" },
+  { id: "notifications", label: "通知" },
+  { id: "workspace", label: "データとワークスペース" },
+  { id: "security", label: "セキュリティ" },
+  { id: "advanced", label: "詳細設定" },
 ] as const;
 
 export type SettingsCategory = (typeof SETTINGS_CATEGORIES)[number]["id"];
@@ -19,7 +19,7 @@ type Props = {
 
 export default function SettingsNav({ active, onSelect }: Props) {
   return (
-    <nav aria-label="Settings categories" className="space-y-1">
+    <nav aria-label="設定カテゴリ" className="space-y-1">
       {SETTINGS_CATEGORIES.map((category) => (
         <button
           key={category.id}

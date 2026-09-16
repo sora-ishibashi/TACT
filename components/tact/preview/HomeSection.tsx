@@ -50,7 +50,7 @@ export default function HomeSection({ mode }: { mode: HomeMode }) {
   const [message, setMessage] = useState("");
 
   const work = previewWorks.find((item) => item.id === selected);
-  const title = mode === "approvals" ? "Approvals" : mode === "works" ? "Works" : "Home";
+  const title = mode === "approvals" ? "承認" : mode === "works" ? "ワーク" : "ホーム";
 
   if (work) {
     return (

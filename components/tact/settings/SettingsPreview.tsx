@@ -34,7 +34,7 @@ const fieldClass = "h-10 w-full border border-[#D9D9D9] bg-white px-3 text-[14px
 function PreviewHeader({
   title,
   description,
-  label = "Preview",
+  label = "プレビュー",
   tone = "neutral",
   isPreview = true,
 }: {
@@ -77,14 +77,14 @@ export default function SettingsPreview({ initialCategory = "general" }: { initi
   return (
     <div className="flex h-full min-w-0 flex-1 overflow-y-auto bg-white text-[#112278]">
       <aside className="hidden w-52 shrink-0 border-r border-[#D9D9D9] px-3 py-6 lg:block">
-        <p className="px-3 text-[12px] font-medium leading-4 text-[#626161]">Settings</p>
+        <p className="px-3 text-[12px] font-medium leading-4 text-[#626161]">設定</p>
         <div className="mt-3"><SettingsNav active={category} onSelect={setCategory} /></div>
       </aside>
 
       <main className="min-w-0 flex-1 px-5 py-6 sm:px-8">
         <div className="mx-auto max-w-3xl">
           <label className="block lg:hidden">
-            <span className="sr-only">Settings category</span>
+            <span className="sr-only">設定カテゴリ</span>
             <select value={category} onChange={(event) => setCategory(event.target.value as SettingsCategory)} className={fieldClass}>
               {SETTINGS_CATEGORIES.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
             </select>
@@ -93,7 +93,7 @@ export default function SettingsPreview({ initialCategory = "general" }: { initi
           <div className="mt-4 lg:mt-0">
             {category === "general" && (
               <>
-                <PreviewHeader title="General" description="Personal display and language preferences for the TACT preview." />
+                <PreviewHeader title="一般" description="Personal display and language preferences for the TACT preview." />
                 <div className="mt-6 space-y-5">
                   <Card><Field label="Display name"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className={fieldClass} /></Field></Card>
                   <Card className="grid gap-5 sm:grid-cols-2">
@@ -106,7 +106,7 @@ export default function SettingsPreview({ initialCategory = "general" }: { initi
 
             {category === "scheduling" && (
               <>
-                <PreviewHeader title="Scheduling" description="Set understandable availability defaults for candidate suggestions." />
+                <PreviewHeader title="スケジュール" description="Set understandable availability defaults for candidate suggestions." />
                 <div className="mt-6 space-y-5">
                   <Card className="space-y-5">
                     <SectionHeader title="Availability" description="These values are local preview controls; they do not change Calendar behavior." />
@@ -132,36 +132,36 @@ export default function SettingsPreview({ initialCategory = "general" }: { initi
 
             {category === "connections" && (
               <>
-                <PreviewHeader title="Connections" description="Manage currently supported services and their canonical connection lifecycle." label="Available now" tone="success" isPreview={false} />
+                <PreviewHeader title="接続" description="Manage currently supported services and their canonical connection lifecycle." label="利用可能" tone="success" isPreview={false} />
                 <div className="mt-6"><Card><ConnectionsPanel /></Card></div>
               </>
             )}
 
             {category === "notifications" && (
               <>
-                <PreviewHeader title="Notifications" description="Choose local preview defaults for the updates you would want to receive." />
-                <div className="mt-6 space-y-5"><Card className="space-y-4"><SectionHeader title="Notify me about" />{[["completed", "Work completed"], ["approval", "Approval required"], ["clarification", "Input or clarification required"], ["failed", "Work failed"]].map(([key, label]) => <div key={key} className="flex items-center justify-between gap-4 border-t border-[#D9D9D9] pt-4 first:border-t-0 first:pt-0"><span className="text-[14px] leading-5 text-[#112278]">{label}</span><Toggle label={label} checked={notifications[key as keyof typeof notifications]} onChange={(checked) => setNotifications((current) => ({ ...current, [key]: checked }))} /></div>)}</Card><Card className="space-y-4"><SectionHeader title="Destinations" description="Only the visual preference changes in this preview." />{[["inApp", "In-app"], ["slack", "Slack"], ["email", "Email"]].map(([key, label]) => <div key={key} className="flex items-center justify-between gap-4 border-t border-[#D9D9D9] pt-4 first:border-t-0 first:pt-0"><span className="text-[14px] leading-5 text-[#112278]">{label}</span><Toggle label={label} checked={notifications[key as keyof typeof notifications]} onChange={(checked) => setNotifications((current) => ({ ...current, [key]: checked }))} /></div>)}<div className="flex items-center justify-between border-t border-[#D9D9D9] pt-4"><span className="text-[14px] leading-5 text-[#626161]">LINE</span><StatusBadge label="Coming later" tone="muted" /></div></Card></div>
+                <PreviewHeader title="通知" description="Choose local preview defaults for the updates you would want to receive." />
+                <div className="mt-6 space-y-5"><Card className="space-y-4"><SectionHeader title="Notify me about" />{[["completed", "Work completed"], ["approval", "Approval required"], ["clarification", "Input or clarification required"], ["failed", "Work failed"]].map(([key, label]) => <div key={key} className="flex items-center justify-between gap-4 border-t border-[#D9D9D9] pt-4 first:border-t-0 first:pt-0"><span className="text-[14px] leading-5 text-[#112278]">{label}</span><Toggle label={label} checked={notifications[key as keyof typeof notifications]} onChange={(checked) => setNotifications((current) => ({ ...current, [key]: checked }))} /></div>)}</Card><Card className="space-y-4"><SectionHeader title="Destinations" description="Only the visual preference changes in this preview." />{[["inApp", "In-app"], ["slack", "Slack"], ["email", "Email"]].map(([key, label]) => <div key={key} className="flex items-center justify-between gap-4 border-t border-[#D9D9D9] pt-4 first:border-t-0 first:pt-0"><span className="text-[14px] leading-5 text-[#112278]">{label}</span><Toggle label={label} checked={notifications[key as keyof typeof notifications]} onChange={(checked) => setNotifications((current) => ({ ...current, [key]: checked }))} /></div>)}<div className="flex items-center justify-between border-t border-[#D9D9D9] pt-4"><span className="text-[14px] leading-5 text-[#626161]">LINE</span><StatusBadge label="今後対応" tone="muted" /></div></Card></div>
               </>
             )}
 
             {category === "workspace" && (
               <>
-                <PreviewHeader title="Data & Workspace" description="A future place to understand what information TACT may use for your work." />
-                <div className="mt-6 grid gap-4 sm:grid-cols-2">{[[FolderCog, "Local Workspace", "Files you explicitly make available to TACT."], [CalendarDays, "Connected folders", "Future folder access and review controls."], [SlidersHorizontal, "Connected SaaS sources", "Future enablement for approved connected sources."], [Info, "Future Work Scope", "A future boundary for the information a Work may use."]].map(([Icon, title, description]) => <Card key={title as string}><Icon aria-hidden="true" size={18} className="text-[#172E95]" /><p className="mt-3 text-[14px] font-medium leading-5 text-[#112278]">{title as string}</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">{description as string}</p><div className="mt-3"><StatusBadge label="Coming later" tone="muted" /></div></Card>)}</div>
+                <PreviewHeader title="データとワークスペース" description="A future place to understand what information TACT may use for your work." />
+                <div className="mt-6 grid gap-4 sm:grid-cols-2">{[[FolderCog, "Local Workspace", "Files you explicitly make available to TACT."], [CalendarDays, "Connected folders", "Future folder access and review controls."], [SlidersHorizontal, "Connected SaaS sources", "Future enablement for approved connected sources."], [Info, "Future Work Scope", "A future boundary for the information a Work may use."]].map(([Icon, title, description]) => <Card key={title as string}><Icon aria-hidden="true" size={18} className="text-[#172E95]" /><p className="mt-3 text-[14px] font-medium leading-5 text-[#112278]">{title as string}</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">{description as string}</p><div className="mt-3"><StatusBadge label="今後対応" tone="muted" /></div></Card>)}</div>
               </>
             )}
 
             {category === "security" && (
               <>
-                <PreviewHeader title="Security" description="TACT keeps approval and external-action boundaries visible rather than hiding them behind automation." />
-                <div className="mt-6 space-y-4">{[[Check, "Read actions", "Normally allowed when the requested read capability is available."], [ShieldCheck, "External send", "Requires approval before TACT sends information outside your workspace."], [LockKeyhole, "Write, delete, and share", "Restricted and approval-controlled; this preview does not change policy."]].map(([Icon, title, description]) => <Card key={title as string} className="flex gap-3"><Icon aria-hidden="true" size={18} className="mt-0.5 shrink-0 text-[#172E95]" /><div><p className="text-[14px] font-medium leading-5 text-[#112278]">{title as string}</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">{description as string}</p></div></Card>)}<Card className="bg-[#F2F2F2]"><div className="flex items-center justify-between gap-4"><div><p className="text-[14px] font-medium leading-5 text-[#626161]">Enterprise policy controls</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">Approval, data, and external-sharing policy controls are intentionally unavailable here.</p></div><StatusBadge label="Coming later" tone="muted" /></div></Card></div>
+                <PreviewHeader title="セキュリティ" description="TACT keeps approval and external-action boundaries visible rather than hiding them behind automation." />
+                <div className="mt-6 space-y-4">{[[Check, "Read actions", "Normally allowed when the requested read capability is available."], [ShieldCheck, "External send", "Requires approval before TACT sends information outside your workspace."], [LockKeyhole, "Write, delete, and share", "Restricted and approval-controlled; this preview does not change policy."]].map(([Icon, title, description]) => <Card key={title as string} className="flex gap-3"><Icon aria-hidden="true" size={18} className="mt-0.5 shrink-0 text-[#172E95]" /><div><p className="text-[14px] font-medium leading-5 text-[#112278]">{title as string}</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">{description as string}</p></div></Card>)}<Card className="bg-[#F2F2F2]"><div className="flex items-center justify-between gap-4"><div><p className="text-[14px] font-medium leading-5 text-[#626161]">Enterprise policy controls</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">Approval, data, and external-sharing policy controls are intentionally unavailable here.</p></div><StatusBadge label="今後対応" tone="muted" /></div></Card></div>
               </>
             )}
 
             {category === "advanced" && (
               <>
-                <PreviewHeader title="Advanced" description="Reference-only Preview information, separated from everyday settings." />
-                <div className="mt-6 space-y-4"><Card className="bg-[#F2F2F2]"><p className="text-[14px] font-medium leading-5 text-[#626161]">Execution information</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">Future diagnostic summaries can explain Work execution without exposing provider credentials, account identifiers, or raw Run IDs.</p></Card><Card className="bg-[#F2F2F2]"><p className="text-[14px] font-medium leading-5 text-[#626161]">Developer diagnostics and audit detail</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">Enterprise-only detail levels are not configurable in this Preview.</p><div className="mt-3"><StatusBadge label="Coming later" tone="muted" /></div></Card></div>
+                <PreviewHeader title="詳細設定" description="Reference-only Preview information, separated from everyday settings." />
+                <div className="mt-6 space-y-4"><Card className="bg-[#F2F2F2]"><p className="text-[14px] font-medium leading-5 text-[#626161]">Execution information</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">Future diagnostic summaries can explain Work execution without exposing provider credentials, account identifiers, or raw Run IDs.</p></Card><Card className="bg-[#F2F2F2]"><p className="text-[14px] font-medium leading-5 text-[#626161]">Developer diagnostics and audit detail</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">Enterprise-only detail levels are not configurable in this Preview.</p><div className="mt-3"><StatusBadge label="今後対応" tone="muted" /></div></Card></div>
               </>
             )}
           </div>
