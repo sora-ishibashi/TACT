@@ -14,8 +14,13 @@
 // 「hooksをどうStoreへ翻訳するか」というロジックだけを、Orchestrator
 // 本体を一切動かさずに検証できる。
 
-import { runWorkTurn, type RunWorkTurnDeps } from "../../../core/tact-work/execution";
-import type { Work, Run, WorkTask } from "../../../core/tact-work/types";
+import {
+  runWorkTurn,
+  type RunWorkTurnDeps,
+  prepareDirectReadTaskExecution,
+  type PrepareDirectReadTaskExecutionDeps,
+} from "../../../core/tact-work/execution";
+import type { Work, Run, WorkTask, Clarification } from "../../../core/tact-work/types";
 import type {
   Task,
   TaskExecutionSummary,
@@ -2035,6 +2040,173 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       "[WORK-P1 completion boundary] completed Task/Run leaves semantic Work non-terminal until Conversation delivery finalization",
       calls.updateTaskStatusCalls.some((call) => call.status === "completed") &&
         !calls.workStatusUpdates.includes("completed")
+    ));
+  }
+
+  // =========================
+  // prepareDirectReadTaskExecution (TIME-P1c Final Blocker Fix)
+  // =========================
+  //
+  // Provider-neutral Work lifecycle helper used by narrow direct-read
+  // bridges (e.g. core/tact-conversation/orchestration.tsのrunCalendar
+  // AvailabilityBridge())。Calendar固有のロジックは一切参照せず、Work
+  // status遷移とTask永続化だけを検証する。実Supabase接続なし
+  // (Category A、in-memory fake store)。
+
+  function makeClarification(overrides: Partial<Clarification> = {}): Clarification {
+    return {
+      id: "clarification-1",
+      workId: "work-1",
+      requestedByActorKind: "ai",
+      requestedByActorId: "temporal-understanding",
+      status: "pending",
+      reasonCode: "missing_required_input",
+      question: "テスト質問",
+      requestedAt: "2026-09-16T00:00:00.000Z",
+      createdAt: "2026-09-16T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  function makePrepareDeps(
+    work: Work | undefined,
+    options: {
+      clarifications?: Clarification[];
+      createTaskReturnsUndefined?: boolean;
+    } = {}
+  ): { deps: PrepareDirectReadTaskExecutionDeps; calls: { workStatusUpdates: string[]; createTaskCalls: number } } {
+
+    const calls = { workStatusUpdates: [] as string[], createTaskCalls: 0 };
+    // 呼び出し間でstatus変更が観測できるよう、Workをmutableな1オブジェクト
+    // として共有する(実Supabase行のupdateを模す)。
+    const stored = work ? { ...work } : undefined;
+
+    const deps: PrepareDirectReadTaskExecutionDeps = {
+      getWork: (async () => (stored ? { ...stored } : undefined)) as PrepareDirectReadTaskExecutionDeps["getWork"],
+      updateWorkStatus: (async (_workId: string, _userId: string, _accessToken: string, status: string) => {
+        calls.workStatusUpdates.push(status);
+        if (stored) stored.status = status as Work["status"];
+      }) as PrepareDirectReadTaskExecutionDeps["updateWorkStatus"],
+      createTask: (async (workId: string, _userId: string, _accessToken: string, params) => {
+        calls.createTaskCalls++;
+        return options.createTaskReturnsUndefined
+          ? undefined
+          : ({
+              id: "task-1",
+              workId,
+              description: params.description,
+              status: "pending",
+              assignedCapability: params.assignedCapability ?? null,
+              createdAt: "2026-09-16T00:00:00.000Z",
+              updatedAt: "2026-09-16T00:00:00.000Z",
+            } as WorkTask);
+      }) as PrepareDirectReadTaskExecutionDeps["createTask"],
+      listClarificationsForWork: (async () => options.clarifications ?? []) as PrepareDirectReadTaskExecutionDeps["listClarificationsForWork"],
+    };
+
+    return { deps, calls };
+
+  }
+
+  const baseParams = {
+    workId: "work-1",
+    userId: "user-1",
+    accessToken: "fake-token",
+    taskDescription: "テストTask",
+    assignedCapability: "integration.google_calendar.availability_read",
+  };
+
+  // ---- A: created -> running, Task persisted ----
+  {
+    const { deps, calls } = makePrepareDeps(makeWork({ status: "created" }));
+    const result = await prepareDirectReadTaskExecution(baseParams, deps);
+
+    results.push(check(
+      "[TIME-P1c lifecycle A] a fresh (\"created\") Work transitions to \"running\" before the Task is created",
+      result.success === true &&
+        calls.workStatusUpdates.join(",") === "running" &&
+        calls.createTaskCalls === 1
+    ));
+  }
+
+  // ---- C: waiting_for_input (no other pending clarification) -> running ----
+  {
+    const answeredClarification = makeClarification({ status: "answered" });
+    const { deps, calls } = makePrepareDeps(
+      makeWork({ status: "waiting_for_input" }),
+      { clarifications: [answeredClarification] }
+    );
+    const result = await prepareDirectReadTaskExecution(baseParams, deps);
+
+    results.push(check(
+      "[TIME-P1c lifecycle C] \"waiting_for_input\" with no remaining pending Clarification transitions to \"running\"",
+      result.success === true && calls.workStatusUpdates.join(",") === "running"
+    ));
+  }
+
+  // ---- Section7: waiting_for_input with a STILL-pending Clarification must
+  // NOT transition to running, and must never reach Task creation (the
+  // scheduler is never called while Work is still waiting_for_input) ----
+  {
+    const stillPending = makeClarification({ id: "clarification-2", status: "pending" });
+    const { deps, calls } = makePrepareDeps(
+      makeWork({ status: "waiting_for_input" }),
+      { clarifications: [stillPending] }
+    );
+    const result = await prepareDirectReadTaskExecution(baseParams, deps);
+
+    results.push(check(
+      "[Section7] \"waiting_for_input\" with a still-pending Clarification is NOT resumable — no status transition, no Task created",
+      result.success === false &&
+        !result.success && result.error.code === "work_not_resumable" &&
+        calls.workStatusUpdates.length === 0 &&
+        calls.createTaskCalls === 0
+    ));
+  }
+
+  // ---- running: no-op transition, proceeds straight to Task creation ----
+  {
+    const { deps, calls } = makePrepareDeps(makeWork({ status: "running" }));
+    const result = await prepareDirectReadTaskExecution(baseParams, deps);
+
+    results.push(check(
+      "[TIME-P1c lifecycle] an already-\"running\" Work is left alone (no redundant status update) and proceeds to Task creation",
+      result.success === true && calls.workStatusUpdates.length === 0 && calls.createTaskCalls === 1
+    ));
+  }
+
+  // ---- fail closed: other non-resumable Work states never proceed ----
+  for (const status of ["planning", "waiting_for_approval", "completed", "failed", "cancelled"] as const) {
+    const { deps, calls } = makePrepareDeps(makeWork({ status }));
+    const result = await prepareDirectReadTaskExecution(baseParams, deps);
+
+    results.push(check(
+      `[fail closed] Work status "${status}" is not resumable via the narrow direct-read path — no Task is created`,
+      result.success === false &&
+        !result.success && result.error.code === "work_not_resumable" && result.error.workStatus === status &&
+        calls.createTaskCalls === 0
+    ));
+  }
+
+  // ---- work not found ----
+  {
+    const { deps } = makePrepareDeps(undefined);
+    const result = await prepareDirectReadTaskExecution(baseParams, deps);
+
+    results.push(check(
+      "[defensive] a Work that no longer exists returns work_not_found, never fabricates a Task",
+      result.success === false && !result.success && result.error.code === "work_not_found"
+    ));
+  }
+
+  // ---- Task creation failure ----
+  {
+    const { deps } = makePrepareDeps(makeWork({ status: "created" }), { createTaskReturnsUndefined: true });
+    const result = await prepareDirectReadTaskExecution(baseParams, deps);
+
+    results.push(check(
+      "[defensive] createTask() returning undefined is reported as task_creation_failed, not swallowed as success",
+      result.success === false && !result.success && result.error.code === "task_creation_failed"
     ));
   }
 

@@ -15,13 +15,15 @@ import {
   createRun,
   completeRun,
   failRun,
+  getWork,
+  listClarificationsForWork,
 } from "./store";
 import { requestApproval as defaultRequestApproval } from "./approval";
 // Fast Port P3a: Human Interaction Foundation(require_input branchの
 // wiring先)。
 import { requestClarification as defaultRequestClarification } from "./clarification";
 import { reconcileWorkCompletionStatus as defaultReconcileWorkCompletionStatus } from "./completion";
-import type { Work } from "./types";
+import type { Work, WorkStatus, WorkTask } from "./types";
 import { buildApprovalSubject, type ApprovalSubject } from "./approvalIntegrity";
 // Fast Port P4b: Audit emission。onTaskFinished()が受理した
 // canonical PolicyDecisionの初回評価(policy.evaluated)のcanonical
@@ -1208,5 +1210,193 @@ export async function runWorkTurn(
   }
 
   return result;
+
+}
+
+// =========================
+// prepareDirectReadTaskExecution (TIME-P1c Final Blocker Fix)
+// =========================
+//
+// 目的: runWorkTurn()(decomposeTask() → Capability Registry経由の
+// generic path)を経由しない、narrow direct-read Task
+// (core/tact-conversation/orchestration.tsのexecuteNarrowGmailSearch()、
+// runCalendarAvailabilityBridge()等)のための、provider-neutralな
+// Work lifecycle helper。
+//
+// Root Cause(独立audit確定): これらのnarrow direct-read呼び出し元は、
+// 既存のWorkTaskを1件作ってcore/tact-integration/execution.tsの
+// executeReadIntegrationAction()(または、それをラップする
+// core/tact-conversation/calendarAvailabilityExecution.tsの
+// executeCalendarAvailabilityScheduling())へ直接委譲するだけで、
+// Work自体をcreated/waiting_for_input → runningへ進める処理を一切
+// 持っていなかった。executeReadIntegrationAction()自身は
+// (validateReadExecutionPreconditions()経由で)Work.status==="running"
+// を前提条件として要求するため、Workがcreated/waiting_for_inputのままの
+// 状態でこれらの関数を呼ぶと、Provider呼び出しへ到達する前に必ず
+// 失敗していた(Gmail経由のexecuteNarrowGmailSearch()は、REF-P1fの
+// 既存呼び出し元がこの関数を呼ぶ時点で対象WorkがREF-P1的な別経路により
+// 既に"running"であることを前提にしていたため、この欠落が表面化して
+// いなかった——Calendar経由のrunCalendarAvailabilityBridge()は、Work
+// 作成直後/Clarification解決直後という、Workが"running"であることが
+// 保証されない地点から呼ばれるため、この欠落が実際に production
+// blockerとして顕在化した)。
+//
+// このfileはCalendar固有のlifecycle logicを一切持たない
+// (絶対条件、Section3): 「created/waiting_for_input(未解決の
+// Clarificationが残っていない場合のみ) → running」というWork lifecycle
+// 遷移だけを扱う、provider-neutralな責務。どのCapability/どの
+// Integration serviceのためのTaskかは一切関知しない(assignedCapability
+// はopaqueなstringとしてそのままcreateTask()へ渡すだけ)。
+//
+// Run自体はここでは一切作らない(絶対条件、Section3/4): 既存の
+// executeReadIntegrationAction()が、Run作成・実行・完了/失敗・Task
+// terminal state projection・audit・retry semanticsのcanonical owner
+// であり続ける(絶対条件、Section4/5)。この関数は「Runを作る前に
+// Work/Taskの前提条件を整える」ところまでで責務を終える。
+export interface PrepareDirectReadTaskExecutionParams {
+
+  readonly workId: string;
+
+  readonly userId: string;
+
+  readonly accessToken: string;
+
+  readonly taskDescription: string;
+
+  // Opaque dispatch key(例: "integration.google_calendar.availability_read")。
+  // このfile自身はこの値の意味を一切解釈しない。
+  readonly assignedCapability: string;
+
+}
+
+export type PrepareDirectReadTaskExecutionErrorCode =
+  | "work_not_found"
+  | "work_not_resumable"
+  | "task_creation_failed";
+
+export interface PrepareDirectReadTaskExecutionError {
+
+  readonly code: PrepareDirectReadTaskExecutionErrorCode;
+
+  readonly message: string;
+
+  // "work_not_resumable"の場合のみ、診断用にWorkの実際のstatusを運ぶ
+  // (呼び出し元がuser向けmessageを分岐させたい場合のための最小限の
+  // 追加情報。文字列messageの再parseを強いない)。
+  readonly workStatus?: WorkStatus;
+
+}
+
+export type PrepareDirectReadTaskExecutionResult =
+  | { readonly success: true; readonly task: WorkTask }
+  | { readonly success: false; readonly error: PrepareDirectReadTaskExecutionError };
+
+export interface PrepareDirectReadTaskExecutionDeps {
+
+  getWork: typeof getWork;
+
+  updateWorkStatus: typeof updateWorkStatus;
+
+  createTask: typeof createTask;
+
+  listClarificationsForWork: typeof listClarificationsForWork;
+
+}
+
+const defaultPrepareDirectReadTaskExecutionDeps: PrepareDirectReadTaskExecutionDeps = {
+  getWork,
+  updateWorkStatus,
+  createTask,
+  listClarificationsForWork,
+};
+
+export async function prepareDirectReadTaskExecution(
+  params: PrepareDirectReadTaskExecutionParams,
+  deps: PrepareDirectReadTaskExecutionDeps = defaultPrepareDirectReadTaskExecutionDeps
+): Promise<PrepareDirectReadTaskExecutionResult> {
+
+  const { workId, userId, accessToken, taskDescription, assignedCapability } = params;
+
+  // 絶対条件(Section3-1、"validate Work can resume/start"): 呼び出し元が
+  // 保持しているWorkオブジェクトを信用せず、常にここで最新状態を
+  // 読み直す——呼び出し元がClarification解決直後等、DB上のstatusが
+  // 既に変化し得るタイミングでこの関数を呼ぶため。
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return {
+      success: false,
+      error: { code: "work_not_found", message: "指定されたWorkが見つかりませんでした。" },
+    };
+  }
+
+  if (work.status === "waiting_for_input") {
+
+    // 絶対条件(Section7、最重要): 未回答のClarificationが他に残って
+    // いる間は、たとえこの呼び出し元自身の要求は満たされていても
+    // running へは進めない(=schedulerを呼ばせない)。
+    // core/tact-work/clarification.tsのresolveClarification()自身が
+    // 「他のpending Clarificationが残っていなければrunningへ戻す」と
+    // いう全く同じ判定を既に行っているが(Provider非依存の対称的な
+    // 既存ロジック)、direct-read呼び出し元がresolveClarification()を
+    // 経由しない将来のcallerのためにも、この関数自身がこの前提条件を
+    // 独立して再確認する(defense in depth、Calendar固有ではなく
+    // Clarificationという既存のtact-work概念に対する一般的な保護)。
+    const clarifications = await deps.listClarificationsForWork(workId, userId, accessToken);
+    const stillPending = clarifications.some((clarification) => clarification.status === "pending");
+
+    if (stillPending) {
+      return {
+        success: false,
+        error: {
+          code: "work_not_resumable",
+          message: "未回答の確認事項が残っているため、read Taskを開始できません。",
+          workStatus: work.status,
+        },
+      };
+    }
+
+    await deps.updateWorkStatus(workId, userId, accessToken, "running");
+
+  } else if (work.status === "created") {
+
+    // narrow direct-read pathはdecomposeTask()を経由しないため、
+    // generic pathのcreated → planning → running(onTasksPlanned())
+    // という2段階を踏む理由が無い——planningはTask分解中であることを
+    // 示す状態であり、この経路にはTask分解自体が存在しない。
+    await deps.updateWorkStatus(workId, userId, accessToken, "running");
+
+  } else if (work.status !== "running") {
+
+    // running以外の非対応状態(planning/waiting_for_approval/
+    // completed/failed/cancelled)は、この狭いdirect-read pathでは
+    // 再開できない——推測でrunningへ強制遷移させない(fail closed)。
+    return {
+      success: false,
+      error: {
+        code: "work_not_resumable",
+        message: `Workは現在「${work.status}」状態のため、read Taskを開始できません。`,
+        workStatus: work.status,
+      },
+    };
+
+  }
+
+  // work.status === "running"(既に満たされていた、またはここまでの
+  // 分岐で遷移させた)。
+
+  const task = await deps.createTask(workId, userId, accessToken, {
+    description: taskDescription,
+    assignedCapability,
+  });
+
+  if (!task) {
+    return {
+      success: false,
+      error: { code: "task_creation_failed", message: "Taskの作成に失敗しました。" },
+    };
+  }
+
+  return { success: true, task };
 
 }

@@ -66,10 +66,12 @@ export function bootstrapTactCapabilities(): void {
   registerCapability("integration.notion.search", runIntegrationNotionSearchCapability);
   registerCapability("integration.notion.read_page", runIntegrationNotionReadPageCapability);
 
-  // TIME-P1c Final Wiring: safety-net placeholder registration only(実際の
-  // production dispatchはcore/tact-conversation/orchestration.tsの
-  // runCalendarAvailabilityBridge()を経由する、capability.ts内の
-  // 関数コメント参照)。
+  // TIME-P1c Final Blocker Fix: metadata-onlyのfail-closed registration
+  // (実際のproduction dispatchはcore/tact-conversation/orchestration.tsの
+  // runCalendarAvailabilityBridge()を経由し、このCapability Registry
+  // dispatch経路は通常到達しない——万一到達した場合は成功を偽装せず
+  // errorMessage付きのsuccess:falseを返す、capability.ts内の関数
+  // コメント参照)。
   registerCapability("integration.google_calendar.availability_read", runIntegrationGoogleCalendarAvailabilityReadCapability);
 
   bootstrapped = true;

@@ -179,6 +179,17 @@ const CALENDAR_AVAILABILITY_FREE_TIME_PATTERN =
 const CALENDAR_AVAILABILITY_CANDIDATE_PATTERN =
   /(?:カレンダー|calendar)[^。]{0,20}?候補[^。]{0,10}?(?:出し|探し|教え)(?:て|てください|てほしい|てもらえる)/i;
 
+// TIME-P1c Final Blocker Fix (Section10): 「空いている時間を探して、
+// そのまま予定を作って」のような、read+writeが混在する依頼を保護する。
+// 上記2 patternは.test()(部分一致)のため、文の一部が空き時間確認
+// らしく見えても、同じ入力の別の部分に明確な書き込み動詞があれば
+// 全体をcalendar_availabilityとして扱わない(絶対条件、Section10:
+// 「availabilityとしてsilently分類し、read部分だけを実行する」ことを
+// 禁止する——読み取り専用の意図が完全に確信できない場合は、狭い
+// calendar_availabilityへ倒さず安全側のchat等へfall throughさせる)。
+const CALENDAR_WRITE_VERB_PATTERN =
+  /(作っ|登録し|追加し|変更し|移動し|削除し|招待し)(て|てください|てほしい|てもらえる)/;
+
 // Phase88相当: 他所(temporalRequirements.tsのderiveTemporalRequirementPolicy())
 // でも同じ「calendar availability shaped input」の判定が必要になるが、
 // tact-workはdependency-free leaf moduleとしての既存設計方針(temporalRequirements.ts
@@ -186,6 +197,10 @@ const CALENDAR_AVAILABILITY_CANDIDATE_PATTERN =
 // pattern判定を各層で独立に持つ(既存のRESEARCH_PATTERN vs
 // isSchedulingCandidateIntent()の関係と同じ、意図的な重複)。
 export function looksLikeCalendarAvailabilityRequest(trimmed: string): boolean {
+
+  if (CALENDAR_WRITE_VERB_PATTERN.test(trimmed)) {
+    return false;
+  }
 
   return (
     CALENDAR_AVAILABILITY_FREE_TIME_PATTERN.test(trimmed) ||

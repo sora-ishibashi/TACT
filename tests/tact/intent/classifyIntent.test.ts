@@ -98,6 +98,13 @@ const cases: Case[] = [
   // しないことだけ(Section19-H絶対条件、Do NOT implement Calendar
   // write)。
   { phase: "TIME-P1c-19H", input: "会議を登録して", expected: "core_push" },
+  // TIME-P1c Final Blocker Fix (Section10/13-G): read+writeが混在する
+  // 依頼を、read部分だけを見てcalendar_availabilityへsilently分類
+  // しない(read部分が明確に一致して見えても、同じ入力内に明確な
+  // 書き込み動詞があれば安全側(chat)へfall throughする)。
+  { phase: "TIME-P1c-13G", input: "空いている時間を探して、そのまま予定を作って", expected: "chat" },
+  { phase: "TIME-P1c-13G", input: "空き時間を探して、その時間に予定を追加して", expected: "chat" },
+  { phase: "TIME-P1c-13G", input: "Google Calendarを確認して候補を出して、その時間で招待して", expected: "chat" },
 
 ];
 

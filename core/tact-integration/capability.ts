@@ -513,10 +513,24 @@ export async function runIntegrationSlackListChannelsCapability(): Promise<Capab
 // (tact-work/tact-orchestratorはtact-conversationへ依存できないため、
 // 構造的にこの関数からは実行できない)。
 //
-// この関数が存在する理由は1つだけ: core/tact-core/capabilities/registry.ts
-// のinvokeCapability()が、万一decomposeTask()経由でこのTaskへ到達した
-// 場合に「未登録」として例外を投げないようにするための、安全な
-// fallback placeholderである(defense in depth)。
+// TIME-P1c Final Blocker Fix(独立audit確定、Section9): この関数が存在
+// する理由は1つだけ——core/tact-core/capabilities/registry.tsの
+// invokeCapability()が、万一decomposeTask()経由でこのTaskへ到達した
+// 場合に「未登録」という例外を投げず、Task/Run/Orchestrator全体の既存
+// エラーハンドリング経路(success:falseを既存のonAttempt/onTaskFinished
+// がそのままTaskExecutionSummary.status="failed"として扱う)へ安全に
+// 乗せるための、fail-closedなmetadata-only placeholderである。
+//
+// 以前はここでsuccess:trueと"Googleカレンダーの空き時間を確認します。"
+// というplaceholder文言を返していたが、これは実際には何も読み取って
+// いないにもかかわらず成功したかのように見える、安全でない・誤解を
+// 招く実装だった(独立audit指摘、Section9)。このCapability Registry
+// dispatch経路が実際に呼ばれることは無い想定(production dispatchは
+// core/tact-conversation/orchestration.tsのrunCalendarAvailabilityBridge()
+// が、decomposeTask() → Capability Registryを経由せず直接
+// executeCalendarAvailabilityScheduling()を呼ぶ専用経路を通るため)—
+// —しかし、万一この経路へ実際に到達した場合は、成功を偽装せず
+// fail closedする。
 export async function runIntegrationGoogleCalendarAvailabilityReadCapability(
   request: CapabilityInvocationRequest
 ): Promise<CapabilityInvocationResult> {
@@ -525,8 +539,9 @@ export async function runIntegrationGoogleCalendarAvailabilityReadCapability(
   void request;
 
   return {
-    success: true,
-    output: "Googleカレンダーの空き時間を確認します。",
+    success: false,
+    errorMessage:
+      "Googleカレンダーの空き時間確認はCapability Registry経由では実行できません(専用のOrchestration bridgeが必要です)。",
   };
 
 }

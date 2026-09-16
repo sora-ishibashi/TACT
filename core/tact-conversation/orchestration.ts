@@ -48,13 +48,17 @@ import {
   buildTemporalClarificationQuestion,
   toTemporalRequirementMetadata,
   readTemporalRequirementMetadata,
+  // TIME-P1c Final Blocker Fix: provider-neutral Work lifecycle helper
+  // (core/tact-work/execution.ts) that narrow direct-read bridges
+  // (this file's runCalendarAvailabilityBridge()) must go through instead
+  // of manually creating an ad-hoc Task against a possibly non-"running"
+  // Work.
+  prepareDirectReadTaskExecution,
 } from "../tact-work";
-// TIME-P1c Final Wiring: updateTaskStatus/Work/CandidateSlot/getZonedParts
-// はcore/tact-work/index.tsのbarrelへ未export(store.ts/slotEngine.ts/
-// timezone.tsから直接import)。calendarAvailabilityExecution.ts自身が
-// core/tact-work/store.tsから直接importしている既存パターンと同じ。
-import { updateTaskStatus } from "../tact-work/store";
-import type { Work } from "../tact-work/types";
+// TIME-P1c Final Wiring: CandidateSlot/getZonedParts はcore/tact-work/
+// index.tsのbarrelへ未export(slotEngine.ts/timezone.tsから直接import)。
+// calendarAvailabilityExecution.ts自身がcore/tact-work/store.tsから
+// 直接importしている既存パターンと同じ。
 import type { CandidateSlot } from "../tact-work/slotEngine";
 import { getZonedParts } from "../tact-work/timezone";
 import {
@@ -1960,19 +1964,39 @@ function makeTemporalClarificationResult(question: string): OrchestrationResult 
 // 分解を経由せず、新しいWorkTaskを1件作って既存のexecution boundaryへ
 // 直接委譲する、既存の確立済みpattern(STOP CONDITION回避: 既存
 // Orchestrator/decomposerを変更しない)。
+//
+// TIME-P1c Final Blocker Fix(独立audit確定のroot cause修正):
+// executeNarrowGmailSearch()と異なり、Calendarはこの関数が呼ばれる
+// 時点でWorkが"running"であることが保証されていない(fresh requestは
+// "created"のまま、clarification resume直後は"waiting_for_input"の
+// ままの場合がある)。executeReadIntegrationAction()
+// (executeCalendarAvailabilityScheduling()が内部で呼ぶ)は
+// Work.status==="running"を前提条件として要求するため、これを満たさず
+// 呼ぶと必ずwork_not_running相当で失敗し、Provider呼び出しへ一切
+// 到達しなかった。core/tact-work/execution.tsのprepareDirectReadTaskExecution()
+// (provider-neutralなWork lifecycle helper)がこのTask作成の前に
+// Work→runningの遷移を必ず行う。
+//
+// Task terminal state(絶対条件、Section4/5): このBridge自身は
+// createTask()/updateTaskStatus()を直接呼ばない。Task作成は
+// prepareDirectReadTaskExecution()に、Run作成・Task terminal state
+// projection(running→completed/failed)はexecuteReadIntegrationAction()
+// (executeCalendarAvailabilityScheduling()経由)に、それぞれ一元化する
+// ——「bridgeがcompleted、integrationがfailed」のような二重管理・
+// 不整合を構造的に排除する(executeCalendarAvailabilityScheduling()が
+// Provider呼び出しに到達する前に失敗した場合、TaskはcreateTask()の
+// 既定status("pending")のまま残る——既存のexecuteNarrowGmailSearch()が
+// 早期失敗時にTask statusを一切更新しないのと同じ規約)。
 export interface CalendarAvailabilityBridgeDeps {
 
-  createTask: typeof createTask;
-
-  updateTaskStatus: typeof updateTaskStatus;
+  prepareDirectReadTaskExecution: typeof prepareDirectReadTaskExecution;
 
   executeCalendarAvailabilityScheduling: typeof executeCalendarAvailabilityScheduling;
 
 }
 
 const defaultCalendarAvailabilityBridgeDeps: CalendarAvailabilityBridgeDeps = {
-  createTask,
-  updateTaskStatus,
+  prepareDirectReadTaskExecution,
   executeCalendarAvailabilityScheduling,
 };
 
@@ -2028,24 +2052,32 @@ const CALENDAR_AVAILABILITY_FAILURE_MESSAGES: Record<CalendarSchedulingErrorCode
 };
 
 export async function runCalendarAvailabilityBridge(
-  work: Work,
+  workId: string,
   userId: string,
   accessToken: string,
   deps: CalendarAvailabilityBridgeDeps = defaultCalendarAvailabilityBridgeDeps
 ): Promise<string> {
 
-  const task = await deps.createTask(work.id, userId, accessToken, {
-    description: "Googleカレンダーの空き時間を確認する",
+  // Section3-1: このhelper自身がWorkの最新状態を読み直し、
+  // created/waiting_for_input(未解決Clarificationが残っていない場合の
+  // み) → runningへ遷移させた上でTaskを作る。running以外の非対応状態
+  // (waiting_for_input中に他のClarificationが残っている場合を含む)は
+  // ここでfail closedし、Providerへは一切到達しない(Section7絶対条件)。
+  const prepared = await deps.prepareDirectReadTaskExecution({
+    workId,
+    userId,
+    accessToken,
+    taskDescription: "Googleカレンダーの空き時間を確認する",
     assignedCapability: CALENDAR_AVAILABILITY_READ_BINDING,
   });
 
-  if (!task) {
+  if (!prepared.success) {
     return "候補の確認を開始できませんでした。もう一度お試しください。";
   }
 
   const schedulingResult = await deps.executeCalendarAvailabilityScheduling({
-    workId: work.id,
-    taskId: task.id,
+    workId,
+    taskId: prepared.task.id,
     userId,
     accessToken,
     // Injected explicitly here, at the single dispatch point — never read
@@ -2056,11 +2088,9 @@ export async function runCalendarAvailabilityBridge(
   });
 
   if (schedulingResult.success) {
-    await deps.updateTaskStatus(work.id, userId, accessToken, task.id, "completed");
     return formatCalendarAvailabilityAnswer(schedulingResult.candidates);
   }
 
-  await deps.updateTaskStatus(work.id, userId, accessToken, task.id, "failed");
   return CALENDAR_AVAILABILITY_FAILURE_MESSAGES[schedulingResult.error.code];
 
 }
@@ -2980,7 +3010,7 @@ export async function resolveAndRunWork(
       // (decomposeTask() → classifyIntent()が"chat"へfallbackし得る
       // 既存経路)へは絶対に渡さない。
       if (temporalPolicy.kind === "calendar_availability") {
-        const answer = await runCalendarAvailabilityBridge(work, conversation.userId, accessToken);
+        const answer = await runCalendarAvailabilityBridge(work.id, conversation.userId, accessToken);
         return makeCalendarAvailabilityBridgeResult(answer);
       }
     }
@@ -4084,16 +4114,23 @@ async function runTemporalClarificationAnswerTurn(
   // ではCalendar以外のscheduling機能を拡張しない)。
   if (metadata.policy.kind === "calendar_availability") {
 
-    const work = await getWork(clarification.workId, conversation.userId, accessToken);
-
-    if (!work) {
+    // TIME-P1c Final Blocker Fix(Section7絶対条件、最重要): 他に未解決の
+    // pending Clarification/Approvalが残っている場合、resolveClarification()
+    // 自身がWork.status→runningへの遷移を行わない(outcome.workResumed
+    // ===false)。この場合はWorkがまだwaiting_for_inputのままであり、
+    // scheduler(runCalendarAvailabilityBridge())を呼んではならない
+    // ——呼んでもprepareDirectReadTaskExecution()がfail closedするだけ
+    // だが、この時点で明示的に分岐し、誤解を招く「開始できませんでした」
+    // という失敗文言ではなく、正しく「まだ他の確認事項が残っている」
+    // ことを伝える。
+    if (!outcome.workResumed) {
       const message = await appendConversationMessage(
-        conversation, accessToken, "assistant", "候補の確認を開始できませんでした。もう一度お試しください。"
+        conversation, accessToken, "assistant", "時間条件を記録しました。他の確認事項が完了次第、候補を確認します。"
       );
       return { conversation, userMessage, message };
     }
 
-    const answer = await runCalendarAvailabilityBridge(work, conversation.userId, accessToken);
+    const answer = await runCalendarAvailabilityBridge(clarification.workId, conversation.userId, accessToken);
     const message = await appendConversationMessage(conversation, accessToken, "assistant", answer);
     return { conversation, userMessage, message };
 

@@ -365,7 +365,17 @@ function isSchedulingCandidateIntent(input: string): boolean {
 // natural language検出)を、このfile自身のdependency-free leaf module
 // 設計方針(このfile冒頭コメント参照)を保つため独立に再実装する
 // (isSchedulingCandidateIntent()と同じ、意図的な重複)。
+// TIME-P1c Final Blocker Fix (Section10): core/tact-intent/ruleRouter.ts
+// のCALENDAR_WRITE_VERB_PATTERNと同じ趣旨——read+writeが混在する依頼
+// (「空いている時間を探して、そのまま予定を作って」)を
+// calendar_availability policyへ倒さない(意図的な重複、このfile自身の
+// leaf module設計方針)。
 function isCalendarAvailabilityRequest(input: string): boolean {
+
+  if (/(作っ|登録し|追加し|変更し|移動し|削除し|招待し)(て|てください|てほしい|てもらえる)/.test(input)) {
+    return false;
+  }
+
   return (
     /(?:空いて(?:い)?る?(?:時間|とき|ところ)|空き時間)[^。]{0,15}?(?:探し|見つけ|出し|教え)(?:て|てください|てほしい|てもらえる)/.test(input) ||
     /(?:カレンダー|calendar)[^。]{0,20}?候補[^。]{0,10}?(?:出し|探し|教え)(?:て|てください|てほしい|てもらえる)/i.test(input)

@@ -356,6 +356,26 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   ));
 
   // =========================
+  // TIME-P1c Final Blocker Fix: Section10/13-G — a mixed read+write
+  // request must not be silently classified as pure calendar_availability
+  // (which would execute only the read portion and implicitly discard the
+  // write half without ever surfacing it).
+  // =========================
+
+  results.push(check(
+    "[Section10/13-G] \"空いている時間を探して、そのまま予定を作って\" (mixed read+write) is NOT calendar_availability",
+    deriveTemporalRequirementPolicy("空いている時間を探して、そのまま予定を作って").kind !== "calendar_availability"
+  ));
+  results.push(check(
+    "[Section10/13-G] \"空き時間を探して、その時間に予定を追加して\" (mixed read+write) is NOT calendar_availability",
+    deriveTemporalRequirementPolicy("空き時間を探して、その時間に予定を追加して").kind !== "calendar_availability"
+  ));
+  results.push(check(
+    "[Section10/13-G] \"カレンダーを見て候補を出して、その時間で招待して\" (mixed read+write) is NOT calendar_availability",
+    deriveTemporalRequirementPolicy("カレンダーを見て候補を出して、その時間で招待して").kind !== "calendar_availability"
+  ));
+
+  // =========================
   // TIME-P1c Final Wiring: timezone/daily-window round-trip through
   // TemporalRequirementMetadata persistence (mirrors the existing
   // "[persistence]" check above for the new fields).
