@@ -104,6 +104,10 @@ export default function TactShell() {
     setSection(sectionForNavigationItem[item]);
   };
 
+  const homeMode = activeNavigationItem === "works" || activeNavigationItem === "approvals"
+    ? activeNavigationItem
+    : "home";
+
   return (
 
     <div className="flex h-screen min-w-0 w-full bg-white">
@@ -172,10 +176,15 @@ export default function TactShell() {
             hideProductLauncher
           />
         )}
-        {section === "home" && <HomeSection key={activeNavigationItem} mode={activeNavigationItem} />}
+        {section === "home" && <HomeSection key={activeNavigationItem} mode={homeMode} />}
         {section === "core" && <CoreSection />}
         {section === "code" && <CodeSection />}
-        {section === "settings" && <SettingsPreview />}
+        {section === "settings" && (
+          <SettingsPreview
+            key={activeNavigationItem}
+            initialCategory={activeNavigationItem === "connections" ? "connections" : "general"}
+          />
+        )}
 
       </div>
 

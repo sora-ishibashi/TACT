@@ -31,21 +31,33 @@ function Field({ label, children, helper }: { label: string; children: ReactNode
 
 const fieldClass = "h-10 w-full border border-[#D9D9D9] bg-white px-3 text-[14px] leading-5 text-[#112278] outline-none transition-colors duration-150 ease-out focus:border-[#18B5A6] focus:ring-2 focus:ring-[#18B5A6]";
 
-function PreviewHeader({ title, description }: { title: string; description: string }) {
+function PreviewHeader({
+  title,
+  description,
+  label = "Preview",
+  tone = "neutral",
+  isPreview = true,
+}: {
+  title: string;
+  description: string;
+  label?: string;
+  tone?: "neutral" | "success";
+  isPreview?: boolean;
+}) {
   return (
     <header className="border-b border-[#D9D9D9] pb-5">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-[24px] font-medium leading-[32px] text-[#112278]">{title}</h1>
-        <StatusBadge label="Preview" tone="neutral" />
+        <StatusBadge label={label} tone={tone} />
       </div>
       <p className="mt-2 text-[14px] leading-5 text-[#626161]">{description}</p>
-      <PreviewNote />
+      {isPreview && <PreviewNote />}
     </header>
   );
 }
 
-export default function SettingsPreview() {
-  const [category, setCategory] = useState<SettingsCategory>("general");
+export default function SettingsPreview({ initialCategory = "general" }: { initialCategory?: SettingsCategory }) {
+  const [category, setCategory] = useState<SettingsCategory>(initialCategory);
   const [displayName, setDisplayName] = useState("TACT user");
   const [language, setLanguage] = useState("ja");
   const [timezone, setTimezone] = useState("Asia/Tokyo");
@@ -120,8 +132,8 @@ export default function SettingsPreview() {
 
             {category === "connections" && (
               <>
-                <PreviewHeader title="Connections" description="Manage currently supported services, with Calendar availability clearly marked as preview support." />
-                <div className="mt-6 space-y-5"><Card><ConnectionsPanel /></Card><Card><div className="flex items-start justify-between gap-4"><div><p className="text-[14px] font-medium leading-5 text-[#112278]">Google Calendar</p><p className="mt-1 text-[13px] leading-[18px] text-[#626161]">Availability support for scheduling. This card does not represent a connected account and does not start OAuth.</p></div><StatusBadge label="Preview" tone="neutral" /></div></Card></div>
+                <PreviewHeader title="Connections" description="Manage currently supported services and their canonical connection lifecycle." label="Available now" tone="success" isPreview={false} />
+                <div className="mt-6"><Card><ConnectionsPanel /></Card></div>
               </>
             )}
 
