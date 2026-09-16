@@ -47,7 +47,7 @@ import ProductLauncher, { type TactSection } from "./ProductLauncher";
 import ResearchWorkspace from "@/components/research/ResearchWorkspace";
 import CoreSection from "./CoreSection";
 import CodeSection from "./CodeSection";
-import SettingsSection from "./SettingsSection";
+import SettingsPreview from "./settings/SettingsPreview";
 import HomeSection from "./preview/HomeSection";
 import TactSidebar, { type TactNavigationItemId } from "./navigation/TactSidebar";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -175,7 +175,7 @@ export default function TactShell() {
         {section === "home" && <HomeSection key={activeNavigationItem} mode={activeNavigationItem} />}
         {section === "core" && <CoreSection />}
         {section === "code" && <CodeSection />}
-        {section === "settings" && <SettingsSection />}
+        {section === "settings" && <SettingsPreview />}
 
       </div>
 
