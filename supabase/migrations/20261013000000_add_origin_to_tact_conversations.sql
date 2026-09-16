@@ -1,34 +1,37 @@
 -- =====================================================================
--- Migration: Conversation Origin Boundary (Research/Core/Slack)
+-- Migration: Conversation Origin Boundary — Phase 1 (Additive)
 -- =====================================================================
 --
--- 背景 (TACT CONVERSATION ORIGIN BOUNDARY 監査結果):
+-- 背景 (TACT CONVERSATION ORIGIN BOUNDARY監査結果、Integration Phase):
 --   public.tact_conversationsにはorigin/source/surface/channel/kindの
 --   いずれも存在せず、Research(components/research/ResearchWorkspace.tsx)・
 --   Core/general chat(components/tact/ConversationSection.tsx)・
---   Slack(core/tact-bot/*)のいずれから作られたConversationも、
---   同じ2つのcreateConversation()呼び出し元(app/api/tact/
---   tact-conversations/route.ts、core/tact-conversation/orchestration.ts
---   のrunConversationTurn())を経由してuser_id/title/project_idのみを
---   持つ同一行として保存されていた。Research履歴(listConversations())は
---   user_idのみで絞り込むため、Slack/Core起点のConversationがResearch
+--   Slack(core/tact-bot/*)のいずれから作られたConversationも、同じ
+--   createConversation()呼び出し元を経由してuser_id/title/project_idの
+--   みを持つ同一行として保存されていた。Research履歴(listConversations())
+--   はuser_idのみで絞り込むため、Slack/Core起点のConversationがResearch
 --   履歴に混入していた(監査で確認したRoot Cause)。
 --
--- 本migrationは、tact_conversationsに「このConversationがどのSurfaceから
--- 作られたか」を表す不変のorigin列を追加する。tact_bot_conversation_links
--- (Slack等の外部thread⇄TACT conversation継続)とは責務が異なる
--- (bot linkは「どの外部threadに対応するか」、originは「どのSurfaceの
--- 所有物か」)ため、既存のtact_bot_conversation_linksは一切変更しない。
+-- 2段階migrationにした理由(Integration Phase監査で確認した絶対条件):
+--   本列を1つのmigrationでadd + backfill + NOT NULL化まで一括で行うと、
+--   Rolling Deploy/Serverless Deployのいずれでも「新schemaが適用された
+--   直後、まだ旧コード(originを渡さないcreateConversation()呼び出し)が
+--   動いている」瞬間が必ず存在し、その瞬間にNOT NULL違反でConversation
+--   作成そのものが落ちる(migration先行でもcode先行でも同じ問題が起きる、
+--   Integration Phase監査Section6参照)。そのため、本Phase1では列を
+--   nullableのまま追加・backfillのみ行い、NOT NULL化は新アプリケーション
+--   コードが完全に配置され、全Conversation作成経路がoriginを明示的に
+--   書き込んでいることを確認した後の別migration(Phase2、
+--   20261014000000_enforce_tact_conversations_origin_not_null.sql)へ
+--   分離する。
 --
 -- 値の設計: 現在実装済みのSurfaceはresearch/core/slackの3つのみだが、
 -- tact_bot_conversation_links.channel / tact_external_identities.provider
 -- (20260830010000migration)が既にline/teams/discordを「未実装だが
 -- 将来のChannel Gateway対象」として先行宣言している既存conventionに
 -- 合わせ、CHECK制約にline/teams/api/web/systemも将来値として含める
--- (Evidenceのない先回りテーブル追加ではなく、既に本repositoryで
--- 採用されている「1つの列 + narrow CHECK」という既存パターンを、
--- 同じ理由で先行宣言するだけであり、新しいテーブル・新しいPipelineは
--- 一切追加しない)。
+-- (新しいテーブル・新しいPipelineは一切追加しない、1列+narrow CHECKと
+-- いう既存パターンの先行宣言のみ)。
 --
 -- Phase A: nullable列を追加する。
 -- Phase B: 既存行をbackfillする。
@@ -41,11 +44,11 @@
 --     「曖昧な既存行をresearchへ自動分類しない」という要求を満たすため、
 --     Research専用UIの履歴に既存行が誤って混入することを避ける
 --     non-research値を選ぶ)。
--- Phase C: origin列をNOT NULLへ変更する(DEFAULTは設定しない——
---   このtableへ書き込む唯一の経路であるcore/tact-conversation/store.ts
---   のcreateConversation()は、今回の変更で全ての呼び出し元がoriginを
---   明示的に渡すことを型レベルで強制されるため、DB側の暗黙default値に
---   よる「渡し忘れの隠蔽」を意図的に避ける)。
+--
+-- 本Phase1完了後、origin列はnullableのまま(NOT NULLはPhase2の責務)。
+-- 旧コード(originを渡さないINSERT)は引き続き動作する
+-- (Deployment Contract Step1〜5、新コードのデプロイと動作確認が
+-- 完了するまでの後方互換性を意図的に維持する)。
 --
 -- 既存のRLS(auth.uid() = user_id、20260825000000migration)は変更
 -- しない。originは「同じuserの所有物の中でどのSurfaceに属するか」を
@@ -97,14 +100,6 @@ where c.origin is null;
 
 
 -- ---------------------------------------------------------------------
--- Phase C: NOT NULL化
--- ---------------------------------------------------------------------
-
-alter table public.tact_conversations
-  alter column origin set not null;
-
-
--- ---------------------------------------------------------------------
 -- Index: Research/Core双方のlistConversations()クエリ
 -- (user_id = :userId AND origin = :origin, ORDER BY updated_at DESC)
 -- に一致する複合index。
@@ -112,3 +107,14 @@ alter table public.tact_conversations
 
 create index if not exists idx_tact_conversations_user_id_origin_updated_at
   on public.tact_conversations (user_id, origin, updated_at desc);
+
+
+-- ---------------------------------------------------------------------
+-- 意図的にここでは行わないこと(Phase2の責務)
+-- ---------------------------------------------------------------------
+--
+-- alter column origin set not null は、このmigrationには含めない。
+-- Deployment Contract(該当PRのコメント・完了報告参照)Step1〜5
+-- (Phase1適用 -> backfill/index確認 -> 新コードdeploy -> 全生成経路が
+-- originを書き込むことを確認 -> NULL件数0を確認)を経てからのみ、
+-- 別migration(Phase2)でNOT NULL化する。
