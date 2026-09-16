@@ -63,7 +63,6 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "@/components/auth/AuthProvider";
-import ProductLauncher, { type TactSection } from "@/components/tact/ProductLauncher";
 // LW-P3: Local Workspace(接続済みの場合のみ)をResearch Context
 // Sourceとして使うためのWorkspace Context Resolver。Coreの
 // LocalWorkspacePanel(components/tact/localWorkspace/LocalWorkspacePanel.tsx)
@@ -116,12 +115,6 @@ type ConversationMessageView = {
   // 値であり、永続化はしない(再読み込みで消える。既存attachmentsの
   // ようにDBへ保存された実体ではないため)。
   workspaceFileCount?: number;
-};
-
-type Props = {
-  activeSection: TactSection;
-  onSelectSection: (section: TactSection) => void;
-  hideProductLauncher?: boolean;
 };
 
 function subscribeToArtifactPreview() {
@@ -756,11 +749,7 @@ function ArtifactBlockView({
 
 }
 
-export default function ResearchWorkspace({
-  activeSection,
-  onSelectSection,
-  hideProductLauncher = false,
-}: Props) {
+export default function ResearchWorkspace() {
 
   const { user, getAccessToken, signOut } = useAuth();
 
@@ -1539,25 +1528,27 @@ export default function ResearchWorkspace({
           type="button"
           onClick={() => setNavigationOpen(true)}
           aria-controls="research-navigation"
-          aria-label="Navigationを開く"
-          className="absolute left-3 top-3 z-30 rounded-[10px] border border-[#D9D9D9] bg-white px-2.5 py-1.5 text-[#112278] transition duration-200 ease-out hover:bg-[#E6F2F2] lg:hidden"
+          aria-label="リサーチ履歴とプロジェクトを開く"
+          className="absolute left-3 top-3 z-30 inline-flex items-center gap-1 rounded-[10px] border border-[#D9D9D9] bg-white px-2.5 py-1.5 text-[#112278] transition duration-200 ease-out hover:bg-[#E6F2F2] lg:hidden"
         >
-          <Menu aria-hidden="true" size={24} strokeWidth={2} />
+          <Menu aria-hidden="true" size={18} strokeWidth={2} />
+          <span className="text-xs font-medium">リサーチ</span>
         </button>
       )}
 
       {navigationOpen && (
         <button
           type="button"
-          aria-label="Navigationを閉じる"
+          aria-label="リサーチ履歴とプロジェクトを閉じる"
           onClick={() => setNavigationOpen(false)}
           className="fixed inset-0 z-40 bg-black/30 lg:hidden"
         />
       )}
 
-      {/* 左: Navigation(Projects / Chat History) */}
+      {/* Research固有のプロジェクト・履歴ナビゲーション。グローバルナビゲーションはTactSidebarが担当する。 */}
       <aside
         id="research-navigation"
+        aria-label="リサーチ履歴とプロジェクト"
         className={`fixed inset-y-0 left-0 z-50 flex h-full w-[15.25rem] shrink-0 flex-col overflow-hidden border-r border-[#D9D9D9] bg-white transition-transform duration-200 ease-out lg:static lg:z-auto lg:translate-x-0 lg:shadow-none ${
           navigationOpen
             ? "translate-x-0"
@@ -1565,21 +1556,7 @@ export default function ResearchWorkspace({
         }`}
       >
 
-        {!hideProductLauncher && (
-          <div className="border-b border-[#D9D9D9] px-3 py-0.5">
-            <ProductLauncher active={activeSection} onSelect={onSelectSection} />
-          </div>
-        )}
-
         <div className="border-b border-[#D9D9D9] px-3 py-1">
-
-          {/*
-            Phase: Research UIヘッダー刷新。TACTブランド(ロゴ+文字ロゴ)は
-            TactShell左サイドバーのProductLauncher側で一度だけ表示するため、
-            ここでは「TACT Research」の二重表記になっていたブランディング
-            ブロック(丸縁付きロゴ+見出し)を廃止した。Project作成・検索UIは
-            変更していない。
-          */}
 
           <button
             type="button"

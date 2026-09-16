@@ -1,38 +1,7 @@
 "use client";
 
-// =========================
-// ProductLauncher (Phase: Research UI再設計、MenuBar.tsxを置き換え → UIレイアウト刷新でサイドバー用ブランド表示へ)
-// =========================
-//
-// 背景: これまでMenuBar.tsxが左端に常時表示される縦型プロダクト一覧
-// (Research/Core/Code/Meeting/Bot/Design)を描画していたが、これにより
-// 「TACTの中でResearchを開いている」という階層感がなく、TACTとResearchが
-// 常に二重に見え、かつ左端の縦バーがスペースを取りすぎていた。
-//
-// 変更: 左端の常時表示ナビゲーションを廃止し、「TACT」をプロダクト
-// ランチャー(クリックでResearch/Core/Code等を選べるドロップダウン)として
-// 扱う。選択肢のデータ(NAV_ITEMS)・有効/無効フラグ・遷移ロジック
-// (onSelect)は元のMenuBar.tsxから変更していない。
-//
-// 通常時はメニューが閉じているため、選択中のUI(例: Research)がレイアウトの
-// ほぼ全幅を使える。
-//
-// UIレイアウト刷新(TactShellのヘッダー廃止・左サイドバー化): これまでは
-// ヘッダー左上に横並びで表示していたが、TactShell側の左サイドバーに
-// 組み込むため、縦積みのブランド表示に変更した。
-//   [TACTアイコン] TACT(文字ロゴ画像)
-//                  Research(選択中プロダクト名、小さく・薄く)
-// 「TACTロゴ」(public/brand/tact-icon.svg、アイコン/シンボルマーク)と
-// 「TACT文字ロゴ」(public/brand/tact-logo.svg、「TACT」のワードマーク画像、
-// 元々あった素材)の2つの正式ブランド素材をどちらも使う。文字ロゴが既に
-// 「TACT」の文字を表現しているため、隣に重ねてテキストの「TACT」は
-// 表示しない。選択中プロダクト名(Research等)はブランド名(TACT)より
-// 小さく・薄い色でその下に表示し、「TACTという環境の中でResearchを
-// 使っている」という階層が伝わるようにする。スラッシュ区切りの二重表記や
-// 絵文字・仮アイコンは使わない。各プロダクトを表す虫眼鏡・脳・工具などの
-// フリー絵文字アイコン(旧NAV_ITEMS.icon)も、プロダクト用の正式ロゴでは
-// ないため引き続き使わず、ドロップダウン内はプロダクト名のテキストのみで
-// 表現する。
+// Legacy compatibility component for older entry points. The current TACT shell
+// uses TactSidebar as its sole global navigation and does not mount this component.
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
