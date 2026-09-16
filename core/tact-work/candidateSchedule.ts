@@ -394,6 +394,54 @@ export interface GenerateCandidateScheduleParams {
   readonly granularityMinutes?: number;
 }
 
+/**
+ * Validates the provider-independent portion of candidate generation.
+ *
+ * Callers that must not resolve a connection until a request is schedulable
+ * (for example, calendar availability orchestration) use this exact temporal
+ * range resolver before touching a provider boundary. The generator retains
+ * its own validation as a defense in depth for its public API.
+ */
+export function preflightCandidateSchedule(
+  params: Pick<GenerateCandidateScheduleParams, "requirement" | "referenceInstantUtc">
+): { readonly success: true; readonly resolvedRange: ResolvedTemporalRange } | {
+  readonly success: false;
+  readonly error: GenerateCandidateScheduleError;
+} {
+  const { requirement } = params;
+
+  if (!requirement.timezone) {
+    return { success: false, error: { code: "timezone_missing", message: "A timezone is required." } };
+  }
+
+  if (!requirement.dailyWindow) {
+    return { success: false, error: { code: "daily_window_missing", message: "A daily window is required." } };
+  }
+
+  if (!requirement.durationMinutes) {
+    return { success: false, error: { code: "temporal_requirement_incomplete", message: "A duration is required." } };
+  }
+
+  const rangeResolution = resolveTemporalDateRange(
+    requirement.date,
+    params.referenceInstantUtc,
+    requirement.timezone
+  );
+
+  if (!rangeResolution.success) {
+    const errorByCode: Record<typeof rangeResolution.code, GenerateCandidateScheduleError> = {
+      timezone_missing: { code: "timezone_missing", message: "A timezone is required." },
+      timezone_unrecognized: { code: "timezone_unrecognized", message: "The timezone is not recognized." },
+      reference_instant_invalid: { code: "reference_instant_invalid", message: "The reference instant must include an explicit offset." },
+      dst_invalid_local_time: { code: "dst_invalid_local_time", message: "The requested local time is invalid or ambiguous due to DST." },
+      temporal_requirement_incomplete: { code: "temporal_requirement_incomplete", message: "The temporal request is incomplete." },
+    };
+    return { success: false, error: errorByCode[rangeResolution.code] };
+  }
+
+  return { success: true, resolvedRange: rangeResolution.range };
+}
+
 export async function generateCandidateSchedule(
   params: GenerateCandidateScheduleParams
 ): Promise<GenerateCandidateScheduleResult> {

@@ -4,7 +4,7 @@ import {
   createIntegrationConnectionLink,
   listConnectionsForUser,
 } from "@/core/tact-integration";
-import type { Connection } from "@/core/tact-integration";
+import type { Connection, IntegrationService } from "@/core/tact-integration";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
@@ -68,6 +68,25 @@ function toPublicConnection(connection: Connection): PublicConnection {
 
 }
 
+// TIME-P1c Calendar Connections UI: このRouteが認識するcanonical
+// serviceの一覧をここへ集約する(絶対条件Section5: 「任意のservice名へ
+// APIを広げない」——fail-closed allowlistのまま)。core/tact-integration/
+// types.tsのIntegrationServiceが将来増えても、このRoute自身は
+// 明示的にここへ追加するまで新しいservice名を通さない(既存の
+// isSupportedIntegrationService()等と同じ「型が広がっただけでは
+// 自動的に境界も広がらない」設計方針)。純粋関数としてexportし、
+// 認証・DBアクセス無しに直接unit testできるようにする(既存の
+// parseCreateConnectionLinkRequestBody()と同じ理由)。
+const GET_FILTERABLE_SERVICES: readonly IntegrationService[] = ["slack", "gmail", "notion", "google_calendar"];
+
+export function parseServiceFilter(rawService: string | null): IntegrationService | undefined {
+
+  return (GET_FILTERABLE_SERVICES as readonly string[]).includes(rawService ?? "")
+    ? (rawService as IntegrationService)
+    : undefined;
+
+}
+
 export async function GET(
   request: NextRequest
 ) {
@@ -87,7 +106,7 @@ export async function GET(
     const connections = await listConnectionsForUser(
       authenticatedUserId,
       accessToken,
-      rawService === "slack" || rawService === "gmail" ? rawService : undefined
+      parseServiceFilter(rawService)
     );
 
     return NextResponse.json({

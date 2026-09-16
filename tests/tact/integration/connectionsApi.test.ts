@@ -17,6 +17,7 @@ import {
   GET as listConnectionsRoute,
   POST as createConnectionLinkRoute,
   parseCreateConnectionLinkRequestBody,
+  parseServiceFilter,
 } from "../../../app/api/tact/connections/route";
 import { POST as confirmConnectionRoute } from "../../../app/api/tact/connections/[connectionId]/confirm/route";
 import {
@@ -205,6 +206,37 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     check(
       "[PRODUCT-P1] disconnect: 未対応serviceのbody自体はparse段階では通す(unsupported_service判定はdisconnectIntegrationConnection()側の責務、parseはform validationのみ)",
       parseDisconnectRequestBody({ service: "notion" }).ok === true
+    )
+  );
+
+  // =========================
+  // TIME-P1c Calendar Connections UI: GET /api/tact/connections の
+  // ?service= filter(parseServiceFilter())。認証・DBアクセス無しに
+  // 直接検証できる純粋関数として切り出されている。
+  // =========================
+
+  for (const supported of ["slack", "gmail", "notion", "google_calendar"] as const) {
+    results.push(
+      check(
+        `[Calendar Connections UI] GET ?service=${supported} はそのままlistConnectionsForUser()へ渡される`,
+        parseServiceFilter(supported) === supported
+      )
+    );
+  }
+
+  results.push(
+    check(
+      "[Calendar Connections UI] 未対応のservice名はfail closedでundefined(=filterせず全件返す既定動作)へ落ちる、任意のservice名へAPIを広げない",
+      parseServiceFilter("google_drive") === undefined &&
+        parseServiceFilter("microsoft365") === undefined &&
+        parseServiceFilter("") === undefined
+    )
+  );
+
+  results.push(
+    check(
+      "[Calendar Connections UI] service query param省略時(null)もundefinedのまま(既存の既定動作を変えない)",
+      parseServiceFilter(null) === undefined
     )
   );
 

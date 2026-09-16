@@ -123,11 +123,56 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   results.push(
     check(
-      "[O] integrationCatalogはGmail/Slack/Notionのちょうど3 entryのみを持つ",
-      INTEGRATION_CATALOG.length === 3 &&
+      "[O] integrationCatalogはGmail/Slack/Notion/Google Calendarのちょうど4 entryのみを持つ",
+      INTEGRATION_CATALOG.length === 4 &&
         INTEGRATION_CATALOG.some((e) => e.service === "gmail") &&
         INTEGRATION_CATALOG.some((e) => e.service === "slack") &&
-        INTEGRATION_CATALOG.some((e) => e.service === "notion")
+        INTEGRATION_CATALOG.some((e) => e.service === "notion") &&
+        INTEGRATION_CATALOG.some((e) => e.service === "google_calendar")
+    )
+  );
+
+  // =========================
+  // P. TIME-P1c Calendar Connections UI: google_calendarのcatalog entry
+  // =========================
+
+  results.push(
+    check(
+      "[P] google_calendarのcatalog entryが存在し、有効(enabled:true)である",
+      INTEGRATION_CATALOG.some((e) => e.service === "google_calendar" && e.enabled === true)
+    )
+  );
+
+  results.push(
+    check(
+      "[P] google_calendarのdescriptionは「空き時間の確認」を主目的として述べ、書き込み系操作(作成/追加/編集/削除/招待)をTACTができることとして肯定的に主張しない——「行いません」等の明示的な否定を伴わずにそれらの語が現れることはない",
+      (() => {
+        const entry = INTEGRATION_CATALOG.find((e) => e.service === "google_calendar");
+
+        if (!entry) return false;
+
+        const impliesWriteCapability = /(作成|追加|編集|削除|招待)(します|できます|可能|する)/.test(entry.description);
+        const mentionsWriteActionWithNegation =
+          !/作成|追加|編集|削除|招待/.test(entry.description) ||
+          /(作成|追加|編集|削除|招待)[^。]*(行いません|しません|できません)/.test(entry.description);
+
+        return !impliesWriteCapability && mentionsWriteActionWithNegation && /空き|確認/.test(entry.description);
+      })()
+    )
+  );
+
+  results.push(
+    check(
+      "[P] aggregateConnectionStatus()はgoogle_calendarに対してもGmail/Slackと全く同じ汎用ロジックで動作する(service固有の分岐が無いことの回帰確認)",
+      aggregateConnectionStatus([{ service: "google_calendar", status: "active" }], "google_calendar") === "connected" &&
+        aggregateConnectionStatus([], "google_calendar") === "not_connected" &&
+        aggregateConnectionStatus(
+          [
+            { service: "gmail", status: "active" },
+            { service: "google_calendar", status: "pending" },
+          ],
+          "google_calendar"
+        ) === "connecting"
     )
   );
 
@@ -192,6 +237,24 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       "[絶対条件] ConnectionsPanel.tsxはproviderConnectionRef/connection.providerという実際のproperty accessを一切行わない(GET /api/tact/connectionsのsanitize済みresponse以上の情報を前提にしない。文言としての言及(コメント等)は対象外——実際に`.providerConnectionRef`/`.provider`とアクセスしているかだけを見る)",
       !/\.providerConnectionRef\b/.test(connectionsPanelSource) &&
         !/\.provider\b(?!ed|s\b)/.test(connectionsPanelSource)
+    )
+  );
+
+  // =========================
+  // Q. TIME-P1c Calendar Connections UI: このUI/API配線の変更が
+  // Calendar write操作を一切露出しないことのsource-level確認
+  // (絶対条件: event作成/変更/削除/招待を想起させるoperation名が
+  // Connections UI/APIのどこにも現れない)。
+  // =========================
+
+  const connectionsRouteSource = readRepoFile("app/api/tact/connections/route.ts");
+  const integrationCatalogSource = readRepoFile("components/tact/connections/integrationCatalog.ts");
+
+  results.push(
+    check(
+      "[Q] app/api/tact/connections/route.ts・integrationCatalog.tsのいずれにも、Calendar書き込み系operation名(create/update/delete/move/invite/rsvp event等)が一切現れない",
+      !/create_?event|update_?event|delete_?event|move_?event|invite|rsvp/i.test(connectionsRouteSource) &&
+        !/create_?event|update_?event|delete_?event|move_?event|invite|rsvp/i.test(integrationCatalogSource)
     )
   );
 
