@@ -10,7 +10,7 @@ import type { LucideIcon } from "lucide-react";
 import TactSidebarItem from "./TactSidebarItem";
 
 const DEFAULT_EXPANDED_WIDTH = 224;
-const MIN_EXPANDED_WIDTH = 200;
+const MIN_EXPANDED_WIDTH = 152;
 const MAX_EXPANDED_WIDTH = 360;
 const COLLAPSED_WIDTH = 64;
 const SIDEBAR_WIDTH_STORAGE_KEY = "tact.sidebar.width";
@@ -192,7 +192,7 @@ export default function TactSidebar({ activeItem, onSelect, userEmail, onSignOut
         </div>
         <div className="border-t border-[#D9D9D9] pt-2"><AccountArea collapsed={collapsed} userEmail={userEmail} onSignOut={onSignOut} /></div>
         {!collapsed && (
-          <div role="separator" tabIndex={0} aria-orientation="vertical" aria-label="サイドバーの幅を調整" aria-controls="tact-desktop-navigation" aria-valuemin={MIN_EXPANDED_WIDTH} aria-valuemax={MAX_EXPANDED_WIDTH} aria-valuenow={expandedWidth} aria-valuetext={`${expandedWidth}px`} onPointerDown={startResize} onKeyDown={resizeWithKeyboard} className="absolute inset-y-0 right-0 z-10 w-1 cursor-col-resize touch-none bg-transparent outline-none transition-[width,background-color] hover:w-1.5 hover:bg-[#18B5A6] focus:w-1.5 focus:bg-[#18B5A6]" />
+          <div role="separator" tabIndex={0} aria-orientation="vertical" aria-label="サイドバーの幅を調整" aria-controls="tact-desktop-navigation" aria-valuemin={MIN_EXPANDED_WIDTH} aria-valuemax={MAX_EXPANDED_WIDTH} aria-valuenow={expandedWidth} aria-valuetext={`${expandedWidth}px`} onPointerDown={startResize} onKeyDown={resizeWithKeyboard} className="absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none bg-transparent outline-none transition-[background-color] hover:bg-[#18B5A6] focus:bg-[#18B5A6]" />
         )}
       </aside>
 
