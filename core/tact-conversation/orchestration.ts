@@ -114,6 +114,7 @@ import type { ContextResolutionResult } from "../tact-context-resolution";
 import type {
   Conversation,
   ConversationMessage,
+  ConversationOrigin,
   ExecutionRecord,
   ExecutionCapability,
   ExecutionStatus,
@@ -723,6 +724,15 @@ export interface RunConversationTurnParams {
 
   content: string;
 
+  // TACT Conversation Origin Boundary: このTurnがどのSurfaceの
+  // Conversationを解決・作成しているかを表す、必須のserver-owned値。
+  // デフォルト値を持たない——呼び出し元(現状は
+  // core/tact-bot/execution/trustedConversationTurn.tsの
+  // runConversationTurnAsTrustedActor()のみ)が、自分自身のtrusted
+  // boundaryとしての立場から明示的に決定すること。外部Channelの
+  // messageやHTTP bodyの値をそのまま渡してはならない。
+  origin: ConversationOrigin;
+
   // 省略時は新規Conversationを作成する。
   conversationId?: string;
 
@@ -765,6 +775,7 @@ export async function runConversationTurn(
     userId,
     accessToken,
     content,
+    origin,
     conversationId,
     attachmentEvidence = [],
     workspaceEvidence = [],
@@ -787,10 +798,20 @@ export async function runConversationTurn(
     return { ok: false, error: "conversation_not_found" };
   }
 
+  // TACT Conversation Origin Boundary: 既存Conversationのoriginが、
+  // このTurnを呼んでいるtrusted boundary自身のoriginと一致しない場合は
+  // 「存在しない」と同じ扱いで拒否する(cross-surface access防止。
+  // 所有者不一致時と同じ安全側のfail closed、他userのconversationId
+  // 拒否と同じ精神)。originは作成時に一度だけ決まる不変値であり、
+  // このstore内では一切書き換えない。
+  if (conversation && conversation.origin !== origin) {
+    return { ok: false, error: "conversation_not_found" };
+  }
+
   if (!conversation) {
     conversation = await atConversationIntakeStage(
       "conversation_intake.conversation_create",
-      () => createConversation(userId, accessToken, deriveConversationTitle(content))
+      () => createConversation(userId, accessToken, origin, deriveConversationTitle(content))
     );
   }
 

@@ -5,6 +5,7 @@ import {
   ConversationMessage,
   ConversationMessageRole,
   ConversationMessageType,
+  ConversationOrigin,
   ExecutionRecord,
   ExecutionCapability,
   ExecutionStatus,
@@ -78,6 +79,7 @@ function createRequestScopedClient(accessToken: string) {
 export interface ConversationRow {
   id: string;
   user_id: string;
+  origin: ConversationOrigin;
   title: string | null;
   project_id: string | null;
   artifact_id: string | null;
@@ -128,6 +130,7 @@ export function toConversation(row: ConversationRow): Conversation {
   return {
     id: row.id,
     userId: row.user_id,
+    origin: row.origin,
     title: row.title,
     projectId: row.project_id,
     artifactId: row.artifact_id,
@@ -144,6 +147,7 @@ export function toConversationSummary(row: ConversationRow): ConversationSummary
 
   return {
     id: row.id,
+    origin: row.origin,
     title: row.title,
     projectId: row.project_id,
     createdAt: row.created_at,
@@ -180,7 +184,7 @@ export function toExecutionRecord(row: ExecutionRecordRow): ExecutionRecord {
 }
 
 const CONVERSATION_COLUMNS =
-  "id, user_id, title, project_id, artifact_id, work_id, created_at, updated_at, pending_clarification_message_id, pending_clarification_answered_at";
+  "id, user_id, origin, title, project_id, artifact_id, work_id, created_at, updated_at, pending_clarification_message_id, pending_clarification_answered_at";
 
 const MESSAGE_COLUMNS =
   "id, conversation_id, role, content, message_type, execution_record_id, created_at";
@@ -195,10 +199,20 @@ const EXECUTION_RECORD_COLUMNS =
 // Phase64のtact_conversations.user_idはNOT NULLのため(Phase62/63の
 // 判断通り、未認証フローとの互換を持たない)、accessToken/userIdは
 // いずれも必須。
+//
+// TACT Conversation Origin Boundary: originは必須の第3引数とし、
+// デフォルト値を持たない(呼び出し元がResearch/Core/Slackのどの
+// Surfaceから作っているかを、このstore層で暗黙に推測・代替しない)。
+// 呼び出し元(app/api/tact/tact-conversations/route.tsの各handler・
+// core/tact-conversation/orchestration.tsのrunConversationTurn())は、
+// 自分自身がどのserver-owned boundary経由で呼ばれているかを元に
+// originを明示的に決定してから渡すこと。クライアントが送ってきた値を
+// そのままoriginとして渡してはならない。
 
 export async function createConversation(
   userId: string,
   accessToken: string,
+  origin: ConversationOrigin,
   title?: string,
   projectId?: string | null
 ): Promise<Conversation> {
@@ -207,7 +221,7 @@ export async function createConversation(
 
   const { data, error } = await client
     .from("tact_conversations")
-    .insert({ user_id: userId, title: title ?? null, project_id: projectId ?? null })
+    .insert({ user_id: userId, origin, title: title ?? null, project_id: projectId ?? null })
     .select(CONVERSATION_COLUMNS)
     .single();
 
@@ -260,10 +274,17 @@ export async function getConversation(
 //
 // 並び順はupdated_at降順(既存のlistConversations()/listProjects()と
 // 同じ既存規約)。
+//
+// TACT Conversation Origin Boundary: originは必須引数であり、
+// 呼び出し元が「どのSurfaceの履歴を表示しようとしているか」を必ず
+// 明示する。省略不可にすることで、Research履歴がorigin絞り込みなしで
+// 全Surfaceのconversationを返してしまう(監査で確認したRoot Cause)
+// 経路を型レベルで塞ぐ。
 
 export async function listConversations(
   userId: string,
   accessToken: string,
+  origin: ConversationOrigin,
   limit: number = 30,
   projectId?: string | null
 ): Promise<ConversationSummary[]> {
@@ -273,7 +294,8 @@ export async function listConversations(
   let query = client
     .from("tact_conversations")
     .select(CONVERSATION_COLUMNS)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .eq("origin", origin);
 
   // Phase74: projectId省略時は全件(Chat History)、指定時はそのProject
   // (Folder)配下のみに絞り込む。nullを明示的に渡した場合は「未所属の

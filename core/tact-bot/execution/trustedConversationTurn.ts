@@ -89,6 +89,14 @@ export async function runConversationTurnAsTrustedActor(
     userId: params.tactUserId,
     accessToken: trustedExecutionCredential,
     content: params.content,
+    // TACT Conversation Origin Boundary: このTrusted Bot Execution
+    // Boundary自身が"slack"を決定する(外部Channelのmessage/payloadの
+    // どのfieldからも一切派生させない)。core/tact-bot/は現時点でSlack
+    // のみ実接続のため、この境界関数自体がSlack専用として配線されている
+    // (将来LINE/Teams等を接続する場合は、それぞれ専用のTrusted
+    // Execution Boundaryが自分自身のoriginを同じように決定する想定で
+    // あり、この関数にchannel分岐を追加するのではない)。
+    origin: "slack",
     conversationId: params.conversationId,
     attachmentEvidence: params.attachmentEvidence,
     workspaceEvidence: params.workspaceEvidence,
@@ -99,7 +107,10 @@ export async function runConversationTurnAsTrustedActor(
     // ・Work-specific business logicを持たない)。requestedByActorは
     // ここでも(Web同様)params.tactUserId——server-side identity
     // resolverが解決済みの値のみを使い、外部Channelのexternal actor
-    // idは一切使わない(BOT-P2.5から継続する絶対条件)。
+    // idは一切使わない(BOT-P2.5から継続する絶対条件)。この
+    // WorkIntakeSource("bot")とConversationOrigin("slack")は別軸の
+    // 概念であり、意図的に別々の値として渡す(TACT Conversation Origin
+    // Boundary監査結果、Section M/13参照)。
     source: "bot",
   });
 

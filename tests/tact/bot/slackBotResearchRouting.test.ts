@@ -267,7 +267,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
       return {
         ok: true,
-        conversation: { id: "fake-conv-research-1", userId: params.tactUserId, createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z" },
+        conversation: { id: "fake-conv-research-1", userId: params.tactUserId, origin: "slack", createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z" },
         userMessage: { id: "fake-user-msg-1", conversationId: "fake-conv-research-1", role: "user", content: params.content, createdAt: "2026-09-08T00:00:00.000Z" },
         message: { id: "fake-assistant-msg-1", conversationId: "fake-conv-research-1", role: "assistant", content: orchestrationResult.answer, createdAt: "2026-09-08T00:00:00.000Z" },
       };
@@ -353,7 +353,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
       return {
         ok: true,
-        conversation: { id: conversationId, userId: params.tactUserId, createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z" },
+        conversation: { id: conversationId, userId: params.tactUserId, origin: "slack", createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z" },
         userMessage: { id: `user-msg-${conversationId}`, conversationId, role: "user", content: params.content, createdAt: "2026-09-08T00:00:00.000Z" },
         message: { id: `assistant-msg-${conversationId}`, conversationId, role: "assistant", content: "ack", createdAt: "2026-09-08T00:00:00.000Z" },
       };

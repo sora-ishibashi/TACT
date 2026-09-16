@@ -32,6 +32,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const row: ConversationRow = {
       id: "conv-1",
       user_id: "user-1",
+      origin: "research",
       title: "test",
       project_id: null,
       artifact_id: null,
@@ -50,6 +51,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         conversation.id === "conv-1" &&
           conversation.userId === "user-1" &&
           conversation.title === "test"
+      )
+    );
+
+    results.push(
+      check(
+        "[TACT Conversation Origin Boundary] toConversation(): origin='research'がそのまま変換される",
+        conversation.origin === "research"
       )
     );
 
@@ -74,6 +82,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const row: ConversationRow = {
       id: "conv-2",
       user_id: "user-1",
+      origin: "slack",
       title: null,
       project_id: "proj-1",
       artifact_id: "art-1",
@@ -114,6 +123,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         conversation.workId === "work-1"
       )
     );
+
+    results.push(
+      check(
+        "[TACT Conversation Origin Boundary] toConversation(): origin='slack'(Bot経由)がそのまま変換される",
+        conversation.origin === "slack"
+      )
+    );
   }
 
   // ---- Test 3: toConversationSummary() — 一覧表示用の軽量変換 ----
@@ -121,6 +137,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const row: ConversationRow = {
       id: "conv-3",
       user_id: "user-1",
+      origin: "core",
       title: "会話タイトル",
       project_id: "proj-2",
       artifact_id: null,
@@ -142,6 +159,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           summary.createdAt === row.created_at &&
           summary.updatedAt === row.updated_at &&
           !("pendingClarificationMessageId" in summary)
+      )
+    );
+
+    results.push(
+      check(
+        "[TACT Conversation Origin Boundary] toConversationSummary(): origin='core'がそのまま変換される(Research履歴フィルタの根拠となる値)",
+        summary.origin === "core"
       )
     );
   }

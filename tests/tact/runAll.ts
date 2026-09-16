@@ -83,6 +83,7 @@ import { run as runClarificationResubmit } from "./orchestrator/clarificationRes
 import { run as runClarificationPersistence } from "./conversation/clarification.test";
 import { run as runTactConversationMapping } from "./conversation/tactConversationMapping.test";
 import { run as runTactConversationApi } from "./conversation/tactConversationApi.test";
+import { run as runConversationOriginBoundary } from "./conversation/conversationOriginBoundary.test";
 import { run as runTactConversationOrchestration } from "./conversation/tactConversationOrchestration.test";
 import { run as runWorkLinkRepair } from "./conversation/workLinkRepair.test";
 import { run as runIntegrationReadResult } from "./conversation/integrationReadResult.test";
@@ -254,6 +255,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "conversation/clarificationPersistence", run: runClarificationPersistence },
   { name: "conversation/tactConversationMapping", run: runTactConversationMapping },
   { name: "conversation/tactConversationApi", run: runTactConversationApi },
+  { name: "conversation/conversationOriginBoundary", run: runConversationOriginBoundary },
   { name: "conversation/tactConversationOrchestration", run: runTactConversationOrchestration },
   { name: "conversation/taskResumeExecution", run: runTaskResumeExecution },
   { name: "conversation/gmailReferentWorkflow", run: runGmailReferentWorkflow },

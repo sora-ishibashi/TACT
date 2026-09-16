@@ -63,6 +63,7 @@ function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
     id: "conv-1",
     userId: "tact-user-1",
+    origin: "slack",
     title: "SROIについて調べて",
     createdAt: "2026-08-30T00:00:00.000Z",
     updatedAt: "2026-08-30T00:00:00.000Z",

@@ -156,6 +156,7 @@ function makeRunTrustedTurnViaRealOrchestration(): (
       conversation: {
         id: "fake-conv-e2e-1",
         userId: params.tactUserId,
+        origin: "slack",
         createdAt: "2026-09-08T00:00:00.000Z",
         updatedAt: "2026-09-08T00:00:00.000Z",
       },
@@ -401,6 +402,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         conversation: {
           id: "fake-conv-bgfail-slack-1",
           userId: params.tactUserId,
+          origin: "slack",
           createdAt: "2026-09-08T00:00:00.000Z",
           updatedAt: "2026-09-08T00:00:00.000Z",
         },

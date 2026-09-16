@@ -31,6 +31,7 @@ function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
     id: "conv-1",
     userId: "user-1",
+    origin: "research",
     createdAt: "2026-09-07T00:00:00.000Z",
     updatedAt: "2026-09-07T00:00:00.000Z",
     ...overrides,

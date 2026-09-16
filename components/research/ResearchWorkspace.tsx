@@ -981,7 +981,7 @@ export default function ResearchWorkspace() {
           fetch("/api/tact/projects", {
             headers: { Authorization: `Bearer ${accessToken}` },
           }),
-          fetch("/api/tact/tact-conversations?limit=50", {
+          fetch("/api/tact/research/conversations?limit=50", {
             headers: { Authorization: `Bearer ${accessToken}` },
           }),
         ]);
@@ -1045,7 +1045,7 @@ export default function ResearchWorkspace() {
       const qs = projectId ? `&projectId=${projectId}` : "";
 
       const response = await fetch(
-        `/api/tact/tact-conversations?limit=50${qs}`,
+        `/api/tact/research/conversations?limit=50${qs}`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
 
@@ -1380,7 +1380,7 @@ export default function ResearchWorkspace() {
 
     try {
 
-      const response = await fetch("/api/tact/tact-conversations", {
+      const response = await fetch("/api/tact/research/conversations", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

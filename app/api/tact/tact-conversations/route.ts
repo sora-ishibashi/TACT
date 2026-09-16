@@ -6,6 +6,7 @@ import {
   listConversations,
   runConversationOrchestration,
 } from "@/core/tact-conversation";
+import type { ConversationOrigin } from "@/core/tact-conversation";
 
 import { getProject } from "@/core/tact-project/store";
 
@@ -44,6 +45,24 @@ import type { LocalWorkspaceEvidence } from "@/core/tact-context-source/localWor
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// =========================
+// TACT Conversation Origin Boundary
+// =========================
+//
+// このRoute自体はCoreタブ(components/tact/ConversationSection.tsx)専用
+// の"core"固定originで配線する(既存URL・既存挙動を変更しない——Coreは
+// これまでもorigin概念を持たずこのRouteのみを使っていたため、"core"へ
+// 固定しても既存挙動は変わらない)。Research(components/research/
+// ResearchWorkspace.tsx)は別の専用Route(app/api/tact/research/
+// conversations/route.ts)からhandleListConversations()/
+// handleConversationTurn()を"research"付きで呼ぶ。
+//
+// origin自体はいずれのRouteもrequest body/query stringから読み取らない
+// (どちらの値もこのファイル内でリテラルとして決め打ちする)——「任意の
+// クライアント入力でoriginを詐称できる」設計を避けるため、Section12の
+// 方針通りRoute自体(=どちらのURLが呼ばれたか、サーバー側routing
+// tableが決める事実)がorigin決定の唯一の根拠になる。
+
 // query:
 // {
 //   limit?: number,
@@ -53,8 +72,9 @@ const UUID_PATTERN =
 //     のprojectId未指定/null分岐、store.ts参照)。
 // }
 
-export async function GET(
-  request: NextRequest
+export async function handleListConversations(
+  request: NextRequest,
+  origin: ConversationOrigin
 ) {
 
   try {
@@ -107,6 +127,7 @@ export async function GET(
     const conversations = await listConversations(
       authenticatedUserId,
       accessToken,
+      origin,
       Number.isFinite(parsedLimit) && parsedLimit > 0
         ? parsedLimit
         : undefined,
@@ -134,6 +155,10 @@ export async function GET(
 
   }
 
+}
+
+export async function GET(request: NextRequest) {
+  return handleListConversations(request, "core");
 }
 
 // body:
@@ -241,8 +266,9 @@ export function parseTurnRequestBody(body: unknown): ParsedTurnRequestBody {
 
 }
 
-export async function POST(
-  request: NextRequest
+export async function handleConversationTurn(
+  request: NextRequest,
+  origin: ConversationOrigin
 ) {
 
   try {
@@ -320,6 +346,24 @@ export async function POST(
 
     }
 
+    // TACT Conversation Origin Boundary: 既存Conversationのoriginが、
+    // このRoute自身のorigin(Core固定 or Research固定)と一致しない
+    // 場合は、他Userのconversationidを指定した場合と同じ「存在しない」
+    // 扱いで拒否する(cross-surface access防止、fail closed)。
+    if (conversation && conversation.origin !== origin) {
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: "conversation not found",
+        },
+        {
+          status: 404,
+        }
+      );
+
+    }
+
     if (!conversation) {
 
       // Phase74: projectIdは新規Conversation作成時のみ受け付ける
@@ -365,6 +409,7 @@ export async function POST(
       conversation = await createConversation(
         authenticatedUserId,
         accessToken,
+        origin,
         derivedTitle,
         projectId
       );
@@ -419,4 +464,8 @@ export async function POST(
 
   }
 
+}
+
+export async function POST(request: NextRequest) {
+  return handleConversationTurn(request, "core");
 }

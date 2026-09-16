@@ -16,11 +16,42 @@
 // 別テーブルであり、それぞれ独立したCRUD関数で取得・追加する
 // (Section「Function Contract」参照)。
 
+// =========================
+// ConversationOrigin (TACT Conversation Origin Boundary)
+// =========================
+//
+// Conversationが作られたSurfaceを表す不変(作成時に一度だけ決まる)の
+// canonical値。tact_bot_conversation_links.channel/
+// tact_external_identities.providerが既にline/teams/discordを
+// 未実装のまま先行宣言している既存conventionに合わせ、現在実装済みの
+// "research"/"core"/"slack"以外に、将来のSurface候補も型として
+// 先行宣言する(値そのものを実際に書き込むcreateConversation()呼び出し
+// 元は現時点でresearch/core/slackの3つのみ)。
+//
+// 絶対条件: originはserver-side boundary(API route/Trusted Bot
+// Execution Boundary)が決定する値であり、クライアントが指定した値を
+// そのまま信用してはならない(supabase/migrations/
+// 20261012000000_add_origin_to_tact_conversations.sqlのCHECK制約と
+// 同じ許容値)。
+export type ConversationOrigin =
+  | "research"
+  | "core"
+  | "slack"
+  | "line"
+  | "teams"
+  | "api"
+  | "web"
+  | "system";
+
 export interface Conversation {
 
   id: string;
 
   userId: string;
+
+  // このConversationがどのSurfaceから作られたか(不変、作成後に
+  // 変更されない)。Research履歴・Core履歴のフィルタ境界そのもの。
+  origin: ConversationOrigin;
 
   title?: string | null;
 
@@ -68,6 +99,10 @@ export interface Conversation {
 export interface ConversationSummary {
 
   id: string;
+
+  // 一覧表示自体がorigin境界そのもの(Research履歴/Core履歴の
+  // フィルタ結果)であるため、Summaryにも保持する。
+  origin: ConversationOrigin;
 
   title?: string | null;
 
