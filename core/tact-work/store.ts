@@ -14,6 +14,10 @@ import type {
   Clarification,
   ClarificationStatus,
   ClarificationReasonCode,
+  ExternalEvent,
+  ExternalEventStatus,
+  EventWait,
+  EventWaitStatus,
   AuditEvent,
   AuditEventCategory,
   AuditEventType,
@@ -223,6 +227,37 @@ export interface ClarificationRow {
   candidate_snapshot_hash: string | null;
 }
 
+// EVENT-P1a: Canonical ExternalEvent + EventWait Model。
+// supabase/migrations/20261015000000_create_tact_event_model.sqlの
+// 2 tableにそのまま対応する。
+export interface ExternalEventRow {
+  id: string;
+  user_id: string;
+  source: string;
+  event_type: string;
+  external_event_id: string;
+  subject_ref: string;
+  occurred_at: string | null;
+  received_at: string;
+  normalized_payload: Record<string, unknown>;
+  status: ExternalEventStatus;
+  created_at: string;
+}
+
+export interface EventWaitRow {
+  id: string;
+  user_id: string;
+  work_id: string;
+  task_id: string;
+  expected_source: string;
+  expected_event_type: string;
+  subject_ref: string;
+  status: EventWaitStatus;
+  created_at: string;
+  expires_at: string | null;
+  claimed_by_event_id: string | null;
+}
+
 // Fast Port P4a: Append-Only Audit Event Foundation。current-state
 // tableとは独立したevent log(絶対条件3)。
 export interface AuditEventRow {
@@ -404,6 +439,42 @@ export function toClarification(row: ClarificationRow): Clarification {
 
 }
 
+export function toExternalEvent(row: ExternalEventRow): ExternalEvent {
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    source: row.source,
+    eventType: row.event_type,
+    externalEventId: row.external_event_id,
+    subjectRef: row.subject_ref,
+    occurredAt: row.occurred_at,
+    receivedAt: row.received_at,
+    normalizedPayload: row.normalized_payload,
+    status: row.status,
+    createdAt: row.created_at,
+  };
+
+}
+
+export function toEventWait(row: EventWaitRow): EventWait {
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    workId: row.work_id,
+    taskId: row.task_id,
+    expectedSource: row.expected_source,
+    expectedEventType: row.expected_event_type,
+    subjectRef: row.subject_ref,
+    status: row.status,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    claimedByEventId: row.claimed_by_event_id,
+  };
+
+}
+
 export function toAuditEvent(row: AuditEventRow): AuditEvent {
 
   return {
@@ -445,6 +516,13 @@ const APPROVAL_COLUMNS =
 
 const CLARIFICATION_COLUMNS =
   "id, work_id, task_id, requested_by_actor_kind, requested_by_actor_id, allowed_responder_ids, status, reason_code, question, response, responded_by_actor_kind, responded_by_actor_id, requested_at, responded_at, expires_at, created_at, candidate_snapshot, candidate_snapshot_hash";
+
+// EVENT-P1a
+const EXTERNAL_EVENT_COLUMNS =
+  "id, user_id, source, event_type, external_event_id, subject_ref, occurred_at, received_at, normalized_payload, status, created_at";
+
+const EVENT_WAIT_COLUMNS =
+  "id, user_id, work_id, task_id, expected_source, expected_event_type, subject_ref, status, created_at, expires_at, claimed_by_event_id";
 
 const AUDIT_EVENT_COLUMNS =
   "id, work_id, task_id, run_id, approval_id, clarification_id, category, event_type, actor_kind, actor_id, reason_code, details, sequence, occurred_at, created_at";
@@ -1803,6 +1881,207 @@ export async function listClarificationsForWork(
   }
 
   return (data ?? []).map((row) => toClarification(row as ClarificationRow));
+
+}
+
+// =========================
+// ExternalEvent / EventWait (EVENT-P1a: Canonical Event + Wait Model)
+// =========================
+//
+// EVENT-P1a指示Section14絶対条件: このfileはraw row-level CRUDのみを
+// 持つ(createExternalEvent/getExternalEvent/createEventWait/
+// getEventWait/listPendingEventWaits)。claimEventWait()/
+// matchExternalEvent()/resumeWorkFromEvent()はEVENT-P1b/cのscopeであり、
+// このcommitには一切含めない。
+//
+// ExternalEventはtact_worksと同じtop-level user-owned entity
+// (Section9「ExternalEvent storage must NOT require an EventWait to
+// exist」——Work/TaskへのFKを持たないため、WorkOwnershipDepsは使わず
+// userId + accessTokenのみで動作する、createWork()/getWork()と同じ形)。
+
+export interface CreateExternalEventParams {
+  userId: string;
+  source: string;
+  eventType: string;
+  externalEventId: string;
+  subjectRef: string;
+  occurredAt?: string | null;
+  normalizedPayload?: Record<string, unknown>;
+}
+
+export async function createExternalEvent(
+  params: CreateExternalEventParams,
+  accessToken: string
+): Promise<ExternalEvent> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_external_events")
+    .insert({
+      user_id: params.userId,
+      source: params.source,
+      event_type: params.eventType,
+      external_event_id: params.externalEventId,
+      subject_ref: params.subjectRef,
+      occurred_at: params.occurredAt ?? null,
+      normalized_payload: params.normalizedPayload ?? {},
+    })
+    .select(EXTERNAL_EVENT_COLUMNS)
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return toExternalEvent(data as ExternalEventRow);
+
+}
+
+// 所有者不一致・存在しない場合のいずれもundefinedを返す(getWork()と
+// 同じ規約)。
+export async function getExternalEvent(
+  userId: string,
+  accessToken: string,
+  externalEventId: string
+): Promise<ExternalEvent | undefined> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_external_events")
+    .select(EXTERNAL_EVENT_COLUMNS)
+    .eq("id", externalEventId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    return undefined;
+  }
+
+  return toExternalEvent(data as ExternalEventRow);
+
+}
+
+// EventWaitはApproval/Clarificationと同じくWork/Taskの子entityのため、
+// 同じWorkOwnershipDeps DI seamを使う(userIdは呼び出し元から渡された
+// 値をそのまま列へ書き込むのではなく、常にdeps.getWork()が返した
+// 検証済みWorkのuserIdと同一——このparams.userIdはgetWork()自体への
+// 入力としてのみ使われ、client供給値が親Workのuser_idと乖離する経路は
+// 存在しない)。
+
+export interface CreateEventWaitParams {
+  taskId: string;
+  expectedSource: string;
+  expectedEventType: string;
+  subjectRef: string;
+  expiresAt?: string | null;
+}
+
+export async function createEventWait(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  params: CreateEventWaitParams,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<EventWait | undefined> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return undefined;
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_event_waits")
+    .insert({
+      user_id: userId,
+      work_id: workId,
+      task_id: params.taskId,
+      expected_source: params.expectedSource,
+      expected_event_type: params.expectedEventType,
+      subject_ref: params.subjectRef,
+      expires_at: params.expiresAt ?? null,
+    })
+    .select(EVENT_WAIT_COLUMNS)
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return toEventWait(data as EventWaitRow);
+
+}
+
+export async function getEventWait(
+  workId: string,
+  userId: string,
+  accessToken: string,
+  eventWaitId: string,
+  deps: WorkOwnershipDeps = { getWork }
+): Promise<EventWait | undefined> {
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return undefined;
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_event_waits")
+    .select(EVENT_WAIT_COLUMNS)
+    .eq("id", eventWaitId)
+    .eq("work_id", workId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    return undefined;
+  }
+
+  return toEventWait(data as EventWaitRow);
+
+}
+
+// EVENT-P1a時点でこの関数を呼ぶproducerは存在しない(EVENT-P1c、
+// matching実行が実装されて初めて使われる)。Section6のdeterministic
+// matching contractがlookupする形をそのまま反映した、read-onlyな
+// listing関数として先行して用意する(claimEventWait()自体はここには
+// 実装しない、Section14絶対条件)。他user・他Workの行を一切含まない
+// (userIdによる直接絞り込み、Work横断で自分のuserId配下のpending wait
+// を全て見る用途を想定——特定のWork一つに絞る場合は呼び出し元が
+// 返り値をworkIdでfilterする)。
+export async function listPendingEventWaits(
+  userId: string,
+  accessToken: string
+): Promise<EventWait[]> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_event_waits")
+    .select(EVENT_WAIT_COLUMNS)
+    .eq("user_id", userId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((row) => toEventWait(row as EventWaitRow));
 
 }
 

@@ -336,8 +336,25 @@ export function isRetryableIntegrationFailure(
 // ため、"waiting_for_retry"も"pending"/"running"と同じく「まだ最終
 // 結果が確定していない、Runの実体を優先して信用すべき状態」として
 // 扱う——後述の各分岐参照。
+//
+// EVENT-P1a: taskStatusの型に"waiting_for_event"を追加した(TaskStatus
+// union全体を受け取れるようにする、型レベルのみの変更)。この関数の
+// 分岐ロジック自体は一切変更しない——"waiting_for_event"は
+// running/pending/waiting_for_retryのいずれとも一致しないため、
+// 常にno_drift(修復対象外)へfall throughする。これは意図的な設計:
+// EventWaitのmatching/claim/resume実行はEVENT-P1b/cのscopeであり、
+// 「waiting_for_eventなTaskの直近Runがcompleted/failedである」ことを
+// もってTask.statusを自動的に書き戻す判断は、このphaseでは一切行わない
+// (絶対条件、Section7「Do NOT implement automatic resume yet」)。
 export function evaluateStrandedTaskProjection(
-  taskStatus: "pending" | "running" | "waiting_for_retry" | "completed" | "failed" | "cancelled",
+  taskStatus:
+    | "pending"
+    | "running"
+    | "waiting_for_retry"
+    | "waiting_for_event"
+    | "completed"
+    | "failed"
+    | "cancelled",
   runs: Run[]
 ): StrandedTaskProjectionOutcome {
 

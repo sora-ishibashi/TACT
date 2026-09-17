@@ -264,10 +264,16 @@ export interface Work {
 // 意味しない——scheduler/timer/cronはこのphaseでは一切追加しない
 // (WHENの判断はTIME-P1へ委譲、RUNS-P1bはWHETHER(retryが意味論的に
 // 許されるか)だけを扱う)。
+// EVENT-P1a: "waiting_for_event"は、EventWait.status="pending"な行が
+// 存在することのlifecycle projectionである(このfile末尾のExternalEvent
+// /EventWaitセクション参照)。"waiting_for_retry"と同様、非terminalで
+// あり、自動的にresumeされることを意味しない——matching/claim/resumeの
+// いずれもEVENT-P1a時点では一切実装しない(EVENT-P1b/c以降のscope)。
 export type TaskStatus =
   | "pending"
   | "running"
   | "waiting_for_retry"
+  | "waiting_for_event"
   | "completed"
   | "failed"
   | "cancelled";
@@ -276,6 +282,7 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
   "pending",
   "running",
   "waiting_for_retry",
+  "waiting_for_event",
   "completed",
   "failed",
   "cancelled",
@@ -654,6 +661,168 @@ export interface Clarification {
   candidateSnapshot?: readonly CandidateSnapshotEntry[] | null;
 
   candidateSnapshotHash?: string | null;
+
+}
+
+// =========================
+// ExternalEvent / EventWait (EVENT-P1a: Canonical Event + Wait Model)
+// =========================
+//
+// docs/architecture/tact-runs-boundary.md §8・
+// docs/architecture/p2-p5-final-architecture.md §9/§28で確立した設計
+// 原則(Approval/Clarificationは共通base typeを持たない独立entity、
+// "resolved ≠ resumed"、RunStatusに"waiting"を追加しない)をそのまま
+// 継承する第4の独立したwaiting mechanismとして追加する。
+//
+// EVENT-P1a時点で「しない」こと(絶対条件、Architecture Auditの
+// スコープ通り):
+//   - webhook route / provider固有のingestion実装
+//   - matching実行(deterministic matchはEVENT-P1cのscope、ここでは
+//     「何と何を比較すれば良いか」という型の形だけを確定させる)
+//   - wait claim / automatic resume
+//   - Runへの新しい状態("waiting")の追加(RunStatusは無変更)
+//
+// Task.status="waiting_for_event"とEventWait.status="pending"の関係
+// (Architecture Decision、Section1):
+//   Task.statusはlifecycle上のprojection(「今このTaskは何をしている
+//   最中か」を一目で判定できる値)であり、EventWaitがcanonicalな
+//   waiting-condition record(「何を・どう識別して・いつまで待つか」)
+//   のsource of truthである。この関係は、Approval/ClarificationにおいてWork.status
+//   がprojectionでApproval/Clarification tableがsource of truthである
+//   のと対称的な設計(ただしEVENT-P1では既存のWork.statusを再利用せず、
+//   Task.statusに新しい値を追加する——Approval/Clarificationは複数Task
+//   にまたがりうるWork全体のwaitを表現する一方、EventWaitは常に単一の
+//   Task/Workに1:1で属する、Section4「The wait belongs to one canonical
+//   Task and Work」)。
+
+export type ExternalEventStatus =
+  | "received"
+  | "matched"
+  | "unmatched"
+  | "expired"
+  | "invalid";
+
+export const EXTERNAL_EVENT_STATUSES: readonly ExternalEventStatus[] = [
+  "received",
+  "matched",
+  "unmatched",
+  "expired",
+  "invalid",
+];
+
+// ExternalEvent = 「TACTの外部から届いた、正規化済みの1件の出来事」。
+// EVENT-P1a時点ではproducerが存在しない(webhook route未実装、
+// Section17絶対条件)ため、このfileはCanonical Model・Store層のみを
+// 定義する。
+//
+// tact_worksのようなtop-level user-owned entityとして設計する
+// (Approval/Clarificationのように親Work経由のEXISTS句でownershipを
+// 判定しない)。理由(Section9、Event-Before-Wait Durability):
+// ExternalEventは対応するEventWait(ひいてはWork/Task)がまだ存在しない
+// 時点でも永続化できなければならない——そのため、Work/Taskへの
+// NOT NULL FKを持たず、userIdを直接列として持つ。
+export interface ExternalEvent {
+
+  id: string;
+
+  userId: string;
+
+  // Provider識別子。Run.provider(Architecture Migration Phase C1で
+  // LLM専用unionからstringへ拡張済み)と同じ設計方針——将来のProvider
+  // 追加のたびに型定義を変更する必要がないよう、closed unionにしない。
+  source: string;
+
+  // Provider定義のevent種別(例: "message.received",
+  // "approval.decision")。sourceと同じ理由でstring。
+  eventType: string;
+
+  // Providerが払い出した、そのevent配信自体のID(dedupeの主要な材料の
+  // 1つ、Section3)。
+  externalEventId: string;
+
+  // Deterministic matching(Section6)の対象となる、canonicalな相関
+  // 識別子(例: Slack thread ID、Gmail message/thread ID、Notion page
+  // ID)。EVENT-P1aは値の形をprovider横断で強制しない(provider固有の
+  // 正規化はEVENT-P1bのIngestion層の責務)。
+  subjectRef: string;
+
+  // Providerが報告した実際の発生時刻。提供されない場合はnull
+  // (絶対条件: 受信時刻で代用して推測しない)。
+  occurredAt?: string | null;
+
+  receivedAt: string;
+
+  // 最小限のJSONのみ(絶対条件2: 生のprovider payloadをそのまま保持
+  // しない、provider credential/authorizationデータを含めない)。
+  // Approval.payloadと同じ"Record<string, unknown>"を再利用する
+  // (新しいpayload語彙を増やさない)。
+  normalizedPayload: Record<string, unknown>;
+
+  status: ExternalEventStatus;
+
+  createdAt: string;
+
+}
+
+export type EventWaitStatus = "pending" | "claimed" | "expired" | "cancelled";
+
+export const EVENT_WAIT_STATUSES: readonly EventWaitStatus[] = [
+  "pending",
+  "claimed",
+  "expired",
+  "cancelled",
+];
+
+// EventWait = 「あるTaskが、どのExternalEventを待っているか」という
+// canonical waiting-condition record。Approval/Clarificationと同じく、
+// 親Work経由でownershipを判定できる子entityだが(Section5)、将来の
+// 直接lookup(user/source/eventType/subjectRef、Section6)を素朴な
+// EXISTS結合無しで行えるよう、userIdを非正規化して直接持つ
+// (ARCH-R2 Section5がtact_runs.work_idをtask_id経由でも辿れるのに
+// 意図的に非正規化しているのと同じ理由)。Store層はこのuserIdを
+// 呼び出し元から無条件に信用せず、常に検証済みのWork ownership
+// (WorkOwnershipDeps.getWork())から複製する——client供給値と
+// 親Workのuser_idが乖離することは構造的に起こらない。
+export interface EventWait {
+
+  id: string;
+
+  userId: string;
+
+  workId: string;
+
+  // ApprovalCase/Clarificationのtask_idはoptional(Work全体に対する
+  // waitでありうる)だが、EventWaitは常に単一のTaskに1:1で属する
+  // (Section4「The wait belongs to one canonical Task and Work」)。
+  taskId: string;
+
+  expectedSource: string;
+
+  expectedEventType: string;
+
+  // Section6のdeterministic matching contract:
+  //   event.userId == wait.userId
+  //   && event.source == wait.expectedSource
+  //   && event.eventType == wait.expectedEventType
+  //   && event.subjectRef == wait.subjectRef
+  // ここにfuzzy/LLMによる比較の余地は無い(絶対条件、content-based
+  // matching禁止)。
+  subjectRef: string;
+
+  status: EventWaitStatus;
+
+  createdAt: string;
+
+  // Task.waitUntil(TIME-P1a)と同じ「gateであり、authorizeではない」
+  // 意味論——期限超過を自動検出・自動失効させるscheduler/cronはこの
+  // phaseでは一切実装しない(絶対条件、Section10で明示的に
+  // "not implement yet"とされたobservability/自動遷移と同じ理由)。
+  expiresAt?: string | null;
+
+  // claim成立時(EVENT-P1c)にのみ設定される、claimしたExternalEventへの
+  // 参照。EVENT-P1a時点でこの列を書き込むproducerは存在しない
+  // (createEventWait()は常にnullのまま挿入する)。
+  claimedByEventId?: string | null;
 
 }
 

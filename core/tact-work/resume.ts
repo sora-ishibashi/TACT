@@ -84,11 +84,17 @@ import { isWaitUntilSatisfied } from "./temporal";
 // させる(下記TaskResumeBlockedReasonCode/TaskResumeTerminalReasonCode
 // と共通の語彙を持たせない)。Trigger.dev固有のreason(Waitpoint等)は
 // 一切含めない。
+// EVENT-P1a: "external_event_matched"を型としてのみ追加する
+// (compile-safeな拡張、Architecture Audit Section11)。このphaseでは
+// 一切のcallerがこの値を生成・消費しない——EventWaitのclaim/matching
+// 実行(EVENT-P1c)が実装されて初めて、requestTaskResume()の呼び出し元
+// がreasonとして渡すようになる。
 export type TaskResumeTriggerReason =
   | "approval_resolved"
   | "clarification_resolved"
   | "manual_resume"
-  | "runtime_recovered";
+  | "runtime_recovered"
+  | "external_event_matched";
 
 // =========================
 // Step2 — Canonical Resume Eligibility
