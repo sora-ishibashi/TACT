@@ -5,12 +5,18 @@ import {
   receiveSlackBotMessageAsTrustedActor,
   receiveSlackBotApprovalDecisionAsTrustedActor,
   executeSlackBotActions,
+  slackTrustedBotIdentityResolver,
   type ReceiveSlackBotApprovalDecisionResult,
 } from "./productionBotCore";
+import type { BotIdentityResolver } from "../../identity/resolver";
 import {
   claimExternalEvent as defaultClaimExternalEvent,
   type ClaimExternalEventResult,
 } from "../../eventDedup/supabaseEventDedupStore";
+import {
+  ingestTrustedExternalEvent as defaultIngestTrustedExternalEvent,
+  continueTrustedExternalEventArrival as defaultContinueTrustedExternalEventArrival,
+} from "../../execution/trustedExternalEventIngest";
 import { getSlackSigningSecret } from "./config";
 import { verifySlackRequest } from "./verifySlackSignature";
 import {
@@ -113,6 +119,23 @@ export interface HandleSlackWebhookRequestDeps {
   // 経由、絶対条件Section8)。
   executeBotActions: (actions: BotAction[]) => Promise<BotActionDeliveryResult[]>;
 
+  // EVENT-P1d Phase4: 既存supabaseBotIdentityResolver(BOT-P2)をそのまま
+  // 再利用する(独自のSlack identity解決を作らない)。
+  // receiveSlackBotApprovalDecisionAsTrustedActor()内部の解決とは独立
+  // した、この境界専用の(冪等な)2回目の解決。retrieveConversationContext
+  // と同じくoptional DI(既存test/呼び出し元のobject literalを壊さない
+  // ため、省略時はdefaultDepsへfallbackする)。
+  identityResolver?: BotIdentityResolver;
+
+  // EVENT-P1d Phase6: pre-ACK同期実行(durable canonical ExternalEvent
+  // ingest)。mapped userのみに対して行う——unmapped actorはExternalEvent
+  // を一切作らない(絶対条件)。
+  ingestTrustedExternalEvent?: typeof defaultIngestTrustedExternalEvent;
+
+  // EVENT-P1d Phase6: post-ACK background実行(EventWait match + 既存
+  // canonical resume seam)。
+  continueTrustedExternalEventArrival?: typeof defaultContinueTrustedExternalEventArrival;
+
   // 絶対条件(Section20): normal app_mentionはACKを先に返す。
   scheduleBackgroundWork: (task: () => Promise<void>) => void;
 
@@ -161,6 +184,16 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
   // S1c: ./productionBotCore.tsのexecuteSlackBotActions()(実
   // core/tact-bot/gateway/executeBotActions.ts + SlackChannelAdapter)。
   executeBotActions: executeSlackBotActions,
+
+  // EVENT-P1d Phase4: ./productionBotCore.tsのslackTrustedBotIdentityResolver
+  // (= supabaseBotIdentityResolver)をそのまま再利用する。
+  identityResolver: slackTrustedBotIdentityResolver,
+
+  // EVENT-P1d Phase3: ../../execution/trustedExternalEventIngest.tsの
+  // 2つのcanonical entry point。
+  ingestTrustedExternalEvent: defaultIngestTrustedExternalEvent,
+
+  continueTrustedExternalEventArrival: defaultContinueTrustedExternalEventArrival,
 
   scheduleBackgroundWork: (task) => {
     after(task);
@@ -400,6 +433,86 @@ export async function handleSlackWebhookRequest(
   // the context retrieval boundary.
   const contextTrigger = toSlackContextTrigger(event, message);
 
+  // EVENT-P1d Phase4/6(絶対条件、ACK前・同期): Slack identity →
+  // trusted TACT user resolution。message.organizationId(Slack
+  // team_id)が無ければ(理論上到達しない防御的分岐)ExternalEvent側は
+  // 一切試みない。receiveSlackBotMessageAsTrustedActor()内部の解決とは
+  // 独立した2回目の呼び出しだが、同じresolver・同じexternal actorに
+  // 対する決定論的な解決のため冪等で安全
+  // (receiveSlackBotApprovalDecisionAsTrustedActor()と同じ既存
+  // precedent)。Unmapped actorはExternalEventを作らず、fallback user
+  // も発明しない——通常のBot会話処理(下のscheduleBackgroundWork内)は
+  // このidentity解決結果に関係なく既存契約のまま続行する。
+  const identityResolver = deps.identityResolver ?? defaultDeps.identityResolver!;
+  const identity = message.organizationId
+    ? await identityResolver.resolve(message.actor, message.channel, message.organizationId)
+    : null;
+
+  // subjectRef(Section「deterministic subjectRef」): 既に正規化済みの
+  // BotIncomingMessage値だけを使い、thread規約を独自に再導出しない。
+  const eventSubjectRef = identity
+    ? `${message.organizationId}:${message.conversation.externalConversationId}:${message.conversation.threadId}`
+    : undefined;
+
+  let externalEventReady = false;
+
+  if (identity && eventSubjectRef) {
+
+    // Slack event.ts("<seconds>.<microseconds>")をISO 8601へ変換する。
+    const parsedTs = Number(event.ts);
+    const occurredAt = Number.isFinite(parsedTs) ? new Date(parsedTs * 1000).toISOString() : null;
+
+    // Section「normalizedPayload is an explicit allowlist」: raw Slack
+    // webhook body・署名・signing secret・bot token・service role key・
+    // 未フィルタのpayload・text由来のauthorization意味のいずれも含めない。
+    const ingestTrustedExternalEvent = deps.ingestTrustedExternalEvent ?? defaultDeps.ingestTrustedExternalEvent!;
+
+    const ingestResult = await ingestTrustedExternalEvent({
+      tactUserId: identity.tactUserId,
+      source: "slack",
+      eventType: "app_mention",
+      externalEventId,
+      subjectRef: eventSubjectRef,
+      occurredAt,
+      normalizedPayload: {
+        teamId: message.organizationId,
+        channelId: message.conversation.externalConversationId,
+        threadId: message.conversation.threadId,
+        messageRef: message.messageId,
+        actorExternalUserId: message.actor.externalUserId,
+        text: message.text,
+        providerEventType: "app_mention",
+        providerTimestamp: event.ts,
+      },
+    });
+
+    if (!ingestResult.ok || ingestResult.outcome.status === "event_persistence_failed") {
+      // CRITICAL(絶対条件、最重要): mapped userに対して必須のdurable
+      // ExternalEvent受領がここで確定できなかった場合、成功ACKを返さ
+      // ない——Slackの自然な再送(retry)へ委ねる。event_persistence_
+      // failedはtransientなDB障害、!ok(trusted_execution_not_configured)
+      // はservice role key未設定という設定不備であり、どちらも「この
+      // 配信が永続化されないままACKされる」ことを防ぐ必要がある点で
+      // 同じ扱いとする。
+      return { status: 500, body: { error: "event_ingest_unavailable" } };
+    }
+
+    externalEventReady =
+      ingestResult.outcome.status === "event_received" ||
+      ingestResult.outcome.status === "event_duplicate";
+
+    if (!externalEventReady) {
+      // event_invalid/event_wrong_owner/event_duplicate_conflict:
+      // 非transientな構造的不整合であり、5xxで再送させても解消しない
+      // ——固定文言のみをログし、通常のBot会話処理は継続する
+      // (EVENT側のmatch/resumeだけをskipする)。
+      console.error("[tact-bot] Slack trusted ExternalEvent ingest rejected", {
+        status: ingestResult.outcome.status,
+      });
+    }
+
+  }
+
   // 絶対条件(Section19/20): Research/Conversation/Slack outbound完了を
   // 待たずにACKを返す。background pipelineはTrusted Bot Message受信
   // →BotAction[]取得→Slack outbound配送(executeBotActions()、既存
@@ -414,6 +527,37 @@ export async function handleSlackWebhookRequest(
   // ログに出さない、固定文言だけを記録する(過剰なerror infrastructure
   // は作らない、絶対条件Section21)。
   deps.scheduleBackgroundWork(async () => {
+
+    // EVENT-P1d Phase6(順序11、既存Bot会話処理より前): 独立した
+    // try/catchで包み、EVENT match/resumeの失敗がBot会話処理(下)を
+    // 抑制せず、逆にBot会話処理側の失敗もこちらへ波及しないようにする
+    // (絶対条件: 「one failure must not accidentally suppress the
+    // other」)。identity未解決、またはpre-ACK durable ingestが
+    // externalEventReadyに至らなかった場合は一切呼ばない。
+    if (identity && eventSubjectRef && externalEventReady) {
+
+      try {
+
+        const continueTrustedExternalEventArrival =
+          deps.continueTrustedExternalEventArrival ?? defaultDeps.continueTrustedExternalEventArrival!;
+
+        await continueTrustedExternalEventArrival({
+          tactUserId: identity.tactUserId,
+          source: "slack",
+          eventType: "app_mention",
+          externalEventId,
+          subjectRef: eventSubjectRef,
+        });
+
+      } catch (error) {
+
+        (deps.logBackgroundFailure ?? defaultDeps.logBackgroundFailure!)(
+          buildSafeSlackBackgroundFailureDiagnostic(error, "event_match_resume", [rawBody])
+        );
+
+      }
+
+    }
 
     let stage: SlackBackgroundExecutionStage = "approval_detection";
     let conversationEvidence: ConversationEvidence | undefined;

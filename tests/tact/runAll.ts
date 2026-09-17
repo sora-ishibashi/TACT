@@ -49,6 +49,7 @@ import { run as runConfidenceExecutorWiring } from "./confidence/executorWiring.
 import { run as runWorkTypes } from "./work/types.test";
 import { run as runWorkEventModel } from "./work/eventModel.test";
 import { run as runWorkEventWaitClaim } from "./work/eventWaitClaim.test";
+import { run as runWorkEventWaitTrustedUser } from "./work/eventWaitTrustedUser.test";
 import { run as runWorkMapping } from "./work/mapping.test";
 import { run as runWorkStoreAuthorization } from "./work/storeAuthorization.test";
 import { run as runWorkIntake } from "./work/intake.test";
@@ -141,6 +142,7 @@ import { run as runBotConversationConnector } from "./bot/conversationConnector.
 import { run as runBotTrustedConversationTurn } from "./bot/trustedConversationTurn.test";
 import { run as runBotApproval } from "./bot/approval.test";
 import { run as runBotTrustedApprovalDecision } from "./bot/trustedApprovalDecision.test";
+import { run as runBotTrustedExternalEventIngest } from "./bot/trustedExternalEventIngest.test";
 import { run as runBotReceiveApprovalDecision } from "./bot/receiveApprovalDecision.test";
 import { run as runBotSlackVerifySignature } from "./bot/slackVerifySignature.test";
 import { run as runBotSlackNormalizeEvent } from "./bot/slackNormalizeEvent.test";
@@ -226,6 +228,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/types", run: runWorkTypes },
   { name: "work/eventModel", run: runWorkEventModel },
   { name: "work/eventWaitClaim", run: runWorkEventWaitClaim },
+  { name: "work/eventWaitTrustedUser", run: runWorkEventWaitTrustedUser },
   { name: "work/mapping", run: runWorkMapping },
   { name: "work/storeAuthorization", run: runWorkStoreAuthorization },
   { name: "work/intake", run: runWorkIntake },
@@ -318,6 +321,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "bot/trustedConversationTurn", run: runBotTrustedConversationTurn },
   { name: "bot/approval", run: runBotApproval },
   { name: "bot/trustedApprovalDecision", run: runBotTrustedApprovalDecision },
+  { name: "bot/trustedExternalEventIngest", run: runBotTrustedExternalEventIngest },
   { name: "bot/receiveApprovalDecision", run: runBotReceiveApprovalDecision },
   { name: "bot/slackVerifySignature", run: runBotSlackVerifySignature },
   { name: "bot/slackNormalizeEvent", run: runBotSlackNormalizeEvent },

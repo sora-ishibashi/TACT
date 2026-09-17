@@ -13,7 +13,10 @@ export type SlackBackgroundExecutionStage =
   | "conversation_context"
   | "conversation_intake"
   | ConversationIntakeStage
-  | "slack_action_delivery";
+  | "slack_action_delivery"
+  // EVENT-P1d: background EventWait match/resume continuation, isolated
+  // from the existing Bot conversation-processing stages above/below it.
+  | "event_match_resume";
 
 export interface SlackBackgroundFailureDiagnostic {
   stage: SlackBackgroundExecutionStage;

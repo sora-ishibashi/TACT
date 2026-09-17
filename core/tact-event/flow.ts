@@ -73,7 +73,12 @@ const defaultProcessExternalEventArrivalDeps: ProcessExternalEventArrivalDeps = 
 export async function processExternalEventArrival(
   input: NormalizedExternalEventInput,
   accessToken: string,
-  deps: ProcessExternalEventArrivalDeps = defaultProcessExternalEventArrivalDeps
+  deps: ProcessExternalEventArrivalDeps = defaultProcessExternalEventArrivalDeps,
+  // EVENT-P1d: only meaningful when accessToken is a service-role
+  // connection (e.g. the trusted Slack bridge) — see
+  // matchAndClaimExternalEvent() in core/tact-work/store.ts. Ignored by
+  // the RPC itself for ordinary user-JWT callers.
+  trustedUserId?: string
 ): Promise<ExternalEventArrivalOutcome> {
 
   const ingest = await deps.ingestExternalEvent(input, accessToken);
@@ -91,7 +96,7 @@ export async function processExternalEventArrival(
     return { status: "not_ingested", ingest };
   }
 
-  const match = await deps.matchAndClaimExternalEvent(accessToken, event.id);
+  const match = await deps.matchAndClaimExternalEvent(accessToken, event.id, trustedUserId);
 
   if (match.status !== "wait_claimed") {
     return { status: "processed", ingest, match };

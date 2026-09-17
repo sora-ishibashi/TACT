@@ -2185,15 +2185,24 @@ export function parseCreateEventWaitOutcome(raw: unknown): CreateEventWaitOutcom
 // 見つかれば1つのtransaction内でatomicにclaimする。マッチが無ければ
 // (event-before-wait)ExternalEvent.statusは"received"のまま変更しない
 // (Section7絶対条件)。
+// EVENT-P1d: trustedUserId is optional and only takes effect when
+// accessToken resolves to an actual Postgres `service_role` connection
+// (checked inside the RPC via `current_user = 'service_role'`, never
+// `auth.role()` — see 20261017000000). For the existing authenticated-
+// user path (accessToken = a real user JWT), passing trustedUserId has
+// no effect: the RPC falls through to auth.uid() regardless, so normal
+// callers never need to change.
 export async function matchAndClaimExternalEvent(
   accessToken: string,
-  externalEventId: string
+  externalEventId: string,
+  trustedUserId?: string
 ): Promise<EventWaitClaimOutcome> {
 
   const client = createRequestScopedClient(accessToken);
 
   const { data, error } = await client.rpc("tact_match_and_claim_external_event", {
     p_event_id: externalEventId,
+    p_trusted_user_id: trustedUserId ?? null,
   });
 
   if (error) {

@@ -355,8 +355,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     const deps: ProcessExternalEventArrivalDeps = {
       ingestExternalEvent: async () => options.ingestOutcome,
-      matchAndClaimExternalEvent: async (accessToken, externalEventId) => {
-        calls.matchCalls.push({ accessToken, externalEventId });
+      matchAndClaimExternalEvent: async (accessToken, externalEventId, trustedUserId) => {
+        calls.matchCalls.push({ accessToken, externalEventId, trustedUserId });
         return options.matchOutcome ?? { status: "event_unmatched" };
       },
       resumeClaimedEventWait: async (...args) => {
@@ -420,6 +420,44 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[processExternalEventArrival][Section9] event_received + wait_claimed -> resumeClaimedEventWait()へ接続し、processed + resumeを返す",
         outcome.status === "processed" && "resume" in outcome && calls.resumeCalls.length === 1
+      )
+    );
+  }
+
+  {
+    // EVENT-P1d Phase2: trustedUserId(第4引数)を渡した場合、
+    // matchAndClaimExternalEvent()へそのまま転送される(通常の
+    // accessToken=user JWT経路では省略され、undefinedのまま渡る)。
+    const event = makeExternalEvent();
+    const { deps, calls } = makeFlowDeps({
+      ingestOutcome: { status: "event_received", event },
+      matchOutcome: { status: "event_unmatched" },
+    });
+
+    await processExternalEventArrival(SAMPLE_INPUT, "service-role-token", deps, "trusted-user-1");
+
+    const call = calls.matchCalls[0] as { accessToken: string; trustedUserId?: string };
+
+    results.push(
+      check(
+        "[processExternalEventArrival][EVENT-P1d Phase2] trustedUserIdをmatchAndClaimExternalEvent()の第3引数へそのまま転送する",
+        call.accessToken === "service-role-token" && call.trustedUserId === "trusted-user-1"
+      )
+    );
+
+    const { deps: depsOmitted, calls: callsOmitted } = makeFlowDeps({
+      ingestOutcome: { status: "event_received", event },
+      matchOutcome: { status: "event_unmatched" },
+    });
+
+    await processExternalEventArrival(SAMPLE_INPUT, "token", depsOmitted);
+
+    const callOmitted = callsOmitted.matchCalls[0] as { trustedUserId?: string };
+
+    results.push(
+      check(
+        "[processExternalEventArrival][EVENT-P1d Phase2] trustedUserIdを省略した既存呼び出し(通常のuser JWT経路)は、undefinedのまま渡り既存挙動を変えない",
+        callOmitted.trustedUserId === undefined
       )
     );
   }

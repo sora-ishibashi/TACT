@@ -26,7 +26,13 @@ import {
   type SlackWebhookHeaders,
 } from "../../../core/tact-bot/adapters/slack/handleSlackWebhookRequest";
 import type { ClaimExternalEventResult } from "../../../core/tact-bot/eventDedup/supabaseEventDedupStore";
-import type { BotIncomingMessage } from "../../../core/tact-bot/types";
+import type { BotIdentity, BotIncomingMessage } from "../../../core/tact-bot/types";
+import type { BotIdentityResolver } from "../../../core/tact-bot/identity/resolver";
+import type {
+  IngestTrustedExternalEventResult,
+  ContinueTrustedExternalEventArrivalResult,
+  TrustedExternalEventParams,
+} from "../../../core/tact-bot/execution/trustedExternalEventIngest";
 import { triggerOnlySlackConversationEvidence } from "../../../core/tact-bot/adapters/slack/slackConversationContext";
 import { buildSafeSlackBackgroundFailureDiagnostic } from "../../../core/tact-bot/diagnostics/safeBackgroundFailureDiagnostic";
 import { check, summarize, type CheckResult } from "../lib/check";
@@ -87,18 +93,37 @@ function makeAppMentionEnvelope(overrides: Record<string, unknown> = {}) {
 function makeFakeDeps(options: {
   claimResult?: ClaimExternalEventResult;
   claimResultsByEventId?: Record<string, ClaimExternalEventResult>;
+  // EVENT-P1d Phase4/6: 既定はnull(unmapped actor)——このoptionを
+  // 省略した既存テストは、ExternalEvent ingest/match/resumeのいずれも
+  // 一切試みられない、既存(EVENT-P1d以前)と同じ経路をそのまま通る。
+  identity?: BotIdentity | null;
+  ingestOutcome?: IngestTrustedExternalEventResult;
+  arrivalOutcome?: ContinueTrustedExternalEventArrivalResult;
 } = {}): {
   deps: HandleSlackWebhookRequestDeps;
   claimCalls: { channel: string; externalEventId: string }[];
   receiveBotMessageCalls: BotIncomingMessage[];
   retrievedContextTriggers: { channelRef: string; triggerMessageRef: string; threadRef?: string }[];
   scheduledTasks: (() => Promise<void>)[];
+  identityResolveCalls: { externalUserId: string; channel: string; externalWorkspaceId?: string }[];
+  ingestTrustedExternalEventCalls: TrustedExternalEventParams[];
+  continueTrustedExternalEventArrivalCalls: TrustedExternalEventParams[];
 } {
 
   const claimCalls: { channel: string; externalEventId: string }[] = [];
   const receiveBotMessageCalls: BotIncomingMessage[] = [];
   const retrievedContextTriggers: { channelRef: string; triggerMessageRef: string; threadRef?: string }[] = [];
   const scheduledTasks: (() => Promise<void>)[] = [];
+  const identityResolveCalls: { externalUserId: string; channel: string; externalWorkspaceId?: string }[] = [];
+  const ingestTrustedExternalEventCalls: TrustedExternalEventParams[] = [];
+  const continueTrustedExternalEventArrivalCalls: TrustedExternalEventParams[] = [];
+
+  const identityResolver: BotIdentityResolver = {
+    resolve: async (actor, channel, externalWorkspaceId) => {
+      identityResolveCalls.push({ externalUserId: actor.externalUserId, channel, externalWorkspaceId });
+      return options.identity ?? null;
+    },
+  };
 
   const deps: HandleSlackWebhookRequestDeps = {
 
@@ -135,6 +160,30 @@ function makeFakeDeps(options: {
     // outbound配送の詳細はtests/tact/bot/slackOutbound*.test.tsが担う)。
     executeBotActions: async () => [],
 
+    // EVENT-P1d Phase4: 既定でunmapped(null)を返すfake identity
+    // resolver。実Supabase(defaultDeps.identityResolver =
+    // slackTrustedBotIdentityResolver)には絶対に到達しない。
+    identityResolver,
+
+    // EVENT-P1d Phase6: 呼び出しを記録するだけの最小fake。実service
+    // role key/実Supabaseには絶対に到達しない。
+    ingestTrustedExternalEvent: async (params) => {
+      ingestTrustedExternalEventCalls.push(params);
+      return options.ingestOutcome ?? { ok: true, outcome: { status: "event_received", event: {
+        id: "ext-evt-test", userId: params.tactUserId, source: params.source, eventType: params.eventType,
+        externalEventId: params.externalEventId, subjectRef: params.subjectRef, receivedAt: new Date().toISOString(),
+        normalizedPayload: params.normalizedPayload ?? {}, status: "received", createdAt: new Date().toISOString(),
+      } } };
+    },
+
+    continueTrustedExternalEventArrival: async (params) => {
+      continueTrustedExternalEventArrivalCalls.push(params);
+      return options.arrivalOutcome ?? {
+        ok: true,
+        outcome: { status: "not_ingested", ingest: { status: "event_invalid", reasonCode: "missing_source" } },
+      };
+    },
+
     // 絶対条件(Section20)を検証しやすくするため、production既定の
     // after()とは異なり、taskをcaptureするだけで自動実行はしない
     // (呼び出し元testが明示的にtask()を呼んで初めてreceiveBotMessage
@@ -146,7 +195,16 @@ function makeFakeDeps(options: {
 
   };
 
-  return { deps, claimCalls, receiveBotMessageCalls, retrievedContextTriggers, scheduledTasks };
+  return {
+    deps,
+    claimCalls,
+    receiveBotMessageCalls,
+    retrievedContextTriggers,
+    scheduledTasks,
+    identityResolveCalls,
+    ingestTrustedExternalEventCalls,
+    continueTrustedExternalEventArrivalCalls,
+  };
 
 }
 
@@ -537,6 +595,248 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         serializedSecretDiagnostic.includes("[redacted]") &&
         (longDiagnostic.message.length <= 501) && (longDiagnostic.thrownValueSummary?.length ?? 0) <= 501
     ));
+  }
+
+  // =========================
+  // EVENT-P1d Phase4/6: Slack -> trusted TACT user -> canonical
+  // ExternalEvent ingest -> background EventWait match/resume
+  // =========================
+
+  // ---- unmapped actor: ExternalEventを一切作らない、通常のBot処理は既存通り ----
+  {
+    const envelope = makeAppMentionEnvelope({ event_id: "Ev-unmapped-1" });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const {
+      deps,
+      scheduledTasks,
+      receiveBotMessageCalls,
+      identityResolveCalls,
+      ingestTrustedExternalEventCalls,
+      continueTrustedExternalEventArrivalCalls,
+    } = makeFakeDeps({ identity: null });
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, deps);
+    await scheduledTasks[0]();
+
+    results.push(
+      check(
+        "[EVENT-P1d Phase4] unmapped Slack actor -> identity解決は試みるが(冪等な2回目の解決)、ExternalEvent ingest/match-resumeのいずれも一切呼ばれず、fallback userも発明しない。通常のBot会話処理は既存契約のまま続行する",
+        response.status === 200 &&
+          identityResolveCalls.length === 1 &&
+          identityResolveCalls[0].externalUserId === "U123USER" &&
+          identityResolveCalls[0].externalWorkspaceId === "T123TEAM" &&
+          ingestTrustedExternalEventCalls.length === 0 &&
+          continueTrustedExternalEventArrivalCalls.length === 0 &&
+          receiveBotMessageCalls.length === 1
+      )
+    );
+  }
+
+  // ---- mapped actor: 正確なcanonical mapping(source/eventType/subjectRef/occurredAt/normalizedPayload allowlist) ----
+  {
+    const envelope = makeAppMentionEnvelope({ event_id: "Ev-mapped-1" });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const { deps, scheduledTasks, ingestTrustedExternalEventCalls, continueTrustedExternalEventArrivalCalls } = makeFakeDeps({
+      identity: { tactUserId: "tact-user-mapped-1" },
+    });
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, deps);
+
+    results.push(
+      check(
+        "[EVENT-P1d Phase6] mapped actor -> ACK前に同期でingestTrustedExternalEventが正確に1回、正しいcanonical mapping(source='slack', eventType='app_mention', externalEventId, deterministic subjectRef)で呼ばれる",
+        response.status === 200 &&
+          ingestTrustedExternalEventCalls.length === 1 &&
+          ingestTrustedExternalEventCalls[0].tactUserId === "tact-user-mapped-1" &&
+          ingestTrustedExternalEventCalls[0].source === "slack" &&
+          ingestTrustedExternalEventCalls[0].eventType === "app_mention" &&
+          ingestTrustedExternalEventCalls[0].externalEventId === "Ev-mapped-1" &&
+          ingestTrustedExternalEventCalls[0].subjectRef === "T123TEAM:C123CHANNEL:1893456000.000100"
+      )
+    );
+
+    results.push(
+      check(
+        "[Section「deterministic subjectRef」] subjectRefは既に正規化済みのBotIncomingMessage値(organizationId:externalConversationId:threadId)から組み立てられる",
+        /^T123TEAM:C123CHANNEL:\d+\.\d+$/.test(ingestTrustedExternalEventCalls[0].subjectRef)
+      )
+    );
+
+    results.push(
+      check(
+        "[occurredAt] Slack event.tsから導出されたISO 8601文字列である",
+        typeof ingestTrustedExternalEventCalls[0].occurredAt === "string" &&
+          !Number.isNaN(Date.parse(ingestTrustedExternalEventCalls[0].occurredAt as string))
+      )
+    );
+
+    results.push(
+      check(
+        "[normalizedPayload allowlist] raw Slack webhook body/署名/signing secret/bot token/service role keyのいずれも含まれない、allowlistされたfieldのみ",
+        !JSON.stringify(ingestTrustedExternalEventCalls[0].normalizedPayload).includes(SIGNING_SECRET) &&
+          Object.keys(ingestTrustedExternalEventCalls[0].normalizedPayload ?? {}).sort().join(",") ===
+            ["actorExternalUserId", "channelId", "messageRef", "providerEventType", "providerTimestamp", "teamId", "text", "threadId"].sort().join(",")
+      )
+    );
+
+    await scheduledTasks[0]();
+
+    results.push(
+      check(
+        "[EVENT-P1d Phase6 順序11] ACK後のbackground処理で、continueTrustedExternalEventArrivalが正確に1回、同じtactUserId/subjectRefで呼ばれる(既存canonical processExternalEventArrival()を再利用、match/resumeを手で再実装しない)",
+        continueTrustedExternalEventArrivalCalls.length === 1 &&
+          continueTrustedExternalEventArrivalCalls[0].tactUserId === "tact-user-mapped-1" &&
+          continueTrustedExternalEventArrivalCalls[0].subjectRef === "T123TEAM:C123CHANNEL:1893456000.000100"
+      )
+    );
+  }
+
+  // ---- mapped actor + durable ingest失敗(event_persistence_failed) -> fail-closed 5xx、ACKしない ----
+  {
+    const envelope = makeAppMentionEnvelope({ event_id: "Ev-ingest-fail-1" });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const { deps, scheduledTasks, continueTrustedExternalEventArrivalCalls } = makeFakeDeps({
+      identity: { tactUserId: "tact-user-2" },
+      ingestOutcome: { ok: true, outcome: { status: "event_persistence_failed", error: "connection reset" } },
+    });
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, deps);
+
+    results.push(
+      check(
+        "[絶対条件、最重要] mapped userに対するdurable ExternalEvent ingestがevent_persistence_failedの場合、成功ACKを返さず500(fail closed、Slackの自然な再送へ委ねる)を返す。background処理(EVENT match/resume・通常Bot会話処理いずれも)は一切scheduleされない",
+        response.status === 500 &&
+          scheduledTasks.length === 0 &&
+          continueTrustedExternalEventArrivalCalls.length === 0
+      )
+    );
+  }
+
+  // ---- mapped actor + service role key未設定(trusted_execution_not_configured) -> 同じくfail-closed 5xx ----
+  {
+    const envelope = makeAppMentionEnvelope({ event_id: "Ev-ingest-not-configured-1" });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const { deps, scheduledTasks } = makeFakeDeps({
+      identity: { tactUserId: "tact-user-3" },
+      ingestOutcome: { ok: false, error: "trusted_execution_not_configured" },
+    });
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, deps);
+
+    results.push(
+      check(
+        "[絶対条件] trusted execution(service role key)未設定の場合も、mapped userに対しては同じくfail-closed 500を返す",
+        response.status === 500 && scheduledTasks.length === 0
+      )
+    );
+  }
+
+  // ---- mapped actor + 非transientな構造的失敗(event_invalid等) -> 200 ACK・通常Bot処理は継続、EVENT側だけskip ----
+  {
+    const envelope = makeAppMentionEnvelope({ event_id: "Ev-ingest-invalid-1" });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const { deps, scheduledTasks, receiveBotMessageCalls, continueTrustedExternalEventArrivalCalls } = makeFakeDeps({
+      identity: { tactUserId: "tact-user-4" },
+      ingestOutcome: { ok: true, outcome: { status: "event_invalid", reasonCode: "missing_source" } },
+    });
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, deps);
+    await scheduledTasks[0]();
+
+    results.push(
+      check(
+        "[非transient失敗] event_invalid等の構造的失敗は5xxで再送させても解消しないため200 ACKし、通常のBot会話処理は継続するが、EVENT側のmatch/resume(continueTrustedExternalEventArrival)だけはskipする",
+        response.status === 200 &&
+          receiveBotMessageCalls.length === 1 &&
+          continueTrustedExternalEventArrivalCalls.length === 0
+      )
+    );
+  }
+
+  // ---- background isolation: EVENT match/resumeの失敗がBot会話処理を抑制しない ----
+  {
+    const envelope = makeAppMentionEnvelope({ event_id: "Ev-isolation-1" });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const { deps, scheduledTasks, receiveBotMessageCalls } = makeFakeDeps({
+      identity: { tactUserId: "tact-user-5" },
+    });
+
+    const diagnostics: unknown[] = [];
+    deps.continueTrustedExternalEventArrival = async () => {
+      throw new Error("event match/resume boundary failed");
+    };
+    deps.logBackgroundFailure = (diagnostic) => {
+      diagnostics.push(diagnostic);
+    };
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, deps);
+    await scheduledTasks[0]();
+
+    results.push(
+      check(
+        "[絶対条件「one failure must not accidentally suppress the other」] EVENT match/resumeが例外を投げても、独立したtry/catchで隔離され、通常のBot会話処理(receiveBotMessage)は正常に実行される。失敗はevent_match_resume stageとして個別にログされる",
+        response.status === 200 &&
+          receiveBotMessageCalls.length === 1 &&
+          diagnostics.length === 1 &&
+          (diagnostics[0] as { stage?: unknown }).stage === "event_match_resume"
+      )
+    );
+  }
+
+  // ---- duplicate delivery: identity解決/ExternalEvent ingestのいずれも試みない(既存dedupが先) ----
+  {
+    const envelope = makeAppMentionEnvelope({ event_id: "Ev-dup-event-1" });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const { deps, identityResolveCalls, ingestTrustedExternalEventCalls } = makeFakeDeps({
+      claimResult: "duplicate",
+      identity: { tactUserId: "tact-user-6" },
+    });
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, deps);
+
+    results.push(
+      check(
+        "[絶対条件Section5「keep both dedup systems」] 既存のtact_bot_processed_events dedupがduplicateと判定した場合、canonical identity解決/ExternalEvent ingestのいずれにも到達しない(既存Bot dedupが引き続き最初の防衛線)",
+        response.status === 200 &&
+          identityResolveCalls.length === 0 &&
+          ingestTrustedExternalEventCalls.length === 0
+      )
+    );
+  }
+
+  // ---- Approval(Block Kit)経路: ExternalEvent側へは一切ルーティングしない ----
+  {
+    const approvalPayload = {
+      type: "block_actions",
+      user: { id: "U123USER" },
+      team: { id: "T123TEAM" },
+      channel: { id: "C123CHANNEL" },
+      container: { message_ts: "1893456000.000200" },
+      actions: [{ action_id: "tact_approval_approve", value: "approval-1" }],
+    };
+    const rawBody = `payload=${encodeURIComponent(JSON.stringify(approvalPayload))}`;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = computeSignature(SIGNING_SECRET, timestamp, rawBody);
+    const headers = makeHeaders({ "x-slack-signature": signature, "x-slack-request-timestamp": timestamp });
+
+    const { deps, scheduledTasks, identityResolveCalls, ingestTrustedExternalEventCalls, continueTrustedExternalEventArrivalCalls } = makeFakeDeps({
+      identity: { tactUserId: "tact-user-approval-1" },
+    });
+
+    const response = await handleSlackWebhookRequest(rawBody, headers, deps);
+    if (scheduledTasks.length > 0) {
+      await scheduledTasks[0]();
+    }
+
+    results.push(
+      check(
+        "[絶対条件Section7「Approval path stays structurally separate」] Slack Block Kit approval callback(block_actions)は、通常のapp_mention経路(identity解決/ExternalEvent ingest/match-resume)へは一切到達しない(既存の早期returnのまま)",
+        response.status === 200 &&
+          identityResolveCalls.length === 0 &&
+          ingestTrustedExternalEventCalls.length === 0 &&
+          continueTrustedExternalEventArrivalCalls.length === 0
+      )
+    );
   }
 
   return summarize("bot/slackWebhookHandler", results);
