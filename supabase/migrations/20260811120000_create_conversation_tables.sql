@@ -52,7 +52,19 @@ create table if not exists public.conversations (
   -- 将来Supabase Authを導入した際にスキーマ変更なしで移行できるよう、
   -- 今のうちにFKだけ張っておく。ON DELETE SET NULLとし、
   -- usersが削除されてもconversations自体は消さない。
-  user_id uuid null references public.users (id) on delete set null,
+  --
+  -- Fresh-install compatibility fix: this line originally referenced
+  -- public.users(id), a table this repository's migration history
+  -- never creates. Supabase Auth users live in auth.users, not
+  -- public.users; migration 20260820000000_conversations_user_id_fk_to_
+  -- auth_users.sql already corrected this historically (production has
+  -- run with the auth.users FK since that migration applied). Pointing
+  -- directly at auth.users here just lets this file itself succeed when
+  -- replayed from scratch against a brand-new, empty Supabase project
+  -- (public.users never existing there). It changes no semantics
+  -- (nullable, ON DELETE SET NULL, same column type) and requires no
+  -- mutation of any already-applied Production database.
+  user_id uuid null references auth.users (id) on delete set null,
 
   title text null,
 
