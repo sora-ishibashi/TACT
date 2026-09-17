@@ -289,7 +289,11 @@ begin
     return jsonb_build_object('status', 'event_not_receivable', 'eventStatus', v_event.status);
   end if;
 
-  select count(*), min(id) into v_candidate_count, v_wait_id
+  -- min(uuid) has no built-in aggregate in Postgres; cast through text
+  -- (which does) and back. Safe because v_wait_id is only consumed when
+  -- v_candidate_count = 1 (exactly one row), so the tie-break order is
+  -- irrelevant.
+  select count(*), min(id::text)::uuid into v_candidate_count, v_wait_id
   from public.tact_event_waits
   where user_id = v_event.user_id
     and expected_source = v_event.source
@@ -399,7 +403,11 @@ begin
     raise exception 'tact_create_event_wait: Task % was not pending at wait-creation time', v_task.id;
   end if;
 
-  select count(*), min(id) into v_candidate_count, v_candidate_event_id
+  -- min(uuid) has no built-in aggregate in Postgres; cast through text
+  -- (which does) and back. Safe because v_candidate_event_id is only
+  -- consumed when v_candidate_count = 1 (exactly one row), so the
+  -- tie-break order is irrelevant.
+  select count(*), min(id::text)::uuid into v_candidate_count, v_candidate_event_id
   from public.tact_external_events
   where user_id = auth.uid()
     and source = p_expected_source
