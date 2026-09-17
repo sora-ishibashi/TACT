@@ -21,6 +21,7 @@
 
 import { useState } from "react";
 import LocalWorkspacePanel from "./localWorkspace/LocalWorkspacePanel";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 type PushType = "knowledge" | "memory" | "example";
 
@@ -37,6 +38,8 @@ type PushLogEntry = {
 
 export default function CoreSection() {
 
+  const { getAccessToken } = useAuth();
+
   const [content, setContent] = useState("");
   const [type, setType] = useState<PushType>("knowledge");
   const [loading, setLoading] = useState(false);
@@ -50,6 +53,30 @@ export default function CoreSection() {
       return;
     }
 
+    const accessToken = getAccessToken();
+
+    // /api/tact/core/pushはSTEP212設計上、未認証を許容しない(401)。
+    // 既存ConversationSection.tsxのhandleSubmit()と同じ方針で、
+    // 呼び出し前にaccessToken有無を確認し、無い場合はAPIへ到達させず
+    // ログが必要であることだけを示す(新しい認証方式は作らない、
+    // 既存の/loginへ委ねる)。
+    if (!accessToken) {
+
+      setLog((prev) => [
+        {
+          id: crypto.randomUUID(),
+          type,
+          content: trimmed,
+          success: false,
+          message: "この機能を使うにはログインが必要です。",
+        },
+        ...prev,
+      ]);
+
+      return;
+
+    }
+
     setLoading(true);
 
     try {
@@ -58,7 +85,10 @@ export default function CoreSection() {
       // API(STEP212、無変更)を1回だけ呼び出す。
       const response = await fetch("/api/tact/core/push", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
         body: JSON.stringify({ content: trimmed, type }),
       });
 
