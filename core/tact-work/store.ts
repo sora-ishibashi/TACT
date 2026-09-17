@@ -1967,6 +1967,44 @@ export async function getExternalEvent(
 
 }
 
+// EVENT-P1b: dedup unique violation((source, external_event_id)、
+// Section3/Section7)発生時に、衝突した既存行がこのuser自身の行かどうか
+// を判定するための、userId scopedな直接lookup。tact_external_eventsの
+// unique indexはuser_idを含まない(sourceとexternal_event_idのみ)ため、
+// この関数がuser_idで絞り込んでもなお該当行が見つからない場合、その
+// 衝突は「別userが既に同じ(source, external_event_id)を使っている」
+// ことを意味する(Section8「Duplicate Ownership Edge Case」)。RLS
+// (auth.uid() = user_id)により、この関数は呼び出し元自身の行しか
+// 決して返せない——他userの行の内容を漏らす経路はこの関数には無い。
+export async function findExternalEventBySourceAndExternalId(
+  userId: string,
+  accessToken: string,
+  source: string,
+  externalEventId: string
+): Promise<ExternalEvent | undefined> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_external_events")
+    .select(EXTERNAL_EVENT_COLUMNS)
+    .eq("user_id", userId)
+    .eq("source", source)
+    .eq("external_event_id", externalEventId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    return undefined;
+  }
+
+  return toExternalEvent(data as ExternalEventRow);
+
+}
+
 // EventWaitはApproval/Clarificationと同じくWork/Taskの子entityのため、
 // 同じWorkOwnershipDeps DI seamを使う(userIdは呼び出し元から渡された
 // 値をそのまま列へ書き込むのではなく、常にdeps.getWork()が返した
