@@ -372,6 +372,7 @@ export async function handleSlackWebhookRequest(
       return { status: 400, body: { error: "invalid_challenge" } };
     }
 
+    console.info("[tact-bot][EVENT-P1d-diag] url_verification");
     return { status: 200, body: { challenge: parsed.challenge } };
 
   }
@@ -379,6 +380,7 @@ export async function handleSlackWebhookRequest(
   // 絶対条件(Section8): MVP対象外のevent(event_callback以外のtype、
   // またはapp_mention以外のevent種別)は安全にignore/ACKする。
   if (!isAppMentionEventCallback(envelope)) {
+    console.info("[tact-bot][EVENT-P1d-diag] ignored_non_app_mention");
     return ackIgnored();
   }
 
@@ -392,6 +394,7 @@ export async function handleSlackWebhookRequest(
   // dedup claimより前に行う(対象外eventでdedup recordを無駄に作らない、
   // 絶対条件Section17)。
   if (isBotEchoEvent(event)) {
+    console.info("[tact-bot][EVENT-P1d-diag] ignored_bot_echo");
     return ackIgnored();
   }
 
@@ -405,9 +408,11 @@ export async function handleSlackWebhookRequest(
     // event_idが無ければdedup自体が成立しない——安全側で処理しない
     // (Slack公式仕様上event_callbackには常にevent_idが付与される
     // ため、通常到達しない防御的分岐)。
+    console.info("[tact-bot][EVENT-P1d-diag] ignored_missing_event_id");
     return ackIgnored();
   }
 
+  console.info("[tact-bot][EVENT-P1d-diag] reached_dedup_claim");
   const claim = await deps.claimExternalEvent({ channel: "slack", externalEventId });
 
   if (claim === "duplicate") {
