@@ -48,6 +48,7 @@ import { run as runDeriveAnswerConfidence } from "./confidence/deriveAnswerConfi
 import { run as runConfidenceExecutorWiring } from "./confidence/executorWiring.test";
 import { run as runWorkTypes } from "./work/types.test";
 import { run as runWorkEventModel } from "./work/eventModel.test";
+import { run as runWorkEventWaitClaim } from "./work/eventWaitClaim.test";
 import { run as runWorkMapping } from "./work/mapping.test";
 import { run as runWorkStoreAuthorization } from "./work/storeAuthorization.test";
 import { run as runWorkIntake } from "./work/intake.test";
@@ -200,6 +201,7 @@ import { run as runWorkCapability } from "./work/capability.test";
 import { run as runWorkCalendarSlotEngine } from "./work/calendarSlotEngine.test";
 import { run as runWorkCalendarAvailabilitySchedule } from "./work/calendarAvailabilitySchedule.test";
 import { run as runEventIngest } from "./event/ingest.test";
+import { run as runEventAtomicResume } from "./event/atomicResume.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -223,6 +225,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "confidence/executorWiring", run: runConfidenceExecutorWiring },
   { name: "work/types", run: runWorkTypes },
   { name: "work/eventModel", run: runWorkEventModel },
+  { name: "work/eventWaitClaim", run: runWorkEventWaitClaim },
   { name: "work/mapping", run: runWorkMapping },
   { name: "work/storeAuthorization", run: runWorkStoreAuthorization },
   { name: "work/intake", run: runWorkIntake },
@@ -375,6 +378,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/calendarSlotEngine", run: runWorkCalendarSlotEngine },
   { name: "work/calendarAvailabilitySchedule", run: runWorkCalendarAvailabilitySchedule },
   { name: "event/ingest", run: runEventIngest },
+  { name: "event/atomicResume", run: runEventAtomicResume },
 ];
 
 async function main() {

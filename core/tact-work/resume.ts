@@ -68,6 +68,8 @@ import {
   listRunsForTask,
   listApprovalsForWork,
   listClarificationsForWork,
+  getEventWait,
+  getExternalEvent,
 } from "./store";
 // TIME-P1a FIX1: waitUntilを、このfileが扱うApproval/Clarification
 // 解決by resumeの最後のgateとして追加する。時間はgateを追加するだけで
@@ -129,6 +131,21 @@ export type TaskResumeEligibilityBlockedReasonCode =
   // evaluateTaskRetryEligibility()がこのTask用の別のeligibility判定を
   // 持つ)。
   | "task_waiting_for_retry"
+  // EVENT-P1c(P1a Architecture Auditで明示されたgapのclose、
+  // Section12): task.status==="waiting_for_event"は、"waiting_for_retry"
+  // と同じ理由でこのfileのApproval/Clarification-driven resumeの対象
+  // ではない——このfileがwaiting_for_eventを一般に"resumable"だと
+  // 報告することは絶対に無い。唯一の例外(reason==="external_event_matched"
+  // による正当なresume)は、この分岐に到達する前に、atomic claim
+  // transaction(supabase/migrations/20261016010000_create_event_wait_
+  // claim_functions.sqlのtact_claim_matched_event_wait())が既にTask を
+  // waiting_for_event→pendingへ遷移させ終えている前提で動く——つまり
+  // この関数が実際にwaiting_for_eventなTaskを見る時点で、それは
+  // 「まだatomic claimが起きていない」ことを意味し、reasonが
+  // external_event_matchedであってもblockするのが正しい(stale/不正な
+  // resume intentを信用しない、絶対条件「Do not trust a stale resume
+  // intent」)。
+  | "task_waiting_for_event"
   // TIME-P1a FIX1: WorkTask.waitUntilが未来を指しているため、他の
   // 全条件(Approval/Clarification未解決なし・active Run無し等)を
   // 満たしていても、まだ時間的にresumeが許されていない。waitUntil
@@ -243,6 +260,15 @@ export async function evaluateTaskResumeEligibility(
     return { status: "blocked", reasonCode: "task_waiting_for_retry" };
   }
 
+  // EVENT-P1c(Section12): waiting_for_eventも同様にフォールスルー
+  // させない。Section13「Manual Resume」絶対条件もこの1分岐だけで
+  // 満たされる——reasonに関わらず(manual_resume/runtime_recovered/
+  // external_event_matchedのいずれであっても)、Task.statusが実際に
+  // waiting_for_eventのままである限りblockする。
+  if (task.status === "waiting_for_event") {
+    return { status: "blocked", reasonCode: "task_waiting_for_event" };
+  }
+
   // ここまで到達した時点でtask.status==="pending"のみ。
 
   // capability/actionがresume対象か(絶対条件Step2)。assignedCapability
@@ -342,6 +368,18 @@ export interface TaskResumeIntent {
 
   reason: TaskResumeTriggerReason;
 
+  // EVENT-P1c(Section11「Resume Intent」絶対条件): reason===
+  // "external_event_matched"の場合のみ意味を持つ、durable correlationの
+  // pointer。TaskResumeIntent自身は依然として実行権限を運ばない
+  // (このIDだけでは何も起こせない、下記validateExternalEventResume
+  // Correlation()がexecutePreparedTaskResume()側で改めてEventWait/
+  // ExternalEventの現在状態を再取得・再検証する——intentに書かれた
+  // 値をそのまま信用しない、「stale resume intentを信用しない」絶対
+  // 条件)。
+  eventWaitId?: string;
+
+  externalEventId?: string;
+
   // eligibility確認を実際に行った時刻(ISO8601)。execution layer
   // 側が「この判断がどれだけ新しいか」を将来判断材料にできるよう
   // 残すだけで、有効期限のcanonical判定はP6aでは行わない。
@@ -349,9 +387,27 @@ export interface TaskResumeIntent {
 
 }
 
+// EVENT-P1c(Section11): 汎用eligibility判定(TaskResumeEligibility
+// BlockedReasonCode)とは別の型として独立させる——このfileの既存規律
+// (resume reasonとblocked reasonを混同しない)と同じ理由で、
+// 「event correlationがなぜ拒否されたか」を専用のreason code群として
+// 表現する。
+export type ExternalEventResumeCorrelationBlockedReasonCode =
+  | "event_correlation_missing"
+  | "event_wait_not_found"
+  | "event_wait_wrong_task"
+  | "event_wait_not_claimed"
+  | "event_wait_claim_mismatch"
+  | "external_event_not_found"
+  | "external_event_wrong_owner"
+  | "external_event_not_matched";
+
 export type TaskResumeRequestOutcome =
   | { status: "prepared"; intent: TaskResumeIntent }
-  | { status: "blocked"; reasonCode: TaskResumeEligibilityBlockedReasonCode }
+  | {
+      status: "blocked";
+      reasonCode: TaskResumeEligibilityBlockedReasonCode | ExternalEventResumeCorrelationBlockedReasonCode;
+    }
   | { status: "already_terminal"; reasonCode: TaskResumeTerminalReasonCode };
 
 export interface RequestTaskResumeParams {
@@ -365,6 +421,94 @@ export interface RequestTaskResumeParams {
   taskId: string;
 
   reason: TaskResumeTriggerReason;
+
+  // EVENT-P1c: reason==="external_event_matched"のときのみ必須
+  // (省略した場合、下記validateExternalEventResumeCorrelation()が
+  // "event_correlation_missing"としてblockする——silent bypassを防ぐ)。
+  eventWaitId?: string;
+
+  externalEventId?: string;
+
+}
+
+export interface ValidateExternalEventResumeCorrelationDeps {
+
+  getEventWait: typeof getEventWait;
+
+  getExternalEvent: typeof getExternalEvent;
+
+}
+
+const defaultValidateExternalEventResumeCorrelationDeps: ValidateExternalEventResumeCorrelationDeps = {
+  getEventWait,
+  getExternalEvent,
+};
+
+export type ValidateExternalEventResumeCorrelationResult =
+  | { ok: true }
+  | { ok: false; reasonCode: ExternalEventResumeCorrelationBlockedReasonCode };
+
+// EVENT-P1c(Section11絶対条件、最重要): reason==="external_event_matched"
+// によるresumeは、汎用eligibility判定(waiting_for_event→pendingへの
+// 遷移が既にatomic claim transactionで起きていることの確認)だけでは
+// 不十分——「どのEventWait/ExternalEventによってpendingになったのか」
+// というdurable correlationそのものを、この呼び出し自身が毎回
+// 再検証する(prepared intentに書かれたeventWaitId/externalEventIdを
+// 単なるlookup keyとしてのみ使い、その正しさ・現在の状態は一切信用
+// しない——他のeligibility判定と同じ「stale intentを信用しない」
+// 設計原則)。requestTaskResume()・executePreparedTaskResume()の
+// 両方から呼ばれる(Section11「At BOTH」)、単一のcanonical実装。
+export async function validateExternalEventResumeCorrelation(
+  params: {
+    workId: string;
+    userId: string;
+    accessToken: string;
+    taskId: string;
+    eventWaitId?: string;
+    externalEventId?: string;
+  },
+  deps: ValidateExternalEventResumeCorrelationDeps = defaultValidateExternalEventResumeCorrelationDeps
+): Promise<ValidateExternalEventResumeCorrelationResult> {
+
+  const { workId, userId, accessToken, taskId, eventWaitId, externalEventId } = params;
+
+  if (!eventWaitId || !externalEventId) {
+    return { ok: false, reasonCode: "event_correlation_missing" };
+  }
+
+  const wait = await deps.getEventWait(workId, userId, accessToken, eventWaitId);
+
+  if (!wait) {
+    return { ok: false, reasonCode: "event_wait_not_found" };
+  }
+
+  if (wait.taskId !== taskId || wait.workId !== workId) {
+    return { ok: false, reasonCode: "event_wait_wrong_task" };
+  }
+
+  if (wait.status !== "claimed") {
+    return { ok: false, reasonCode: "event_wait_not_claimed" };
+  }
+
+  if (wait.claimedByEventId !== externalEventId) {
+    return { ok: false, reasonCode: "event_wait_claim_mismatch" };
+  }
+
+  const event = await deps.getExternalEvent(userId, accessToken, externalEventId);
+
+  if (!event) {
+    return { ok: false, reasonCode: "external_event_not_found" };
+  }
+
+  if (event.userId !== userId) {
+    return { ok: false, reasonCode: "external_event_wrong_owner" };
+  }
+
+  if (event.status !== "matched") {
+    return { ok: false, reasonCode: "external_event_not_matched" };
+  }
+
+  return { ok: true };
 
 }
 
@@ -385,7 +529,13 @@ export interface RequestTaskResumeParams {
 // 設計そのもの)に反する変更は一切行っていない。
 export async function requestTaskResume(
   params: RequestTaskResumeParams,
-  deps: TaskResumeEligibilityDeps = defaultDeps
+  deps: TaskResumeEligibilityDeps = defaultDeps,
+  // EVENT-P1c: evaluateTaskResumeEligibility()自身は一切使わない、
+  // reason==="external_event_matched"専用の追加deps。既存の
+  // TaskResumeEligibilityDeps自体は変更しない(既存呼び出し元・
+  // 既存testのfixtureへ無関係なripple effectを起こさないため、
+  // 新しいoptional第3引数として独立させる)。
+  correlationDeps: ValidateExternalEventResumeCorrelationDeps = defaultValidateExternalEventResumeCorrelationDeps
 ): Promise<TaskResumeRequestOutcome> {
 
   // 絶対条件Step3-1: eligibility再確認。callerが以前確認した結果を
@@ -403,12 +553,33 @@ export async function requestTaskResume(
     return { status: "already_terminal", reasonCode: eligibility.reasonCode };
   }
 
+  // EVENT-P1c(Section11「At BOTH: requestTaskResume() and
+  // executePreparedTaskResume()」): 汎用eligibilityが"eligible"を
+  // 返しても、reasonがexternal_event_matchedの場合はdurable
+  // correlationの再検証を追加で必ず通す。
+  if (params.reason === "external_event_matched") {
+
+    const correlation = await validateExternalEventResumeCorrelation(params, correlationDeps);
+
+    if (!correlation.ok) {
+      return { status: "blocked", reasonCode: correlation.reasonCode };
+    }
+
+  }
+
   return {
     status: "prepared",
     intent: {
       workId: params.workId,
       taskId: params.taskId,
       reason: params.reason,
+      // 絶対条件(既存test [14]「intentはcanonical pointerのみを持つ」
+      // の意味をそのまま維持): reason!=="external_event_matched"の
+      // 呼び出しでは、eventWaitId/externalEventIdをkey自体として持たない
+      // (値をundefinedのまま代入すると、Object.keys()にはkey名が残って
+      // しまうため、conditional spreadでkey自体の有無を制御する)。
+      ...(params.eventWaitId !== undefined ? { eventWaitId: params.eventWaitId } : {}),
+      ...(params.externalEventId !== undefined ? { externalEventId: params.externalEventId } : {}),
       eligibleAt: new Date().toISOString(),
     },
   };

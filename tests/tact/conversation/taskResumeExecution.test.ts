@@ -91,12 +91,17 @@ interface MakeDepsOptions {
   readOutcome?: ExecuteReadIntegrationActionOutcome;
   eligible?: boolean;
   eligibilityOverride?: Awaited<ReturnType<ExecutePreparedTaskResumeDeps["evaluateTaskResumeEligibility"]>>;
+  // EVENT-P1c: reason==="external_event_matched"専用のcorrelation
+  // 再検証の結果を差し替える(既定は常にok、既存の全testケースは
+  // このreasonを使わないため到達しない)。
+  correlationOverride?: Awaited<ReturnType<ExecutePreparedTaskResumeDeps["validateExternalEventResumeCorrelation"]>>;
 }
 
 function makeDeps(options: MakeDepsOptions = {}) {
 
   const calls = {
     eligibilityCalls: 0,
+    correlationCalls: 0,
     listTasksForWorkCalls: 0,
     listApprovalsForWorkCalls: 0,
     executeApprovedIntegrationActionCalls: [] as unknown[],
@@ -118,6 +123,11 @@ function makeDeps(options: MakeDepsOptions = {}) {
       calls.eligibilityCalls += 1;
       if (options.eligibilityOverride) return options.eligibilityOverride;
       return options.eligible === false ? { status: "blocked", reasonCode: "pending_approval_exists" } : { status: "eligible" };
+    },
+
+    validateExternalEventResumeCorrelation: async () => {
+      calls.correlationCalls += 1;
+      return options.correlationOverride ?? { ok: true };
     },
 
     listTasksForWork: async () => {
@@ -573,6 +583,70 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         "[2/24/25] P6bのexecutePreparedTaskResume()自身はTrigger.dev固有識別子・Composio直接呼び出しのいずれも参照していない(new Runは既存境界内部のprepareRunForExecution()が作るのみ、runtime provider neutrality維持)",
         found.length === 0,
         found.length > 0 ? `unexpected references: ${found.join(", ")}` : undefined
+      )
+    );
+  }
+
+  // ---- EVENT-P1c: reason==="external_event_matched"専用のcorrelation再検証 ----
+
+  const EVENT_MATCHED_INTENT: TaskResumeIntent = {
+    workId: "work-1",
+    taskId: "task-1",
+    reason: "external_event_matched",
+    eventWaitId: "wait-1",
+    externalEventId: "ext-evt-1",
+    eligibleAt: "2026-09-17T00:00:00.000Z",
+  };
+
+  {
+    const { deps, calls } = makeDeps();
+
+    const outcome = await executePreparedTaskResume(
+      { intent: EVENT_MATCHED_INTENT, userId: OWNER_USER_ID, accessToken: "token" },
+      deps
+    );
+
+    results.push(
+      check(
+        "[EVENT-P1c] reason=external_event_matched・correlation ok -> validateExternalEventResumeCorrelation()が正確に1回呼ばれ、execution境界へ正常に進む",
+        outcome.status === "write_executed" && calls.correlationCalls === 1
+      )
+    );
+  }
+
+  {
+    const { deps, calls } = makeDeps({
+      correlationOverride: { ok: false, reasonCode: "external_event_not_matched" },
+    });
+
+    const outcome = await executePreparedTaskResume(
+      { intent: EVENT_MATCHED_INTENT, userId: OWNER_USER_ID, accessToken: "token" },
+      deps
+    );
+
+    results.push(
+      check(
+        "[EVENT-P1c] reason=external_event_matched・correlation失敗(external_event_not_matched) -> not_eligibleでexecution境界へ一切進まない(Run 0)",
+        outcome.status === "not_eligible" &&
+          outcome.reasonCode === "external_event_not_matched" &&
+          calls.executeApprovedIntegrationActionCalls.length === 0 &&
+          calls.executeReadIntegrationActionCalls.length === 0
+      )
+    );
+  }
+
+  {
+    // 既存のreason(approval_resolved等)ではcorrelation再検証を一切
+    // 呼ばない(このgateがexternal_event_matched専用に正しくscopeされて
+    // いることの確認、既存挙動への無関係な回帰が無いことの直接証拠)。
+    const { deps, calls } = makeDeps();
+
+    await executePreparedTaskResume(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[EVENT-P1c] reason=approval_resolved(既存reason)ではvalidateExternalEventResumeCorrelation()を一切呼ばない",
+        calls.correlationCalls === 0
       )
     );
   }

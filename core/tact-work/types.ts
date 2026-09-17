@@ -827,6 +827,66 @@ export interface EventWait {
 }
 
 // =========================
+// Event/Wait Atomic Claim Outcomes (EVENT-P1c)
+// =========================
+//
+// supabase/migrations/20261016010000_create_event_wait_claim_functions.sql
+// の各Postgres function(tact_claim_matched_event_wait/
+// tact_match_and_claim_external_event/tact_create_event_wait)が返す
+// jsonbの形に対応するcanonical TS型。SQL側の絶対条件(Section21状態
+// 遷移・Section22 typed outcomes)をそのままTS側の型として反映する。
+
+export type EventWaitClaimOutcome =
+  | { status: "wait_claimed"; eventId: string; waitId: string; taskId: string; workId: string }
+  // Section7/8: マッチする候補が無いだけで、event-before-wait durability
+  // によりExternalEvent.statusは"received"のまま変更しない。
+  | { status: "event_unmatched" }
+  // Section4: 複数のpending EventWaitが同じidentityに一致した
+  // (legacy/corrupt data)。oldest/firstを選ばず、claimしない。
+  | { status: "event_ambiguous"; candidateCount: number }
+  | { status: "event_not_found" }
+  // 既にmatched/expired/invalidなeventへの重複呼び出し
+  // (Section22: 新しいclaimとしてではなくidempotent/reconcilableに
+  // 扱う——呼び出し元がこのstatusをエラーとして扱わないことを期待する)。
+  | { status: "event_not_receivable"; eventStatus: ExternalEventStatus }
+  | { status: "wait_not_found" }
+  | { status: "wait_already_claimed"; waitStatus: EventWaitStatus }
+  // Section3のdeterministic matching contractが(呼び出し元の絞り込みに
+  // もかかわらず)成立しなかった、fail-closedな防御分岐。
+  | { status: "wait_wrong_owner" }
+  // Section6: event.receivedAt >= wait.expiresAt(境界含む)。
+  | { status: "wait_expired" }
+  // Section14/21: Task terminal・Task.status不整合(waiting_for_event
+  // ではない)のいずれか。reasonでどちらかを区別する。
+  | {
+      status: "wait_task_not_resumable";
+      reason: "task_not_found" | "task_work_mismatch" | "task_terminal" | "task_not_waiting_for_event";
+      taskStatus?: TaskStatus;
+    }
+  // Section14: Work terminal(またはWork自体が見つからない、fail closed)。
+  | { status: "wait_work_terminal"; reason?: "work_not_found"; workStatus?: WorkStatus };
+
+export type CreateEventWaitOutcome =
+  | {
+      status: "wait_created";
+      waitId: string;
+      taskId: string;
+      workId: string;
+      // Section8: wait作成と同一transaction内で行われた、既存
+      // "received" ExternalEventとの照合結果。0件ならevent_unmatched、
+      // 2件以上ならevent_ambiguous、ちょうど1件ならEventWaitClaimOutcome
+      // (成功時はwait_claimedを含みうる)。
+      reconciliation: EventWaitClaimOutcome;
+    }
+  | { status: "task_not_found" }
+  | {
+      status: "wait_task_not_resumable";
+      reason: "task_terminal" | "task_not_pending";
+      taskStatus?: TaskStatus;
+    }
+  | { status: "wait_work_terminal"; workStatus?: WorkStatus };
+
+// =========================
 // AuditEvent (Fast Port P4a: Append-Only Audit Event Foundation)
 // =========================
 //

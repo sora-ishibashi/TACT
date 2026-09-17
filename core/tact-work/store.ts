@@ -18,6 +18,8 @@ import type {
   ExternalEventStatus,
   EventWait,
   EventWaitStatus,
+  EventWaitClaimOutcome,
+  CreateEventWaitOutcome,
   AuditEvent,
   AuditEventCategory,
   AuditEventType,
@@ -2120,6 +2122,122 @@ export async function listPendingEventWaits(
   }
 
   return (data ?? []).map((row) => toEventWait(row as EventWaitRow));
+
+}
+
+// =========================
+// Atomic Event/Wait/Task Claim (EVENT-P1c)
+// =========================
+//
+// supabase/migrations/20261016010000_create_event_wait_claim_functions.sql
+// のPostgres functionをRPC経由で呼ぶだけの薄いwrapper。standalone
+// PostgREST UPDATEの列挙(read-then-write)ではSection5が要求する
+// atomicityを満たせないため、実際のstatus遷移(EventWait pending→
+// claimed・Task waiting_for_event→pending・ExternalEvent received→
+// matched)はこのfileでは一切行わず、単一transactionのSQL function側に
+// 閉じ込める(このfile自身はここでも「Store = DBアクセス層」という
+// 既存charterの範囲内)。
+//
+// userId引数を意図的に持たない(このfileの他の全関数と異なる、既存
+// 規約からの明示的な逸脱): 呼び出し先のSQL functionはSECURITY INVOKER
+// のまま呼び出し元のauth.uid()だけを所有者として使い、caller供給の
+// userIdを一切受け取らない設計にした(20261016010000migrationの
+// コメント、Section18「no caller-supplied owner trust」)。この
+// wrapper関数にuserId引数を持たせてしまうと、実際には使われないのに
+// 「ownership checkに使われているかのような」誤った印象を与える
+// ——シグネチャ自体で「ここにcaller供給ownershipは存在しない」ことを
+// 表明する。
+
+// SQL functionが返すjsonbの形を無条件に信用しない(既存
+// parseCandidateSnapshot()等と同じ、DB層を信用しないfail closed
+// 方針)。既知のstatus値のいずれでもない場合は、想定外のresponseとして
+// 例外を投げる(呼び出し元のcatch節がevent_persistence_failed相当へ
+// 正規化することを期待する——通常のbusiness outcomeとしては絶対に
+// 起こらないはずの経路)。
+// export: 実RPC呼び出し無しでpure functionとして直接テストできるように
+// する(tests/tact/work/eventWaitClaim.test.ts参照——このfileの他の
+// DBアクセス関数と異なり、matchAndClaimExternalEvent()/
+// createEventWaitAndReconcile()自身はDI seamを持たず常に実
+// createRequestScopedClient()経由でRPCへ到達するため、jsonb parsing
+// ロジックだけを実RPC呼び出しから切り離してテストする)。
+export function parseEventWaitClaimOutcome(raw: unknown): EventWaitClaimOutcome {
+
+  if (typeof raw !== "object" || raw === null || typeof (raw as Record<string, unknown>).status !== "string") {
+    throw new Error("tact_claim_matched_event_wait/tact_match_and_claim_external_event returned a malformed response");
+  }
+
+  return raw as EventWaitClaimOutcome;
+
+}
+
+export function parseCreateEventWaitOutcome(raw: unknown): CreateEventWaitOutcome {
+
+  if (typeof raw !== "object" || raw === null || typeof (raw as Record<string, unknown>).status !== "string") {
+    throw new Error("tact_create_event_wait returned a malformed response");
+  }
+
+  return raw as CreateEventWaitOutcome;
+
+}
+
+// Section9「Normal Event Flow」: EVENT-P1b ingestが永続化した
+// ExternalEvent(received)に対して、マッチするpending EventWaitを探し、
+// 見つかれば1つのtransaction内でatomicにclaimする。マッチが無ければ
+// (event-before-wait)ExternalEvent.statusは"received"のまま変更しない
+// (Section7絶対条件)。
+export async function matchAndClaimExternalEvent(
+  accessToken: string,
+  externalEventId: string
+): Promise<EventWaitClaimOutcome> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client.rpc("tact_match_and_claim_external_event", {
+    p_event_id: externalEventId,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return parseEventWaitClaimOutcome(data);
+
+}
+
+export interface CreateEventWaitAndReconcileParams {
+  taskId: string;
+  expectedSource: string;
+  expectedEventType: string;
+  subjectRef: string;
+  expiresAt?: string | null;
+}
+
+// Section8「Event Before Wait」: EventWait作成(+ Task pending→
+// waiting_for_eventの遷移)と、既に"received"なExternalEventとの照合を
+// 同一transactionで行う——core/tact-work/store.tsの既存createEventWait()
+// (EVENT-P1a、raw row-level CRUDのみ、Task状態には一切触れない)とは
+// 別の、production用のcanonical entry pointとしてこの関数を追加する
+// (既存createEventWait()は変更しない、後方互換)。
+export async function createEventWaitAndReconcile(
+  accessToken: string,
+  params: CreateEventWaitAndReconcileParams
+): Promise<CreateEventWaitOutcome> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client.rpc("tact_create_event_wait", {
+    p_task_id: params.taskId,
+    p_expected_source: params.expectedSource,
+    p_expected_event_type: params.expectedEventType,
+    p_subject_ref: params.subjectRef,
+    p_expires_at: params.expiresAt ?? null,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return parseCreateEventWaitOutcome(data);
 
 }
 

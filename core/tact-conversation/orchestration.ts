@@ -26,6 +26,11 @@ import {
   listTasksForWork,
   // Fast Port P6a: Task Resume Foundation。
   evaluateTaskResumeEligibility,
+  // EVENT-P1c: reason==="external_event_matched"専用のdurable
+  // correlation再検証(core/tact-work/resume.tsのcanonical実装、
+  // requestTaskResume()と同じ実装をここでも再利用する——重複実装
+  // しない)。
+  validateExternalEventResumeCorrelation,
   // Fast Port P3a / REF-P1d: Human Interaction Foundation + Pinned
   // Referent Clarification。
   listClarificationsForWork,
@@ -77,6 +82,8 @@ import type {
   TaskResumeIntent,
   TaskResumeEligibilityBlockedReasonCode,
   TaskResumeTerminalReasonCode,
+  // EVENT-P1c
+  ExternalEventResumeCorrelationBlockedReasonCode,
   ResolvedWorkIntent,
 } from "../tact-work";
 import {
@@ -2752,6 +2759,10 @@ export interface ExecutePreparedTaskResumeDeps {
 
   evaluateTaskResumeEligibility: typeof evaluateTaskResumeEligibility;
 
+  // EVENT-P1c(Section11「At BOTH」): requestTaskResume()と全く同じ
+  // canonical実装を再利用する(重複実装しない)。
+  validateExternalEventResumeCorrelation: typeof validateExternalEventResumeCorrelation;
+
   listTasksForWork: typeof listTasksForWork;
 
   listApprovalsForWork: typeof listApprovalsForWork;
@@ -2768,6 +2779,7 @@ export interface ExecutePreparedTaskResumeDeps {
 
 const defaultExecutePreparedTaskResumeDeps: ExecutePreparedTaskResumeDeps = {
   evaluateTaskResumeEligibility,
+  validateExternalEventResumeCorrelation,
   listTasksForWork,
   listApprovalsForWork,
   evaluatePolicyDecision,
@@ -2783,7 +2795,10 @@ const defaultExecutePreparedTaskResumeDeps: ExecutePreparedTaskResumeDeps = {
 // boundary)へ到達できなかった」という、このresume operation自身に
 // 固有の分岐だけ。
 export type TaskResumeExecutionOutcome =
-  | { status: "not_eligible"; reasonCode: TaskResumeEligibilityBlockedReasonCode }
+  | {
+      status: "not_eligible";
+      reasonCode: TaskResumeEligibilityBlockedReasonCode | ExternalEventResumeCorrelationBlockedReasonCode;
+    }
   | { status: "already_terminal"; reasonCode: TaskResumeTerminalReasonCode }
   | { status: "unsupported_capability" }
   | { status: "policy_not_executable" }
@@ -2811,6 +2826,30 @@ export async function executePreparedTaskResume(
 
   if (eligibility.status === "already_terminal") {
     return { status: "already_terminal", reasonCode: eligibility.reasonCode };
+  }
+
+  // EVENT-P1c(Section11「At BOTH: requestTaskResume() and
+  // executePreparedTaskResume()」、絶対条件「Do not trust a stale
+  // resume intent」): intent.eventWaitId/externalEventIdをlookup key
+  // としてのみ使い、EventWait/ExternalEventの現在状態をこの呼び出し
+  // 自身が毎回再取得・再検証する(prepared時点からclaim状態が
+  // 変わっている可能性——例えばTask terminal化・別経路での重複
+  // resume——を必ず拾う)。
+  if (intent.reason === "external_event_matched") {
+
+    const correlation = await deps.validateExternalEventResumeCorrelation({
+      workId,
+      userId,
+      accessToken,
+      taskId,
+      eventWaitId: intent.eventWaitId,
+      externalEventId: intent.externalEventId,
+    });
+
+    if (!correlation.ok) {
+      return { status: "not_eligible", reasonCode: correlation.reasonCode };
+    }
+
   }
 
   // eligibility.status === "eligible"。Task本体(assignedCapability)を

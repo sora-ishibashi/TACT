@@ -19,9 +19,11 @@ import { join } from "node:path";
 import {
   evaluateTaskResumeEligibility,
   requestTaskResume,
+  validateExternalEventResumeCorrelation,
   type TaskResumeEligibilityDeps,
+  type ValidateExternalEventResumeCorrelationDeps,
 } from "../../../core/tact-work/resume";
-import type { Work, WorkTask, Run, Approval, Clarification } from "../../../core/tact-work/types";
+import type { Work, WorkTask, Run, Approval, Clarification, EventWait, ExternalEvent } from "../../../core/tact-work/types";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 const OWNER_USER_ID = "user-1";
@@ -98,6 +100,57 @@ function makeClarification(overrides: Partial<Clarification> = {}): Clarificatio
     createdAt: "2026-09-09T00:00:00.000Z",
     ...overrides,
   } as Clarification;
+}
+
+function makeEventWait(overrides: Partial<EventWait> = {}): EventWait {
+  return {
+    id: "wait-1",
+    userId: OWNER_USER_ID,
+    workId: "work-1",
+    taskId: "task-1",
+    expectedSource: "gmail",
+    expectedEventType: "message.received",
+    subjectRef: "thread-abc",
+    status: "claimed",
+    createdAt: "2026-09-09T00:00:00.000Z",
+    claimedByEventId: "ext-evt-1",
+    ...overrides,
+  };
+}
+
+function makeExternalEvent(overrides: Partial<ExternalEvent> = {}): ExternalEvent {
+  return {
+    id: "ext-evt-1",
+    userId: OWNER_USER_ID,
+    source: "gmail",
+    eventType: "message.received",
+    externalEventId: "gmail-msg-1",
+    subjectRef: "thread-abc",
+    receivedAt: "2026-09-09T00:00:00.000Z",
+    normalizedPayload: {},
+    status: "matched",
+    createdAt: "2026-09-09T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+interface MakeCorrelationDepsOptions {
+  wait?: EventWait | undefined;
+  event?: ExternalEvent | undefined;
+}
+
+function makeCorrelationDeps(options: MakeCorrelationDepsOptions = {}) {
+
+  const wait = "wait" in options ? options.wait : makeEventWait();
+  const event = "event" in options ? options.event : makeExternalEvent();
+
+  const deps: ValidateExternalEventResumeCorrelationDeps = {
+    getEventWait: async () => wait,
+    getExternalEvent: async () => event,
+  };
+
+  return deps;
+
 }
 
 interface MakeDepsOptions {
@@ -557,6 +610,273 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[17] TaskResumeTriggerReasonの値はいずれもTrigger.dev固有語彙(waitpoint/trigger_dev等)を含まない(runtime provider neutrality維持)",
         reasons.every((r) => !r.toLowerCase().includes("trigger") && !r.toLowerCase().includes("waitpoint"))
+      )
+    );
+  }
+
+  // =========================
+  // EVENT-P1c: waiting_for_event eligibility gap close (Section12)
+  // =========================
+
+  // ---- Task.status==='waiting_for_event'はblocked(task_waiting_for_event)であり、
+  // 'pending'と同じ扱いにフォールスルーしてeligibleにならない ----
+  {
+    const { deps } = makeDeps({ tasks: [makeTask({ status: "waiting_for_event" })] });
+
+    const eligibility = await evaluateTaskResumeEligibility(BASE_PARAMS, deps);
+
+    results.push(
+      check(
+        "[EVENT-P1c Section12] Task.status==='waiting_for_event'はblocked(task_waiting_for_event)、'pending'と同じ扱いにならない",
+        eligibility.status === "blocked" && eligibility.reasonCode === "task_waiting_for_event"
+      )
+    );
+  }
+
+  // ---- Section13「Manual Resume」絶対条件: waiting_for_eventなTaskは、
+  // reasonがmanual_resumeであってもrequestTaskResume()がpreparedを
+  // 返さない(silent bypass不可) ----
+  {
+    const { deps } = makeDeps({ tasks: [makeTask({ status: "waiting_for_event" })] });
+
+    const outcome = await requestTaskResume({ ...BASE_PARAMS, reason: "manual_resume" }, deps);
+
+    results.push(
+      check(
+        "[EVENT-P1c Section13] waiting_for_eventなTaskはreason=manual_resumeでもblocked(task_waiting_for_event)、silent bypass不可",
+        outcome.status === "blocked" && outcome.reasonCode === "task_waiting_for_event"
+      )
+    );
+  }
+
+  // ---- 絶対条件「Do not trust a stale resume intent」: reasonが
+  // external_event_matchedであっても、Task.statusが実際にはまだ
+  // waiting_for_eventのまま(=atomic claim transactionがまだ起きて
+  // いない)場合はblockedになる(external_event_matchedというreasonの
+  // 主張だけでeligibilityをbypassしない) ----
+  {
+    const { deps } = makeDeps({ tasks: [makeTask({ status: "waiting_for_event" })] });
+
+    const outcome = await requestTaskResume(
+      { ...BASE_PARAMS, reason: "external_event_matched", eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      deps
+    );
+
+    results.push(
+      check(
+        "[EVENT-P1c Section11/21] reason=external_event_matchedでも、Task.statusがまだwaiting_for_eventのままならblocked(task_waiting_for_event)、reasonの主張だけでbypassしない",
+        outcome.status === "blocked" && outcome.reasonCode === "task_waiting_for_event"
+      )
+    );
+  }
+
+  // =========================
+  // EVENT-P1c: validateExternalEventResumeCorrelation() (Section11)
+  // =========================
+
+  {
+    const correlationDeps = makeCorrelationDeps();
+
+    const result = await validateExternalEventResumeCorrelation(
+      { ...BASE_PARAMS, eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[correlation] wait=claimed・claimedByEventId一致・event=matched・所有者一致 -> ok",
+        result.ok === true
+      )
+    );
+  }
+
+  {
+    const result = await validateExternalEventResumeCorrelation(
+      { ...BASE_PARAMS },
+      makeCorrelationDeps()
+    );
+
+    results.push(
+      check(
+        "[correlation] eventWaitId/externalEventIdのいずれも省略 -> event_correlation_missing",
+        !result.ok && result.reasonCode === "event_correlation_missing"
+      )
+    );
+  }
+
+  {
+    const correlationDeps = makeCorrelationDeps({ wait: undefined });
+
+    const result = await validateExternalEventResumeCorrelation(
+      { ...BASE_PARAMS, eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[correlation] EventWaitが見つからない -> event_wait_not_found",
+        !result.ok && result.reasonCode === "event_wait_not_found"
+      )
+    );
+  }
+
+  {
+    const correlationDeps = makeCorrelationDeps({ wait: makeEventWait({ taskId: "other-task" }) });
+
+    const result = await validateExternalEventResumeCorrelation(
+      { ...BASE_PARAMS, eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[correlation] EventWait.taskIdが指定taskIdと一致しない -> event_wait_wrong_task(fail closed、IDOR対策)",
+        !result.ok && result.reasonCode === "event_wait_wrong_task"
+      )
+    );
+  }
+
+  {
+    const correlationDeps = makeCorrelationDeps({ wait: makeEventWait({ status: "pending" }) });
+
+    const result = await validateExternalEventResumeCorrelation(
+      { ...BASE_PARAMS, eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[correlation] EventWait.status!=='claimed'(pending) -> event_wait_not_claimed",
+        !result.ok && result.reasonCode === "event_wait_not_claimed"
+      )
+    );
+  }
+
+  {
+    const correlationDeps = makeCorrelationDeps({ wait: makeEventWait({ claimedByEventId: "other-event" }) });
+
+    const result = await validateExternalEventResumeCorrelation(
+      { ...BASE_PARAMS, eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[correlation] EventWait.claimedByEventIdが指定externalEventIdと一致しない -> event_wait_claim_mismatch",
+        !result.ok && result.reasonCode === "event_wait_claim_mismatch"
+      )
+    );
+  }
+
+  {
+    const correlationDeps = makeCorrelationDeps({ event: undefined });
+
+    const result = await validateExternalEventResumeCorrelation(
+      { ...BASE_PARAMS, eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[correlation] ExternalEventが見つからない -> external_event_not_found",
+        !result.ok && result.reasonCode === "external_event_not_found"
+      )
+    );
+  }
+
+  {
+    const correlationDeps = makeCorrelationDeps({ event: makeExternalEvent({ userId: "attacker" }) });
+
+    const result = await validateExternalEventResumeCorrelation(
+      { ...BASE_PARAMS, eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[correlation] ExternalEvent.userIdが呼び出し元userIdと一致しない -> external_event_wrong_owner",
+        !result.ok && result.reasonCode === "external_event_wrong_owner"
+      )
+    );
+  }
+
+  {
+    const correlationDeps = makeCorrelationDeps({ event: makeExternalEvent({ status: "received" }) });
+
+    const result = await validateExternalEventResumeCorrelation(
+      { ...BASE_PARAMS, eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[correlation] ExternalEvent.status!=='matched'(received) -> external_event_not_matched",
+        !result.ok && result.reasonCode === "external_event_not_matched"
+      )
+    );
+  }
+
+  // =========================
+  // EVENT-P1c: requestTaskResume() wiring for external_event_matched
+  // =========================
+
+  {
+    // atomic claim transactionが既にTask.status waiting_for_event→pendingを
+    // 完了させている前提(Section2 Architecture Decision)。
+    const { deps } = makeDeps({ tasks: [makeTask({ status: "pending" })] });
+    const correlationDeps = makeCorrelationDeps();
+
+    const outcome = await requestTaskResume(
+      { ...BASE_PARAMS, reason: "external_event_matched", eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      deps,
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[EVENT-P1c] Task.status==='pending'(claim済み)・correlation ok -> prepared、intentがeventWaitId/externalEventIdを運ぶ",
+        outcome.status === "prepared" &&
+          outcome.intent.eventWaitId === "wait-1" &&
+          outcome.intent.externalEventId === "ext-evt-1"
+      )
+    );
+  }
+
+  {
+    const { deps } = makeDeps({ tasks: [makeTask({ status: "pending" })] });
+    const correlationDeps = makeCorrelationDeps({ wait: makeEventWait({ status: "pending" }) });
+
+    const outcome = await requestTaskResume(
+      { ...BASE_PARAMS, reason: "external_event_matched", eventWaitId: "wait-1", externalEventId: "ext-evt-1" },
+      deps,
+      correlationDeps
+    );
+
+    results.push(
+      check(
+        "[EVENT-P1c] 汎用eligibilityはeligibleでも、correlation再検証が失敗すればblocked(汎用eligibility判定だけでは不十分)",
+        outcome.status === "blocked" && outcome.reasonCode === "event_wait_not_claimed"
+      )
+    );
+  }
+
+  {
+    // reason以外(approval_resolved等)ではcorrelation再検証を一切
+    // 呼ばない(existing behavior無変更の直接証拠)。
+    const { deps } = makeDeps({ approvals: [makeApproval({ status: "approved" })] });
+
+    let correlationCalls = 0;
+    const correlationDeps: ValidateExternalEventResumeCorrelationDeps = {
+      getEventWait: async () => { correlationCalls += 1; return makeEventWait(); },
+      getExternalEvent: async () => { correlationCalls += 1; return makeExternalEvent(); },
+    };
+
+    const outcome = await requestTaskResume({ ...BASE_PARAMS, reason: "approval_resolved" }, deps, correlationDeps);
+
+    results.push(
+      check(
+        "[EVENT-P1c] reason=approval_resolvedではcorrelation再検証を一切呼ばない(既存挙動への無関係な回帰なし)",
+        outcome.status === "prepared" && correlationCalls === 0
       )
     );
   }
