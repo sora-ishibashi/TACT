@@ -416,6 +416,7 @@ export async function handleSlackWebhookRequest(
   const claim = await deps.claimExternalEvent({ channel: "slack", externalEventId });
 
   if (claim === "duplicate") {
+    console.info("[tact-bot][EVENT-P1d-diag] bot_dedup_duplicate");
     return ackIgnored();
   }
 
@@ -452,6 +453,12 @@ export async function handleSlackWebhookRequest(
   const identity = message.organizationId
     ? await identityResolver.resolve(message.actor, message.channel, message.organizationId)
     : null;
+
+  if (identity) {
+    console.info("[tact-bot][EVENT-P1d-diag] identity_resolved");
+  } else {
+    console.info("[tact-bot][EVENT-P1d-diag] identity_unmapped");
+  }
 
   // subjectRef(Section「deterministic subjectRef」): 既に正規化済みの
   // BotIncomingMessage値だけを使い、thread規約を独自に再導出しない。
@@ -492,6 +499,7 @@ export async function handleSlackWebhookRequest(
     });
 
     if (!ingestResult.ok || ingestResult.outcome.status === "event_persistence_failed") {
+      console.info("[tact-bot][EVENT-P1d-diag] event_ingest_failed");
       // CRITICAL(絶対条件、最重要): mapped userに対して必須のdurable
       // ExternalEvent受領がここで確定できなかった場合、成功ACKを返さ
       // ない——Slackの自然な再送(retry)へ委ねる。event_persistence_
@@ -506,14 +514,14 @@ export async function handleSlackWebhookRequest(
       ingestResult.outcome.status === "event_received" ||
       ingestResult.outcome.status === "event_duplicate";
 
-    if (!externalEventReady) {
+    if (externalEventReady) {
+      console.info("[tact-bot][EVENT-P1d-diag] event_ingest_ok");
+    } else {
+      console.info("[tact-bot][EVENT-P1d-diag] event_ingest_rejected");
       // event_invalid/event_wrong_owner/event_duplicate_conflict:
       // 非transientな構造的不整合であり、5xxで再送させても解消しない
       // ——固定文言のみをログし、通常のBot会話処理は継続する
       // (EVENT側のmatch/resumeだけをskipする)。
-      console.error("[tact-bot] Slack trusted ExternalEvent ingest rejected", {
-        status: ingestResult.outcome.status,
-      });
     }
 
   }
