@@ -11,7 +11,9 @@ import {
 import type { BotIdentityResolver } from "../../identity/resolver";
 import {
   claimExternalEvent as defaultClaimExternalEvent,
+  releaseExternalEventClaim as defaultReleaseExternalEventClaim,
   type ClaimExternalEventResult,
+  type ReleaseExternalEventClaimResult,
 } from "../../eventDedup/supabaseEventDedupStore";
 import {
   ingestTrustedExternalEvent as defaultIngestTrustedExternalEvent,
@@ -94,6 +96,11 @@ export interface HandleSlackWebhookRequestDeps {
     externalEventId: string;
   }) => Promise<ClaimExternalEventResult>;
 
+  releaseExternalEventClaim?: (params: {
+    channel: "slack";
+    externalEventId: string;
+  }) => Promise<ReleaseExternalEventClaimResult>;
+
   receiveBotMessage: (message: BotIncomingMessage, conversationEvidence?: ConversationEvidence) => Promise<ReceiveBotMessageResult>;
 
   retrieveConversationContext?: (trigger: SlackConversationContextTrigger) => Promise<ConversationEvidence>;
@@ -151,6 +158,8 @@ const defaultDeps: HandleSlackWebhookRequestDeps = {
   getSigningSecret: getSlackSigningSecret,
 
   claimExternalEvent: defaultClaimExternalEvent,
+
+  releaseExternalEventClaim: defaultReleaseExternalEventClaim,
 
   // S1b: receiveBotMessage()自体のdisconnected default(BOT-P1由来)
   // ではなく、Slack production wiring(./productionBotCore.ts、
@@ -372,7 +381,6 @@ export async function handleSlackWebhookRequest(
       return { status: 400, body: { error: "invalid_challenge" } };
     }
 
-    console.info("[tact-bot][EVENT-P1d-diag] url_verification");
     return { status: 200, body: { challenge: parsed.challenge } };
 
   }
@@ -380,7 +388,6 @@ export async function handleSlackWebhookRequest(
   // 絶対条件(Section8): MVP対象外のevent(event_callback以外のtype、
   // またはapp_mention以外のevent種別)は安全にignore/ACKする。
   if (!isAppMentionEventCallback(envelope)) {
-    console.info("[tact-bot][EVENT-P1d-diag] ignored_non_app_mention");
     return ackIgnored();
   }
 
@@ -394,7 +401,6 @@ export async function handleSlackWebhookRequest(
   // dedup claimより前に行う(対象外eventでdedup recordを無駄に作らない、
   // 絶対条件Section17)。
   if (isBotEchoEvent(event)) {
-    console.info("[tact-bot][EVENT-P1d-diag] ignored_bot_echo");
     return ackIgnored();
   }
 
@@ -408,15 +414,12 @@ export async function handleSlackWebhookRequest(
     // event_idが無ければdedup自体が成立しない——安全側で処理しない
     // (Slack公式仕様上event_callbackには常にevent_idが付与される
     // ため、通常到達しない防御的分岐)。
-    console.info("[tact-bot][EVENT-P1d-diag] ignored_missing_event_id");
     return ackIgnored();
   }
 
-  console.info("[tact-bot][EVENT-P1d-diag] reached_dedup_claim");
   const claim = await deps.claimExternalEvent({ channel: "slack", externalEventId });
 
   if (claim === "duplicate") {
-    console.info("[tact-bot][EVENT-P1d-diag] bot_dedup_duplicate");
     return ackIgnored();
   }
 
@@ -453,12 +456,6 @@ export async function handleSlackWebhookRequest(
   const identity = message.organizationId
     ? await identityResolver.resolve(message.actor, message.channel, message.organizationId)
     : null;
-
-  if (identity) {
-    console.info("[tact-bot][EVENT-P1d-diag] identity_resolved");
-  } else {
-    console.info("[tact-bot][EVENT-P1d-diag] identity_unmapped");
-  }
 
   // subjectRef(Section「deterministic subjectRef」): 既に正規化済みの
   // BotIncomingMessage値だけを使い、thread規約を独自に再導出しない。
@@ -499,7 +496,9 @@ export async function handleSlackWebhookRequest(
     });
 
     if (!ingestResult.ok || ingestResult.outcome.status === "event_persistence_failed") {
-      console.info("[tact-bot][EVENT-P1d-diag] event_ingest_failed");
+      const releaseExternalEventClaim =
+        deps.releaseExternalEventClaim ?? defaultDeps.releaseExternalEventClaim!;
+      await releaseExternalEventClaim({ channel: "slack", externalEventId });
       // CRITICAL(絶対条件、最重要): mapped userに対して必須のdurable
       // ExternalEvent受領がここで確定できなかった場合、成功ACKを返さ
       // ない——Slackの自然な再送(retry)へ委ねる。event_persistence_
@@ -514,10 +513,7 @@ export async function handleSlackWebhookRequest(
       ingestResult.outcome.status === "event_received" ||
       ingestResult.outcome.status === "event_duplicate";
 
-    if (externalEventReady) {
-      console.info("[tact-bot][EVENT-P1d-diag] event_ingest_ok");
-    } else {
-      console.info("[tact-bot][EVENT-P1d-diag] event_ingest_rejected");
+    if (!externalEventReady) {
       // event_invalid/event_wrong_owner/event_duplicate_conflict:
       // 非transientな構造的不整合であり、5xxで再送させても解消しない
       // ——固定文言のみをログし、通常のBot会話処理は継続する

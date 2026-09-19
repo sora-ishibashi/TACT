@@ -25,7 +25,10 @@ import {
   type HandleSlackWebhookRequestDeps,
   type SlackWebhookHeaders,
 } from "../../../core/tact-bot/adapters/slack/handleSlackWebhookRequest";
-import type { ClaimExternalEventResult } from "../../../core/tact-bot/eventDedup/supabaseEventDedupStore";
+import type {
+  ClaimExternalEventResult,
+  ReleaseExternalEventClaimResult,
+} from "../../../core/tact-bot/eventDedup/supabaseEventDedupStore";
 import type { BotIdentity, BotIncomingMessage } from "../../../core/tact-bot/types";
 import type { BotIdentityResolver } from "../../../core/tact-bot/identity/resolver";
 import type {
@@ -93,6 +96,7 @@ function makeAppMentionEnvelope(overrides: Record<string, unknown> = {}) {
 function makeFakeDeps(options: {
   claimResult?: ClaimExternalEventResult;
   claimResultsByEventId?: Record<string, ClaimExternalEventResult>;
+  releaseResult?: ReleaseExternalEventClaimResult;
   // EVENT-P1d Phase4/6: 既定はnull(unmapped actor)——このoptionを
   // 省略した既存テストは、ExternalEvent ingest/match/resumeのいずれも
   // 一切試みられない、既存(EVENT-P1d以前)と同じ経路をそのまま通る。
@@ -102,6 +106,7 @@ function makeFakeDeps(options: {
 } = {}): {
   deps: HandleSlackWebhookRequestDeps;
   claimCalls: { channel: string; externalEventId: string }[];
+  releaseCalls: { channel: string; externalEventId: string }[];
   receiveBotMessageCalls: BotIncomingMessage[];
   retrievedContextTriggers: { channelRef: string; triggerMessageRef: string; threadRef?: string }[];
   scheduledTasks: (() => Promise<void>)[];
@@ -111,6 +116,7 @@ function makeFakeDeps(options: {
 } {
 
   const claimCalls: { channel: string; externalEventId: string }[] = [];
+  const releaseCalls: { channel: string; externalEventId: string }[] = [];
   const receiveBotMessageCalls: BotIncomingMessage[] = [];
   const retrievedContextTriggers: { channelRef: string; triggerMessageRef: string; threadRef?: string }[] = [];
   const scheduledTasks: (() => Promise<void>)[] = [];
@@ -135,6 +141,11 @@ function makeFakeDeps(options: {
         return options.claimResultsByEventId[params.externalEventId];
       }
       return options.claimResult ?? "claimed";
+    },
+
+    releaseExternalEventClaim: async (params) => {
+      releaseCalls.push(params);
+      return options.releaseResult ?? "released";
     },
 
     receiveBotMessage: async (message) => {
@@ -198,6 +209,7 @@ function makeFakeDeps(options: {
   return {
     deps,
     claimCalls,
+    releaseCalls,
     receiveBotMessageCalls,
     retrievedContextTriggers,
     scheduledTasks,
@@ -695,7 +707,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     const envelope = makeAppMentionEnvelope({ event_id: "Ev-ingest-fail-1" });
     const { rawBody, headers } = makeSignedRequest(envelope);
-    const { deps, scheduledTasks, continueTrustedExternalEventArrivalCalls } = makeFakeDeps({
+    const { deps, scheduledTasks, continueTrustedExternalEventArrivalCalls, releaseCalls } = makeFakeDeps({
       identity: { tactUserId: "tact-user-2" },
       ingestOutcome: { ok: true, outcome: { status: "event_persistence_failed", error: "connection reset" } },
     });
@@ -707,12 +719,122 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         "[絶対条件、最重要] mapped userに対するdurable ExternalEvent ingestがevent_persistence_failedの場合、成功ACKを返さず500(fail closed、Slackの自然な再送へ委ねる)を返す。background処理(EVENT match/resume・通常Bot会話処理いずれも)は一切scheduleされない",
         response.status === 500 &&
           scheduledTasks.length === 0 &&
-          continueTrustedExternalEventArrivalCalls.length === 0
+          continueTrustedExternalEventArrivalCalls.length === 0 &&
+          releaseCalls.length === 1 &&
+          releaseCalls[0].channel === "slack" &&
+          releaseCalls[0].externalEventId === "Ev-ingest-fail-1"
       )
     );
   }
 
   // ---- mapped actor + service role key未設定(trusted_execution_not_configured) -> 同じくfail-closed 5xx ----
+  // A failed pre-ACK ingest releases only its atomic bot claim. The Slack
+  // retry can enter canonical ingest, while a later duplicate of the
+  // successfully persisted event is ACKed without a second ingest.
+  {
+    const envelope = makeAppMentionEnvelope({ event_id: "Ev-retryable-ingest-1" });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const { deps, scheduledTasks, continueTrustedExternalEventArrivalCalls } = makeFakeDeps({
+      identity: { tactUserId: "tact-user-retryable-1" },
+    });
+    const claimedEventIds = new Set<string>();
+    let claimCalls = 0;
+    let releaseCalls = 0;
+    let ingestCalls = 0;
+    const defaultIngest = deps.ingestTrustedExternalEvent!;
+
+    deps.claimExternalEvent = async ({ externalEventId }) => {
+      claimCalls += 1;
+      if (claimedEventIds.has(externalEventId)) return "duplicate";
+      claimedEventIds.add(externalEventId);
+      return "claimed";
+    };
+    deps.releaseExternalEventClaim = async ({ externalEventId }) => {
+      releaseCalls += 1;
+      claimedEventIds.delete(externalEventId);
+      return "released";
+    };
+    deps.ingestTrustedExternalEvent = async (params) => {
+      ingestCalls += 1;
+      if (ingestCalls === 1) {
+        return { ok: true, outcome: { status: "event_persistence_failed", error: "transient" } };
+      }
+      return defaultIngest(params);
+    };
+
+    const firstResponse = await handleSlackWebhookRequest(rawBody, headers, deps);
+    const retryResponse = await handleSlackWebhookRequest(rawBody, headers, deps);
+    await scheduledTasks[0]();
+    const laterDuplicateResponse = await handleSlackWebhookRequest(rawBody, headers, deps);
+
+    results.push(
+      check(
+        "[EVENT-P1d retry] a failed ingest releases the claim, one Slack retry persists/resumes once, and a later duplicate is ACKed without another ingest",
+        firstResponse.status === 500 &&
+          retryResponse.status === 200 &&
+          laterDuplicateResponse.status === 200 &&
+          claimCalls === 3 &&
+          releaseCalls === 1 &&
+          ingestCalls === 2 &&
+          scheduledTasks.length === 1 &&
+          continueTrustedExternalEventArrivalCalls.length === 1
+      )
+    );
+  }
+
+  // The atomic claim continues to protect the interval while the first
+  // canonical ingest is pending, so concurrent delivery cannot double-ingest
+  // or double-resume the external event.
+  {
+    const envelope = makeAppMentionEnvelope({ event_id: "Ev-concurrent-ingest-1" });
+    const { rawBody, headers } = makeSignedRequest(envelope);
+    const { deps, scheduledTasks, continueTrustedExternalEventArrivalCalls } = makeFakeDeps({
+      identity: { tactUserId: "tact-user-concurrent-1" },
+    });
+    let claimed = false;
+    let ingestCalls = 0;
+    let releaseFirstIngest: () => void = () => {};
+    let signalIngestStarted: () => void = () => {};
+    const firstIngest = new Promise<void>((resolve) => {
+      releaseFirstIngest = resolve;
+    });
+    const ingestStarted = new Promise<void>((resolve) => {
+      signalIngestStarted = resolve;
+    });
+    const defaultIngest = deps.ingestTrustedExternalEvent!;
+
+    deps.claimExternalEvent = async () => {
+      if (claimed) return "duplicate";
+      claimed = true;
+      return "claimed";
+    };
+    deps.ingestTrustedExternalEvent = async (params) => {
+      ingestCalls += 1;
+      signalIngestStarted();
+      await firstIngest;
+      return defaultIngest(params);
+    };
+
+    const firstDelivery = handleSlackWebhookRequest(rawBody, headers, deps);
+    await ingestStarted;
+    const concurrentDuplicate = await handleSlackWebhookRequest(rawBody, headers, deps);
+    releaseFirstIngest();
+    const firstResponse = await firstDelivery;
+    await scheduledTasks[0]();
+
+    results.push(
+      check(
+        "[EVENT-P1d concurrency] a concurrent duplicate is ACKed while the claimed ingest runs, with one ingest and one EventWait continuation",
+        firstResponse.status === 200 &&
+          concurrentDuplicate.status === 200 &&
+          ingestCalls === 1 &&
+          scheduledTasks.length === 1 &&
+          continueTrustedExternalEventArrivalCalls.length === 1
+      )
+    );
+  }
+
+  // ---- mapped actor + missing service role key -> fail-closed 5xx ----
   {
     const envelope = makeAppMentionEnvelope({ event_id: "Ev-ingest-not-configured-1" });
     const { rawBody, headers } = makeSignedRequest(envelope);

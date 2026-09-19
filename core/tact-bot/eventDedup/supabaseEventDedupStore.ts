@@ -27,6 +27,8 @@ import type { LinkableBotChannel } from "../identity/supabaseIdentityStore";
 
 export type ClaimExternalEventResult = "claimed" | "duplicate" | "error";
 
+export type ReleaseExternalEventClaimResult = "released" | "error";
+
 export interface ClaimExternalEventParams {
 
   channel: LinkableBotChannel;
@@ -66,5 +68,29 @@ export async function claimExternalEvent(
   console.error("[tact-bot] claimExternalEvent failed:", error.message);
 
   return "error";
+
+}
+
+// A pre-ACK canonical ingest failure is not a processed event. Remove only its
+// atomic claim so Slack's retry can claim and retry the canonical ingest path.
+// The same unique (channel, external_event_id) key preserves duplicate ACKs
+// after a successful durable ingest.
+export async function releaseExternalEventClaim(
+  params: ClaimExternalEventParams
+): Promise<ReleaseExternalEventClaimResult> {
+
+  const client = getServiceRoleClient();
+
+  if (!client) {
+    return "error";
+  }
+
+  const { error } = await client
+    .from("tact_bot_processed_events")
+    .delete()
+    .eq("channel", params.channel)
+    .eq("external_event_id", params.externalEventId);
+
+  return error ? "error" : "released";
 
 }
