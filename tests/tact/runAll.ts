@@ -188,6 +188,8 @@ import { run as runWorkGmailReferentCandidates } from "./work/gmailReferentCandi
 import { run as runWorkExecutionPreview } from "./work/executionPreview.test";
 import { run as runWorkMultiTaskWork } from "./work/multiTaskWork.test";
 import { run as runWorkCapability } from "./work/capability.test";
+import { run as runExecutionCorrelationCrossProviderExplicitWorkId } from "./execution/correlation/crossProviderExplicitWorkId.test";
+import { run as runExecutionResolveTargetWorkForCorrelation } from "./execution/resolveTargetWorkForCorrelation.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -351,6 +353,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/executionPreview", run: runWorkExecutionPreview },
   { name: "work/multiTaskWork", run: runWorkMultiTaskWork },
   { name: "work/capability", run: runWorkCapability },
+  { name: "execution/correlation/crossProviderExplicitWorkId", run: runExecutionCorrelationCrossProviderExplicitWorkId },
+  { name: "execution/resolveTargetWorkForCorrelation", run: runExecutionResolveTargetWorkForCorrelation },
 ];
 
 async function main() {
