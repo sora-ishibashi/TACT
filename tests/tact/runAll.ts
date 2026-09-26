@@ -190,6 +190,7 @@ import { run as runWorkMultiTaskWork } from "./work/multiTaskWork.test";
 import { run as runWorkCapability } from "./work/capability.test";
 import { run as runExecutionCorrelationCrossProviderExplicitWorkId } from "./execution/correlation/crossProviderExplicitWorkId.test";
 import { run as runExecutionResolveTargetWorkForCorrelation } from "./execution/resolveTargetWorkForCorrelation.test";
+import { run as runWorkEntityEvidenceReferences } from "./work/workEntityEvidenceReferences.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -355,6 +356,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/capability", run: runWorkCapability },
   { name: "execution/correlation/crossProviderExplicitWorkId", run: runExecutionCorrelationCrossProviderExplicitWorkId },
   { name: "execution/resolveTargetWorkForCorrelation", run: runExecutionResolveTargetWorkForCorrelation },
+  { name: "work/workEntityEvidenceReferences", run: runWorkEntityEvidenceReferences },
 ];
 
 async function main() {
