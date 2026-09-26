@@ -191,6 +191,7 @@ import { run as runWorkCapability } from "./work/capability.test";
 import { run as runExecutionCorrelationCrossProviderExplicitWorkId } from "./execution/correlation/crossProviderExplicitWorkId.test";
 import { run as runExecutionResolveTargetWorkForCorrelation } from "./execution/resolveTargetWorkForCorrelation.test";
 import { run as runWorkEntityEvidenceReferences } from "./work/workEntityEvidenceReferences.test";
+import { run as runExecutionCorrelationConfidencePolicy } from "./execution/correlation/confidencePolicy.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -357,6 +358,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/correlation/crossProviderExplicitWorkId", run: runExecutionCorrelationCrossProviderExplicitWorkId },
   { name: "execution/resolveTargetWorkForCorrelation", run: runExecutionResolveTargetWorkForCorrelation },
   { name: "work/workEntityEvidenceReferences", run: runWorkEntityEvidenceReferences },
+  { name: "execution/correlation/confidencePolicy", run: runExecutionCorrelationConfidencePolicy },
 ];
 
 async function main() {
