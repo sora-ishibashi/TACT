@@ -611,6 +611,48 @@ export async function listWorksForConversation(
 
 }
 
+// SOR-77 (CORRELATION-REVIEW-P1): tenant-safe batch title lookup for a
+// human-correction UI showing a list of candidate/predicted/previous Work
+// ids (core/tact-execution/correlation/store.ts's
+// getExecutionCorrectionContext()). Same "id set + independent
+// .eq('user_id', userId)" defense-in-depth already established by
+// core/tact-execution/permission/attentionStore.ts's fetchRelatedRecords()
+// for Attention's workTitle join — a Work id that does not belong to this
+// user simply never appears in the returned map (No-Fabrication: the
+// caller must treat a missing id as "title unavailable," not "empty
+// string").
+export async function listWorkTitlesByIds(
+  workIds: readonly string[],
+  userId: string,
+  accessToken: string
+): Promise<Map<string, string | null>> {
+
+  const titles = new Map<string, string | null>();
+
+  if (workIds.length === 0) {
+    return titles;
+  }
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_works")
+    .select("id, title")
+    .in("id", [...new Set(workIds)])
+    .eq("user_id", userId);
+
+  if (error) {
+    throw error;
+  }
+
+  for (const row of (data ?? []) as Array<{ id: string; title: string | null }>) {
+    titles.set(row.id, row.title);
+  }
+
+  return titles;
+
+}
+
 // SOR-53(Notion Structural Correlator)向けの読み取り専用query。
 // listWorksForConversation()と同じ設計方針(Workのstate遷移・所有権
 // 判定ロジックは一切変更せず、既存のcreateRequestScopedClient(accessToken)

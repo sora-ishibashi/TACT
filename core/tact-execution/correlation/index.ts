@@ -21,7 +21,9 @@ export {
   persistWorkCorrelationDecision,
   persistManualWorkCorrelationOverride,
   listWorkCorrelationDecisionsForExecution,
+  listLatestCorrelationMethodsForExecutions,
   getExecutionCorrelationView,
+  getExecutionCorrectionContext,
   toWorkCorrelationDecision,
   validateWorkCorrelationDecision,
   type PersistWorkCorrelationDecisionOutcome,
@@ -32,6 +34,10 @@ export {
   type WorkCorrelationDecisionRow,
   type ExecutionCorrelationView,
   type GetExecutionCorrelationViewDeps,
+  type ExecutionCorrectionContext,
+  type ExecutionCorrection,
+  type ExecutionCorrectionPrediction,
+  type GetExecutionCorrectionContextDeps,
 } from "./store";
 export {
   observeExecutionWorkCorrelation,
