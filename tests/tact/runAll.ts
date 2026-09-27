@@ -211,6 +211,13 @@ import { run as runExecutionPermissionSor52ScopeBoundary } from "./execution/per
 import { run as runExecutionTelemetryIngestionFailureStore } from "./execution/telemetry/ingestionFailureStore.test";
 import { run as runExecutionTelemetrySourceHealth } from "./execution/telemetry/sourceHealth.test";
 import { run as runExecutionTelemetryNotionIngestionFailureTelemetry } from "./execution/telemetry/notionIngestionFailureTelemetry.test";
+import { run as runExecutionCorrelationContext } from "./execution/correlation/context.test";
+import { run as runExecutionCorrelationCorrelate } from "./execution/correlation/correlate.test";
+import { run as runExecutionCorrelationManualOverride } from "./execution/correlation/manualOverride.test";
+import { run as runExecutionCorrelationObserve } from "./execution/correlation/observe.test";
+import { run as runExecutionCorrelationStages } from "./execution/correlation/stages.test";
+import { run as runExecutionCorrelationMigrationContract } from "./execution/correlation/migrationContract.test";
+import { run as runWorkListWorksForNotionResourceQueryEncoding } from "./work/listWorksForNotionResourceQueryEncoding.test";
 import { run as runRunsViewProjections } from "./runsView/projections.test";
 import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
 import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
@@ -400,6 +407,13 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/telemetry/ingestionFailureStore", run: runExecutionTelemetryIngestionFailureStore },
   { name: "execution/telemetry/sourceHealth", run: runExecutionTelemetrySourceHealth },
   { name: "execution/telemetry/notionIngestionFailureTelemetry", run: runExecutionTelemetryNotionIngestionFailureTelemetry },
+  { name: "execution/correlation/context", run: runExecutionCorrelationContext },
+  { name: "execution/correlation/correlate", run: runExecutionCorrelationCorrelate },
+  { name: "execution/correlation/manualOverride", run: runExecutionCorrelationManualOverride },
+  { name: "execution/correlation/observe", run: runExecutionCorrelationObserve },
+  { name: "execution/correlation/stages", run: runExecutionCorrelationStages },
+  { name: "execution/correlation/migrationContract", run: runExecutionCorrelationMigrationContract },
+  { name: "work/listWorksForNotionResourceQueryEncoding", run: runWorkListWorksForNotionResourceQueryEncoding },
   { name: "runsView/projections", run: runRunsViewProjections },
   { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
   { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
