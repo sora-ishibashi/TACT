@@ -223,6 +223,9 @@ import { run as runExecutionCorrelationNotionM0 } from "./execution/correlation/
 import { run as runExecutionCorrelationRpcAclHardeningMigrationContract } from "./execution/correlation/rpcAclHardeningMigrationContract.test";
 import { run as runExecutionCorrelationExplicitWorkIdFixMigrationContract } from "./execution/correlation/explicitWorkIdCorrelationStatusFixMigrationContract.test";
 import { run as runExecutionAdaptersNotionMcpObservation } from "./execution/adapters/notionMcpObservation.test";
+import { run as runExecutionStore } from "./execution/store.test";
+import { run as runExecutionCorrelationNotionEvidence } from "./execution/correlation/notionEvidence.test";
+import { run as runExecutionCorrelationStore } from "./execution/correlation/store.test";
 import { run as runRunsViewProjections } from "./runsView/projections.test";
 import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
 import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
@@ -424,6 +427,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/correlation/rpcAclHardeningMigrationContract", run: runExecutionCorrelationRpcAclHardeningMigrationContract },
   { name: "execution/correlation/explicitWorkIdCorrelationStatusFixMigrationContract", run: runExecutionCorrelationExplicitWorkIdFixMigrationContract },
   { name: "execution/adapters/notionMcpObservation", run: runExecutionAdaptersNotionMcpObservation },
+  { name: "execution/store", run: runExecutionStore },
+  { name: "execution/correlation/notionEvidence", run: runExecutionCorrelationNotionEvidence },
+  { name: "execution/correlation/store", run: runExecutionCorrelationStore },
   { name: "runsView/projections", run: runRunsViewProjections },
   { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
   { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
