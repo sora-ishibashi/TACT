@@ -196,6 +196,10 @@ import { run as runExecutionCorrelationCorrectionContext } from "./execution/cor
 import { run as runExecutionMapping } from "./execution/mapping.test";
 import { run as runExecutionValidation } from "./execution/validation.test";
 import { run as runExecutionAdaptersSlackAdapter } from "./execution/adapters/slackAdapter.test";
+import { run as runExecutionPermissionPolicy } from "./execution/permission/policy.test";
+import { run as runExecutionPermissionEvaluate } from "./execution/permission/evaluate.test";
+import { run as runExecutionPermissionStore } from "./execution/permission/store.test";
+import { run as runExecutionPermissionNotionM0Matrix } from "./execution/permission/notionM0Matrix.test";
 import { run as runRunsViewProjections } from "./runsView/projections.test";
 import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
 import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
@@ -370,6 +374,10 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/mapping", run: runExecutionMapping },
   { name: "execution/validation", run: runExecutionValidation },
   { name: "execution/adapters/slackAdapter", run: runExecutionAdaptersSlackAdapter },
+  { name: "execution/permission/policy", run: runExecutionPermissionPolicy },
+  { name: "execution/permission/evaluate", run: runExecutionPermissionEvaluate },
+  { name: "execution/permission/store", run: runExecutionPermissionStore },
+  { name: "execution/permission/notionM0Matrix", run: runExecutionPermissionNotionM0Matrix },
   { name: "runsView/projections", run: runRunsViewProjections },
   { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
   { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
