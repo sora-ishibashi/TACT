@@ -203,6 +203,14 @@ import { run as runExecutionPermissionNotionM0Matrix } from "./execution/permiss
 import { run as runExecutionPermissionRegistryStore } from "./execution/permission/registryStore.test";
 import { run as runExecutionPermissionRegistryEvaluate } from "./execution/permission/registryEvaluate.test";
 import { run as runExecutionPermissionRegistryMigrationContract } from "./execution/permission/registryMigrationContract.test";
+import { run as runExecutionPermissionAttention } from "./execution/permission/attention.test";
+import { run as runExecutionPermissionAttentionStore } from "./execution/permission/attentionStore.test";
+import { run as runExecutionPermissionAttentionLifecycle } from "./execution/permission/attentionLifecycle.test";
+import { run as runExecutionPermissionObserve } from "./execution/permission/observe.test";
+import { run as runExecutionPermissionSor52ScopeBoundary } from "./execution/permission/sor52ScopeBoundary.test";
+import { run as runExecutionTelemetryIngestionFailureStore } from "./execution/telemetry/ingestionFailureStore.test";
+import { run as runExecutionTelemetrySourceHealth } from "./execution/telemetry/sourceHealth.test";
+import { run as runExecutionTelemetryNotionIngestionFailureTelemetry } from "./execution/telemetry/notionIngestionFailureTelemetry.test";
 import { run as runRunsViewProjections } from "./runsView/projections.test";
 import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
 import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
@@ -384,6 +392,14 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/permission/registryStore", run: runExecutionPermissionRegistryStore },
   { name: "execution/permission/registryEvaluate", run: runExecutionPermissionRegistryEvaluate },
   { name: "execution/permission/registryMigrationContract", run: runExecutionPermissionRegistryMigrationContract },
+  { name: "execution/permission/attention", run: runExecutionPermissionAttention },
+  { name: "execution/permission/attentionStore", run: runExecutionPermissionAttentionStore },
+  { name: "execution/permission/attentionLifecycle", run: runExecutionPermissionAttentionLifecycle },
+  { name: "execution/permission/observe", run: runExecutionPermissionObserve },
+  { name: "execution/permission/sor52ScopeBoundary", run: runExecutionPermissionSor52ScopeBoundary },
+  { name: "execution/telemetry/ingestionFailureStore", run: runExecutionTelemetryIngestionFailureStore },
+  { name: "execution/telemetry/sourceHealth", run: runExecutionTelemetrySourceHealth },
+  { name: "execution/telemetry/notionIngestionFailureTelemetry", run: runExecutionTelemetryNotionIngestionFailureTelemetry },
   { name: "runsView/projections", run: runRunsViewProjections },
   { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
   { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
