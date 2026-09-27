@@ -218,6 +218,10 @@ import { run as runExecutionCorrelationObserve } from "./execution/correlation/o
 import { run as runExecutionCorrelationStages } from "./execution/correlation/stages.test";
 import { run as runExecutionCorrelationMigrationContract } from "./execution/correlation/migrationContract.test";
 import { run as runWorkListWorksForNotionResourceQueryEncoding } from "./work/listWorksForNotionResourceQueryEncoding.test";
+import { run as runExecutionCorrelationCanonicalResult } from "./execution/correlation/canonicalResult.test";
+import { run as runExecutionCorrelationNotionM0 } from "./execution/correlation/notionM0.test";
+import { run as runExecutionCorrelationRpcAclHardeningMigrationContract } from "./execution/correlation/rpcAclHardeningMigrationContract.test";
+import { run as runExecutionCorrelationExplicitWorkIdFixMigrationContract } from "./execution/correlation/explicitWorkIdCorrelationStatusFixMigrationContract.test";
 import { run as runRunsViewProjections } from "./runsView/projections.test";
 import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
 import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
@@ -414,6 +418,10 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/correlation/stages", run: runExecutionCorrelationStages },
   { name: "execution/correlation/migrationContract", run: runExecutionCorrelationMigrationContract },
   { name: "work/listWorksForNotionResourceQueryEncoding", run: runWorkListWorksForNotionResourceQueryEncoding },
+  { name: "execution/correlation/canonicalResult", run: runExecutionCorrelationCanonicalResult },
+  { name: "execution/correlation/notionM0", run: runExecutionCorrelationNotionM0 },
+  { name: "execution/correlation/rpcAclHardeningMigrationContract", run: runExecutionCorrelationRpcAclHardeningMigrationContract },
+  { name: "execution/correlation/explicitWorkIdCorrelationStatusFixMigrationContract", run: runExecutionCorrelationExplicitWorkIdFixMigrationContract },
   { name: "runsView/projections", run: runRunsViewProjections },
   { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
   { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
