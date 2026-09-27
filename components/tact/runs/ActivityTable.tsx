@@ -48,9 +48,16 @@ export default function ActivityTable({
 
   }
 
+  // SOR-23 compact-width fix: as a flex item of RunsSection's wrapper,
+  // this scroll container itself defaults to min-width:auto — without
+  // min-w-0 it refuses to shrink below the 880px table's width, so its
+  // own overflow-x-auto never gets the chance to activate and the
+  // overflow leaks to the page instead. The table's min-width itself is
+  // intentionally left alone (columns must stay legible; scrolling is
+  // meant to be contained right here, one level up).
   return (
 
-    <div className="overflow-x-auto rounded-xl border border-[#D9D9D9]">
+    <div className="min-w-0 overflow-x-auto rounded-xl border border-[#D9D9D9]">
 
       <table className="w-full min-w-[880px] border-collapse text-left text-[13px] leading-[18px] text-[#112278]">
 
@@ -87,6 +94,7 @@ export default function ActivityTable({
               <td className="px-4 py-2.5">
                 <WorkReference
                   workId={item.workId}
+                  label={item.workTitle ?? undefined}
                   correlationStatus={item.correlationStatus}
                   onSelectWork={onSelectWork}
                   onReview={onReviewCorrelation ? () => onReviewCorrelation(item.executionId) : undefined}

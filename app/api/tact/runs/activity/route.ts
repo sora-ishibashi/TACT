@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { listExecutionsForUser, listLatestCorrelationMethodsForExecutions } from "@/core/tact-execution";
+import { listExecutionsForUser, listLatestCorrelationDecisionsForExecutions } from "@/core/tact-execution";
+import { listWorkTitlesByIds } from "@/core/tact-work";
 import { toActivityItemView } from "@/core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
@@ -25,9 +26,9 @@ export async function GET(request: NextRequest) {
 
   try {
 
-    const { userId } = await getCurrentUserContext(request);
+    const { userId, accessToken } = await getCurrentUserContext(request);
 
-    if (!userId) {
+    if (!userId || !accessToken) {
       return unauthorizedResponse();
     }
 
@@ -39,12 +40,24 @@ export async function GET(request: NextRequest) {
     // duplicate columns) — derive it from the existing append-only
     // correlation history, batched the same way Attention's workTitle join
     // already does (single .in() query + application-layer grouping).
-    const latestMethods = await listLatestCorrelationMethodsForExecutions(executions.map((e) => e.id));
+    const latestDecisions = await listLatestCorrelationDecisionsForExecutions(executions.map((e) => e.id));
+
+    // SOR-23 (OBS-UX-P1 Priority 1): human-readable Work identity — same
+    // tenant-safe batch join already used by Attention (SOR-18) and the
+    // Correlation Review surface (SOR-77).
+    const workIds = executions
+      .map((e) => e.workId)
+      .filter((id): id is string => id !== null);
+    const workTitles = await listWorkTitlesByIds(workIds, userId, accessToken);
 
     return NextResponse.json({
       success: true,
       items: executions.map((execution) =>
-        toActivityItemView(execution, latestMethods.get(execution.id) === "manual_override")
+        toActivityItemView(
+          execution,
+          execution.workId ? workTitles.get(execution.workId) ?? null : null,
+          latestDecisions.get(execution.id)?.method === "manual_override"
+        )
       ),
     });
 

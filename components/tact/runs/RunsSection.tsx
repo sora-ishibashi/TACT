@@ -15,13 +15,22 @@
 // read modelをそのまま描画するだけ(絶対条件、SOR-54指示「No business
 // logic in React」)。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import ActivityTable from "./ActivityTable";
+import ActivityFilters from "./ActivityFilters";
 import AttentionList from "./AttentionList";
 import WorkDetailView from "./WorkDetailView";
 import CorrelationReviewModal from "./CorrelationReviewModal";
-import type { ActivityItemView, AttentionCardView, WorkHeaderView, WorkTimelineItemView } from "@/core/tact-runs-view";
+import {
+  filterActivityItems,
+  distinctActivityFilterOptions,
+  type ActivityItemView,
+  type ActivityItemFilters,
+  type AttentionCardView,
+  type WorkHeaderView,
+  type WorkTimelineItemView,
+} from "@/core/tact-runs-view";
 
 type RunsView = "activity" | "attention";
 
@@ -55,6 +64,11 @@ export default function RunsSection() {
   // (CorrelationReviewModal→PATCH /api/tact/runs/execution/[id]/reclassify
   // が担う、絶対条件「No business logic in React」)。
   const [reviewingExecutionId, setReviewingExecutionId] = useState<string | null>(null);
+  // SOR-23(OBS-UX-P1 Priority 3/4): filter判定はcore/tact-runs-view側の
+  // pure関数(filterActivityItems())に完全委譲——ここはcontrolled state
+  // を持つだけ。新しいAPI/queryは追加しない(既に読み込み済みの
+  // activityItemsへのclient-side filter)。
+  const [activityFilters, setActivityFilters] = useState<ActivityItemFilters>({});
 
   const [activityItems, setActivityItems] = useState<ActivityItemView[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
@@ -276,18 +290,30 @@ export default function RunsSection() {
   // reclassify)した後の結果を、Activity一覧のlocal stateへその場で
   // 反映するだけ(絶対条件「reload preserves the correction state」:
   // 反映しなくてもreloadすれば正しい状態が返る、これはUX即時性のためだけ)。
+  //
+  // SOR-23: isHumanCorrectedもその場で更新する(SOR-77では未反映だった
+  // ——修正直後はreloadするまでHistory導線が現れなかった)。Work Detail
+  // を表示中にreclassifyした場合は、workId変更によりそのExecutionが
+  // 現在のWork Timelineへ属するかどうか自体が変わりうる(Change/Keep
+  // Unassignedで別Workまたは未割当になった場合)ため、個別にpatchせず
+  // 素直にそのWorkを再読み込みする(既存のloadWork()をそのまま再利用、
+  // 新しいstate合成ロジックを作らない)。
   const handleExecutionCorrected = useCallback((
     executionId: string,
-    result: { workId: string | null; correlationStatus: ActivityItemView["correlationStatus"] }
+    result: { workId: string | null; correlationStatus: ActivityItemView["correlationStatus"]; isHumanCorrected: true }
   ) => {
 
     setActivityItems((prev) => prev.map((item) => (
       item.executionId === executionId
-        ? { ...item, workId: result.workId, correlationStatus: result.correlationStatus }
+        ? { ...item, workId: result.workId, correlationStatus: result.correlationStatus, isHumanCorrected: result.isHumanCorrected }
         : item
     )));
 
-  }, []);
+    if (selectedWorkId) {
+      loadWork(selectedWorkId);
+    }
+
+  }, [selectedWorkId, loadWork]);
 
   const handleBack = useCallback(() => {
     setSelectedWorkId(null);
@@ -295,6 +321,14 @@ export default function RunsSection() {
     setWorkItems([]);
     setWorkError(null);
   }, []);
+
+  // SOR-23: filter選択肢は現在読み込まれているactivityItemsから毎回
+  // 導出する(推測・hardcodeしない、pure関数、core/tact-runs-view参照)。
+  const activityFilterOptions = useMemo(() => distinctActivityFilterOptions(activityItems), [activityItems]);
+  const filteredActivityItems = useMemo(
+    () => filterActivityItems(activityItems, activityFilters),
+    [activityItems, activityFilters]
+  );
 
   if (!user) {
 
@@ -319,7 +353,7 @@ export default function RunsSection() {
         ) : workError ? (
           <p className="text-[13px] leading-[18px] text-[#C53F4B]">{workError}</p>
         ) : workHeader ? (
-          <WorkDetailView work={workHeader} items={workItems} onBack={handleBack} />
+          <WorkDetailView work={workHeader} items={workItems} onBack={handleBack} onReviewCorrelation={setReviewingExecutionId} />
         ) : (
           <div className="flex flex-col gap-4">
             <button
@@ -331,6 +365,15 @@ export default function RunsSection() {
             </button>
             <p className="text-[13px] leading-[18px] text-[#626161]">このWorkは見つかりませんでした。</p>
           </div>
+        )}
+
+        {reviewingExecutionId && getAccessToken() && (
+          <CorrelationReviewModal
+            executionId={reviewingExecutionId}
+            accessToken={getAccessToken()!}
+            onClose={() => setReviewingExecutionId(null)}
+            onCorrected={(result) => handleExecutionCorrected(reviewingExecutionId, result)}
+          />
         )}
 
       </div>
@@ -354,7 +397,12 @@ export default function RunsSection() {
         />
       </div>
 
-      <div className="mt-4">
+      {/* SOR-23 compact-width fix: this div is a flex item of the root
+          (flex flex-col above) — same min-width:auto default as any other
+          flex item. Without min-w-0 here, the 880px ActivityTable several
+          levels below still forces this (and everything above it) wider
+          than the viewport, even after fixing TactShell alone. */}
+      <div className="mt-4 min-w-0">
 
         {view === "activity" ? (
 
@@ -363,7 +411,16 @@ export default function RunsSection() {
           ) : activityError ? (
             <p className="text-[13px] leading-[18px] text-[#C53F4B]">{activityError}</p>
           ) : (
-            <ActivityTable items={activityItems} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} />
+            <div className="flex min-w-0 flex-col gap-3">
+              <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} />
+              {activityItems.length > 0 && filteredActivityItems.length === 0 ? (
+                <p className="text-[13px] leading-[18px] text-[#626161]">
+                  条件に一致するExecutionはありません。
+                </p>
+              ) : (
+                <ActivityTable items={filteredActivityItems} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} />
+              )}
+            </div>
           )
 
         ) : (

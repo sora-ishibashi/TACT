@@ -195,6 +195,7 @@ import { run as runExecutionCorrelationConfidencePolicy } from "./execution/corr
 import { run as runExecutionCorrelationCorrectionContext } from "./execution/correlation/correctionContext.test";
 import { run as runRunsViewProjections } from "./runsView/projections.test";
 import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
+import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -365,6 +366,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/correlation/correctionContext", run: runExecutionCorrelationCorrectionContext },
   { name: "runsView/projections", run: runRunsViewProjections },
   { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
+  { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
 ];
 
 async function main() {

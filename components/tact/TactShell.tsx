@@ -85,9 +85,14 @@ export default function TactShell() {
 
   }, []);
 
+  // SOR-23 compact-width fix: app/layout.tsx's <body> is itself
+  // `flex flex-col` (AuthProvider renders no DOM wrapper, so this div is
+  // body's direct flex child) — closing the very last link in the same
+  // min-width:auto chain that otherwise lets Runs' 880px table push the
+  // entire viewport into horizontal scroll.
   return (
 
-    <div className="flex h-screen w-full bg-white">
+    <div className="flex h-screen w-full min-w-0 bg-white">
 
       {/* 左: コンパクトなサイドバー(TACTブランド+プロダクト切替+アカウント) */}
       <aside className={`flex h-full w-44 shrink-0 flex-col justify-between border-r border-[#D9D9D9] bg-white px-2 py-3 ${
@@ -139,7 +144,15 @@ export default function TactShell() {
 
       </aside>
 
-      <div className="flex min-h-0 flex-1">
+      {/* SOR-23 compact-width fix (root cause): a flex item's default
+          min-width is `auto` (content-based), not 0 — without min-w-0 here,
+          any deeply-nested wide content (e.g. Runs' 880px table) refuses to
+          let this flex item shrink below that content's width, which pushes
+          the whole `h-screen w-full` row wider than the viewport and shows
+          up as page-level horizontal scroll. This is the single ancestor
+          shared by every TactSection, so the fix belongs here, not in Runs
+          alone. */}
+      <div className="flex min-h-0 min-w-0 flex-1">
 
         {section === "research" && (
           <ResearchWorkspace

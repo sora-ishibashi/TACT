@@ -30,7 +30,7 @@ interface CorrelationReviewModalProps {
   // ——絶対条件(reload preserves the correction state): サーバー側は
   // 既にDBへ永続化済みのため、この通知はUX即時性のためだけであり、
   // 無くてもreload後は正しい状態が返る。
-  onCorrected: (result: { workId: string | null; correlationStatus: "CORRELATED" | "AMBIGUOUS" | "UNASSIGNED" }) => void;
+  onCorrected: (result: { workId: string | null; correlationStatus: "CORRELATED" | "AMBIGUOUS" | "UNASSIGNED"; isHumanCorrected: true }) => void;
 
 }
 
@@ -152,7 +152,11 @@ export default function CorrelationReviewModal({
 
       const correlation = body.correlation as { workId: string | null; correlationStatus: "CORRELATED" | "AMBIGUOUS" | "UNASSIGNED" };
 
-      onCorrected({ workId: correlation.workId, correlationStatus: correlation.correlationStatus });
+      // 絶対条件(SOR-23、reload無しでも即座に正しい状態を表す): PATCH
+      // reclassifyが成功した時点で、この結果は常にmanual_override
+      // (Confirm/Change/Keep Unassignedのいずれも)——isHumanCorrectedは
+      // 常にtrue。
+      onCorrected({ workId: correlation.workId, correlationStatus: correlation.correlationStatus, isHumanCorrected: true });
       onClose();
 
     } catch {
@@ -169,7 +173,7 @@ export default function CorrelationReviewModal({
 
   return (
 
-    <div className="fixed inset-0 z-[80] flex items-center justify-center px-4">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center px-4 py-8">
 
       <div
         className="absolute inset-0 z-40 bg-[#112278]/40"
@@ -181,10 +185,18 @@ export default function CorrelationReviewModal({
         role="dialog"
         aria-modal="true"
         aria-label="Work correlationの確認"
-        className="relative z-[80] w-full max-w-[480px] rounded-2xl bg-white p-6 shadow-[0_4px_16px_rgba(17,34,120,0.12)]"
+        // SOR-23 (OBS-UX-P1 Priority 6, carried forward from SOR-77 live
+        // verification as a confirmed responsive/viewport gap): the panel
+        // itself is now height-bounded to the viewport with its own
+        // internal scroll, so a long candidates/History list (full audit
+        // trail is never visually truncated — it just scrolls) never pushes
+        // Confirm/Change/Keep Unassigned or the close button off-screen on
+        // a short or narrow window. The header stays pinned; only the body
+        // scrolls.
+        className="relative z-[80] flex max-h-[85vh] w-full max-w-[480px] flex-col rounded-2xl bg-white p-6 shadow-[0_4px_16px_rgba(17,34,120,0.12)]"
       >
 
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex shrink-0 items-start justify-between gap-4">
           <h2 className="text-[24px] font-medium leading-[32px] text-[#112278]">Workを確認</h2>
           <button
             type="button"
@@ -196,7 +208,7 @@ export default function CorrelationReviewModal({
           </button>
         </div>
 
-        <div className="mt-4">
+        <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
 
           {load.status === "loading" ? (
 
