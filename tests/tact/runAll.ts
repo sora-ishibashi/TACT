@@ -193,6 +193,9 @@ import { run as runExecutionResolveTargetWorkForCorrelation } from "./execution/
 import { run as runWorkEntityEvidenceReferences } from "./work/workEntityEvidenceReferences.test";
 import { run as runExecutionCorrelationConfidencePolicy } from "./execution/correlation/confidencePolicy.test";
 import { run as runExecutionCorrelationCorrectionContext } from "./execution/correlation/correctionContext.test";
+import { run as runExecutionMapping } from "./execution/mapping.test";
+import { run as runExecutionValidation } from "./execution/validation.test";
+import { run as runExecutionAdaptersSlackAdapter } from "./execution/adapters/slackAdapter.test";
 import { run as runRunsViewProjections } from "./runsView/projections.test";
 import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
 import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
@@ -364,6 +367,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/workEntityEvidenceReferences", run: runWorkEntityEvidenceReferences },
   { name: "execution/correlation/confidencePolicy", run: runExecutionCorrelationConfidencePolicy },
   { name: "execution/correlation/correctionContext", run: runExecutionCorrelationCorrectionContext },
+  { name: "execution/mapping", run: runExecutionMapping },
+  { name: "execution/validation", run: runExecutionValidation },
+  { name: "execution/adapters/slackAdapter", run: runExecutionAdaptersSlackAdapter },
   { name: "runsView/projections", run: runRunsViewProjections },
   { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
   { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
