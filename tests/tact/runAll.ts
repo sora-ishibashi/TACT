@@ -200,6 +200,9 @@ import { run as runExecutionPermissionPolicy } from "./execution/permission/poli
 import { run as runExecutionPermissionEvaluate } from "./execution/permission/evaluate.test";
 import { run as runExecutionPermissionStore } from "./execution/permission/store.test";
 import { run as runExecutionPermissionNotionM0Matrix } from "./execution/permission/notionM0Matrix.test";
+import { run as runExecutionPermissionRegistryStore } from "./execution/permission/registryStore.test";
+import { run as runExecutionPermissionRegistryEvaluate } from "./execution/permission/registryEvaluate.test";
+import { run as runExecutionPermissionRegistryMigrationContract } from "./execution/permission/registryMigrationContract.test";
 import { run as runRunsViewProjections } from "./runsView/projections.test";
 import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
 import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
@@ -378,6 +381,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/permission/evaluate", run: runExecutionPermissionEvaluate },
   { name: "execution/permission/store", run: runExecutionPermissionStore },
   { name: "execution/permission/notionM0Matrix", run: runExecutionPermissionNotionM0Matrix },
+  { name: "execution/permission/registryStore", run: runExecutionPermissionRegistryStore },
+  { name: "execution/permission/registryEvaluate", run: runExecutionPermissionRegistryEvaluate },
+  { name: "execution/permission/registryMigrationContract", run: runExecutionPermissionRegistryMigrationContract },
   { name: "runsView/projections", run: runRunsViewProjections },
   { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
   { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
