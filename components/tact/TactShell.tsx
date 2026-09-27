@@ -47,6 +47,7 @@ import ProductLauncher, { TactSection } from "./ProductLauncher";
 import ResearchWorkspace from "@/components/research/ResearchWorkspace";
 import CoreSection from "./CoreSection";
 import CodeSection from "./CodeSection";
+import RunsSection from "./runs/RunsSection";
 import SettingsSection from "./SettingsSection";
 import { useAuth } from "@/components/auth/AuthProvider";
 
@@ -148,6 +149,7 @@ export default function TactShell() {
         )}
         {section === "core" && <CoreSection />}
         {section === "code" && <CodeSection />}
+        {section === "runs" && <RunsSection />}
         {section === "settings" && <SettingsSection />}
 
       </div>
