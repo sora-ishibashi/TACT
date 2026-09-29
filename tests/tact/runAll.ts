@@ -198,6 +198,13 @@ import { run as runExecutionPermissionStore } from "./execution/permission/store
 import { run as runExecutionPermissionRegistryEvaluate } from "./execution/permission/registryEvaluate.test";
 import { run as runExecutionPermissionRegistryMigrationContract } from "./execution/permission/registryMigrationContract.test";
 import { run as runExecutionPermissionRegistryStore } from "./execution/permission/registryStore.test";
+import { run as runExecutionPermissionAttention } from "./execution/permission/attention.test";
+import { run as runExecutionPermissionAttentionLifecycle } from "./execution/permission/attentionLifecycle.test";
+import { run as runExecutionPermissionAttentionStore } from "./execution/permission/attentionStore.test";
+import { run as runExecutionPermissionObserve } from "./execution/permission/observe.test";
+import { run as runExecutionPermissionSor52ScopeBoundary } from "./execution/permission/sor52ScopeBoundary.test";
+import { run as runExecutionTelemetryIngestionFailureStore } from "./execution/telemetry/ingestionFailureStore.test";
+import { run as runExecutionTelemetrySourceHealth } from "./execution/telemetry/sourceHealth.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -371,6 +378,13 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/permission/registryEvaluate", run: runExecutionPermissionRegistryEvaluate },
   { name: "execution/permission/registryMigrationContract", run: runExecutionPermissionRegistryMigrationContract },
   { name: "execution/permission/registryStore", run: runExecutionPermissionRegistryStore },
+  { name: "execution/permission/attention", run: runExecutionPermissionAttention },
+  { name: "execution/permission/attentionLifecycle", run: runExecutionPermissionAttentionLifecycle },
+  { name: "execution/permission/attentionStore", run: runExecutionPermissionAttentionStore },
+  { name: "execution/permission/observe", run: runExecutionPermissionObserve },
+  { name: "execution/permission/sor52ScopeBoundary", run: runExecutionPermissionSor52ScopeBoundary },
+  { name: "execution/telemetry/ingestionFailureStore", run: runExecutionTelemetryIngestionFailureStore },
+  { name: "execution/telemetry/sourceHealth", run: runExecutionTelemetrySourceHealth },
 ];
 
 async function main() {
