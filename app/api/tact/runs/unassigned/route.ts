@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { listExecutionsForUser, listLatestCorrelationMethodsForExecutions } from "@/core/tact-execution";
+import { listExecutionsForUser, listLatestCorrelationDecisionsForExecutions } from "@/core/tact-execution";
 import { toActivityItemView } from "@/core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
@@ -38,12 +38,15 @@ export async function GET(request: NextRequest) {
     // "Keep Unassigned" item is UNASSIGNED but still human-corrected — carry
     // that distinction through here too, even though this list's existing
     // Review affordance is already unconditional for non-CORRELATED rows.
-    const latestMethods = await listLatestCorrelationMethodsForExecutions(executions.map((e) => e.id));
+    const latestDecisions = await listLatestCorrelationDecisionsForExecutions(executions.map((e) => e.id));
 
+    // Never null here by construction — this endpoint only ever returns
+    // unresolved/ambiguous executions, which never carry a workId
+    // (SOR-23: no batch title join needed, unlike /activity).
     return NextResponse.json({
       success: true,
       items: executions.map((execution) =>
-        toActivityItemView(execution, latestMethods.get(execution.id) === "manual_override")
+        toActivityItemView(execution, null, latestDecisions.get(execution.id)?.method === "manual_override")
       ),
     });
 

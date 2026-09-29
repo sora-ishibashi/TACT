@@ -23,6 +23,7 @@ import {
   toWorkTimelineItemView,
   toWorkHeaderView,
   ACTIVITY_ITEM_VIEW_KEYS,
+  WORK_TIMELINE_ITEM_VIEW_KEYS,
 } from "../../../core/tact-runs-view";
 import type {
   CanonicalExecution,
@@ -129,22 +130,22 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   results.push(check(
     "[Required test] permissionStatus=allowed -> ActivityItemView.permissionEvaluation=MATCH",
-    toActivityItemView(baseExecution({ permissionStatus: "allowed" }), false).permissionEvaluation === "MATCH"
+    toActivityItemView(baseExecution({ permissionStatus: "allowed" }), null, false).permissionEvaluation === "MATCH"
   ));
 
   results.push(check(
     "[Required test] permissionStatus=approval_required -> APPROVAL_REQUIRED",
-    toActivityItemView(baseExecution({ permissionStatus: "approval_required" }), false).permissionEvaluation === "APPROVAL_REQUIRED"
+    toActivityItemView(baseExecution({ permissionStatus: "approval_required" }), null, false).permissionEvaluation === "APPROVAL_REQUIRED"
   ));
 
   results.push(check(
     "[Required test] permissionStatus=denied -> MISMATCH",
-    toActivityItemView(baseExecution({ permissionStatus: "denied" }), false).permissionEvaluation === "MISMATCH"
+    toActivityItemView(baseExecution({ permissionStatus: "denied" }), null, false).permissionEvaluation === "MISMATCH"
   ));
 
   results.push(check(
     "[Required test] permissionStatus=unknown -> UNKNOWN",
-    toActivityItemView(baseExecution({ permissionStatus: "unknown" }), false).permissionEvaluation === "UNKNOWN"
+    toActivityItemView(baseExecution({ permissionStatus: "unknown" }), null, false).permissionEvaluation === "UNKNOWN"
   ));
 
   results.push(check(
@@ -158,13 +159,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   results.push(check(
     "[Required test] status=succeeded -> \"Succeeded\"",
-    toActivityItemView(baseExecution({ status: "succeeded" }), false).executionStatus === "succeeded"
+    toActivityItemView(baseExecution({ status: "succeeded" }), null, false).executionStatus === "succeeded"
     && executionResultLabel("succeeded") === "Succeeded"
   ));
 
   results.push(check(
     "[Required test] status=failed -> \"Failed\"",
-    toActivityItemView(baseExecution({ status: "failed" }), false).executionStatus === "failed"
+    toActivityItemView(baseExecution({ status: "failed" }), null, false).executionStatus === "failed"
     && executionResultLabel("failed") === "Failed"
   ));
 
@@ -174,22 +175,22 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   results.push(check(
     "[Required test] correlationStatus=matched -> CORRELATED",
-    toActivityItemView(baseExecution({ workId: "W-001", correlationStatus: "matched" }), false).correlationStatus === "CORRELATED"
+    toActivityItemView(baseExecution({ workId: "W-001", correlationStatus: "matched" }), null, false).correlationStatus === "CORRELATED"
   ));
 
   results.push(check(
     "[Required test] correlationStatus=ambiguous -> AMBIGUOUS",
-    toActivityItemView(baseExecution({ correlationStatus: "ambiguous" }), false).correlationStatus === "AMBIGUOUS"
+    toActivityItemView(baseExecution({ correlationStatus: "ambiguous" }), null, false).correlationStatus === "AMBIGUOUS"
   ));
 
   results.push(check(
     "[Required test] correlationStatus=unresolved -> UNASSIGNED",
-    toActivityItemView(baseExecution({ correlationStatus: "unresolved" }), false).correlationStatus === "UNASSIGNED"
+    toActivityItemView(baseExecution({ correlationStatus: "unresolved" }), null, false).correlationStatus === "UNASSIGNED"
   ));
 
   results.push(check(
     "[Required test] correlationStatus=pending(未評価) も UNASSIGNED として表す(unresolvedと区別してUIへ露出しない)",
-    toActivityItemView(baseExecution({ correlationStatus: "pending" as ExecutionCorrelationStatus }), false).correlationStatus === "UNASSIGNED"
+    toActivityItemView(baseExecution({ correlationStatus: "pending" as ExecutionCorrelationStatus }), null, false).correlationStatus === "UNASSIGNED"
   ));
 
   // ---- SOR-77 live Staging verification UX gap fix: a CORRELATED row that
@@ -199,12 +200,12 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // while an auto-matched row (never touched by a human) stays false. ----
   results.push(check(
     "[SOR-77] a human-corrected CORRELATED row carries isHumanCorrected=true",
-    toActivityItemView(baseExecution({ workId: "W-001", correlationStatus: "matched" }), true).isHumanCorrected === true
+    toActivityItemView(baseExecution({ workId: "W-001", correlationStatus: "matched" }), null, true).isHumanCorrected === true
   ));
 
   results.push(check(
     "[SOR-77] an auto-matched CORRELATED row (never touched by a human) carries isHumanCorrected=false",
-    toActivityItemView(baseExecution({ workId: "W-001", correlationStatus: "matched" }), false).isHumanCorrected === false
+    toActivityItemView(baseExecution({ workId: "W-001", correlationStatus: "matched" }), null, false).isHumanCorrected === false
   ));
 
   // =========================
@@ -338,8 +339,47 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     "[Required test] toWorkTimelineItemView はCanonicalExecutionをそのまま1件変換するだけで、workIdによるfilteringは行わない(呼び出し元がlistExecutionsForWork()で絞り込む前提)",
     (() => {
       const exec = baseExecution({ id: "exec-9", workId: "W-999" });
-      const view = toWorkTimelineItemView(exec);
+      const view = toWorkTimelineItemView(exec, undefined);
       return view.executionId === "exec-9" && !("workId" in view);
+    })()
+  ));
+
+  // ---- SOR-23 (OBS-UX-P1 Priority 2 "why this Work"): correlation summary
+  // is threaded through when the caller has one, and never fabricated
+  // (undefined) when it doesn't. ----
+  results.push(check(
+    "[SOR-23] toWorkTimelineItemView with a correlation summary exposes methodLabel/confidence/reasonCode and derives isHumanCorrected from method",
+    (() => {
+      const exec = baseExecution({ id: "exec-10", workId: "W-001" });
+      const view = toWorkTimelineItemView(exec, { method: "manual_override", confidence: null, reasonCode: "human_confirmed_candidate" });
+      return view.correlationMethodLabel === "Manual correction" &&
+        view.correlationConfidence === null &&
+        view.correlationReasonCode === "human_confirmed_candidate" &&
+        view.isHumanCorrected === true;
+    })()
+  ));
+
+  results.push(check(
+    "[SOR-23] toWorkTimelineItemView with an auto-matched summary carries isHumanCorrected=false",
+    toWorkTimelineItemView(baseExecution({ id: "exec-11" }), { method: "structural", confidence: 0.9, reasonCode: "notion_resource_match" }).isHumanCorrected === false
+  ));
+
+  results.push(check(
+    "[SOR-23/No-Fabrication] toWorkTimelineItemView with no correlation summary (undefined) never fabricates one — every correlation field stays null/false",
+    (() => {
+      const view = toWorkTimelineItemView(baseExecution({ id: "exec-12" }), undefined);
+      return view.correlationMethodLabel === null && view.correlationConfidence === null &&
+        view.correlationReasonCode === null && view.isHumanCorrected === false;
+    })()
+  ));
+
+  results.push(check(
+    "[SOR-23/Privacy] WorkTimelineItemView keys match the documented allow-list exactly (no raw payload/token ever flows through this boundary)",
+    (() => {
+      const view = toWorkTimelineItemView(baseExecution({ id: "exec-13" }), { method: "structural", confidence: 0.9, reasonCode: "notion_resource_match" });
+      const actualKeys = Object.keys(view).sort();
+      const expectedKeys = [...WORK_TIMELINE_ITEM_VIEW_KEYS].sort();
+      return JSON.stringify(actualKeys) === JSON.stringify(expectedKeys);
     })()
   ));
 
@@ -383,7 +423,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   results.push(check(
     "[Required test] ActivityItemView のkeyは許可listと完全一致する(raw error / token / credentialを含まない)",
     (() => {
-      const view = toActivityItemView(baseExecution({ errorCode: "boom", errorMessage: "secret leaking detail", sourceMetadata: { token: "should-not-appear" } }), false);
+      const view = toActivityItemView(baseExecution({ errorCode: "boom", errorMessage: "secret leaking detail", sourceMetadata: { token: "should-not-appear" } }), null, false);
       const actualKeys = Object.keys(view).sort();
       const expectedKeys = [...ACTIVITY_ITEM_VIEW_KEYS].sort();
       return JSON.stringify(actualKeys) === JSON.stringify(expectedKeys);
@@ -404,7 +444,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     actionCategory: "read",
     permissionStatus: "allowed",
     status: "succeeded",
-  }), false);
+  }), null, false);
 
   results.push(check(
     "[Human comprehension fixture row1] Sora / Claude Test Agent / Notion / READ / MATCH / Succeeded / W-001",
@@ -426,7 +466,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     actionCategory: "update",
     permissionStatus: "approval_required",
     status: "succeeded",
-  }), false);
+  }), null, false);
 
   results.push(check(
     "[Human comprehension fixture row2] Sora / Claude Test Agent / Notion / UPDATE_PAGE / APPROVAL_REQUIRED / Succeeded / W-001",
@@ -444,7 +484,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     actionCategory: "delete",
     permissionStatus: "denied",
     status: "succeeded",
-  }), false);
+  }), null, false);
 
   results.push(check(
     "[Human comprehension fixture row3] Sora / Claude Test Agent / Notion / DELETE_PAGE / MISMATCH / Succeeded / Unassigned",
@@ -462,7 +502,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     actionCategory: "read",
     permissionStatus: "allowed",
     status: "failed",
-  }), false);
+  }), null, false);
 
   results.push(check(
     "[Human comprehension fixture row4] Sora / Claude Test Agent / Notion / READ / MATCH / Failed / Unassigned",

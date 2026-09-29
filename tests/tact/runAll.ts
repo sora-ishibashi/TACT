@@ -228,6 +228,7 @@ import { run as runExecutionCorrelationNotionEvidence } from "./execution/correl
 import { run as runExecutionCorrelationStore } from "./execution/correlation/store.test";
 import { run as runExecutionStore } from "./execution/store.test";
 import { run as runExecutionCorrelationManualOverride } from "./execution/correlation/manualOverride.test";
+import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -431,6 +432,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/correlation/store", run: runExecutionCorrelationStore },
   { name: "execution/store", run: runExecutionStore },
   { name: "execution/correlation/manualOverride", run: runExecutionCorrelationManualOverride },
+  { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
 ];
 
 async function main() {
