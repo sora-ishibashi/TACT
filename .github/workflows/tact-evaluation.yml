@@ -24,6 +24,23 @@
 # 実際に使って外部へ通信することはない(mock/pure functionのみ)ため、
 # ここではダミー文字列を直接指定する(GitHub Secretsとしては登録しない
 # ——絶対条件10: secrets/API key/.env/credentialをCIへ持ち込まない)。
+#
+# NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEYについて
+# (SOR-122): 同じ理由・同じ絶対条件で追加する。本物の資格情報ではない。
+# core/database/supabase.tsがモジュール読み込み時点でcreateClient()を
+# 呼んでおり、環境変数が無いだけでimportが例外を投げる(SOR-122実測:
+# tests/tact/runAll.tsがtests/tact/research/emptyStateGreeting.test.ts
+# -> components/research/ResearchWorkspace.tsx ->
+# components/auth/AuthProvider.tsx -> core/database/supabase.tsという
+# 既存のimport連鎖経由でこれを間接的に読み込んでいる)。createClient()
+# 自体は同期的にオブジェクトを構築するだけで、この時点ではネットワーク
+# I/Oを一切発生させない。supabaseクライアントの実際のメソッド呼び出し
+# (supabase.auth.*等)はAuthProvider内のReact hook本体にのみ存在し、
+# tests/tact配下(Reactをrenderしないプレーンな Node scriptとして実行)
+# ではこれらのhookが実行されないため、この値を実際のquery/authに使う
+# Testは存在しない(SOR-122実測: .env削除状態でも2645件全PASS)。
+# よってURLは構文的に妥当な文字列であればよく、実在のSupabase project
+# である必要はない。
 
 name: TACT Evaluation Harness
 
@@ -37,10 +54,12 @@ jobs:
   evaluate:
     runs-on: ubuntu-latest
 
-    # ダミー値(実際のAPI呼び出しには一切使われない、Step1参照)。
+    # ダミー値(実際のAPI呼び出しには一切使われない、上記コメント参照)。
     env:
       OPENAI_API_KEY: ci-placeholder-not-a-real-key
       ANTHROPIC_API_KEY: ci-placeholder-not-a-real-key
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-not-a-real-key
 
     steps:
       - name: Checkout
@@ -49,11 +68,23 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # package.jsonのdevDependencies(@types/node: ^20)に合わせる
-          # (Phase22 Step5: 他にNode versionを示す既存の指定
-          # (.nvmrc/.node-version/engines)が無いため、これを唯一の
-          # 明示的な根拠とする)。
-          node-version: "20"
+          # SOR-122: Node 20を使うと、NEXT_PUBLIC_SUPABASE_URL等の
+          # placeholder値を設定してもなお別のimport-time例外が発生する
+          # (SupabaseClientのコンストラクタがRealtimeClientを同期的に
+          # 初期化しており、@supabase/realtime-jsのWebSocketFactoryが
+          # `typeof globalThis.WebSocket !== "undefined"`のみを見て
+          # 判定するため。Node 20にはグローバルWebSocketが無く
+          # 「Node.js detected but native WebSocket not found. Ensure
+          # you are running Node.js 22+」で例外を投げる——realtime-js
+          # 自身のエラーメッセージが推奨する解決策)。ネットワークI/O
+          # ではなくruntime capability検出の問題であり、認証情報とは
+          # 無関係(SOR-122実測: ローカルNode 24では同じplaceholder値で
+          # 問題なくPASSしていた)。元々のNode 20指定は
+          # package.jsonのdevDependencies(@types/node: ^20)に合わせた
+          # だけで、実行時Node versionを強制する根拠(.nvmrc/
+          # engines等)は無い——型定義がやや古いだけで22との非互換は
+          # 発生しない。
+          node-version: "22"
           cache: "npm"
 
       - name: Install dependencies
