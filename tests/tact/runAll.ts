@@ -205,6 +205,14 @@ import { run as runExecutionPermissionObserve } from "./execution/permission/obs
 import { run as runExecutionPermissionSor52ScopeBoundary } from "./execution/permission/sor52ScopeBoundary.test";
 import { run as runExecutionTelemetryIngestionFailureStore } from "./execution/telemetry/ingestionFailureStore.test";
 import { run as runExecutionTelemetrySourceHealth } from "./execution/telemetry/sourceHealth.test";
+import { run as runExecutionCorrelationContext } from "./execution/correlation/context.test";
+import { run as runExecutionCorrelationCorrelate } from "./execution/correlation/correlate.test";
+import { run as runExecutionCorrelationMigrationContract } from "./execution/correlation/migrationContract.test";
+import { run as runExecutionCorrelationObserve } from "./execution/correlation/observe.test";
+import { run as runExecutionCorrelationStages } from "./execution/correlation/stages.test";
+import { run as runExecutionCorrelationCanonicalResult } from "./execution/correlation/canonicalResult.test";
+import { run as runExecutionCorrelationNotionM0 } from "./execution/correlation/notionM0.test";
+import { run as runWorkListWorksForNotionResourceQueryEncoding } from "./work/listWorksForNotionResourceQueryEncoding.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -385,6 +393,14 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/permission/sor52ScopeBoundary", run: runExecutionPermissionSor52ScopeBoundary },
   { name: "execution/telemetry/ingestionFailureStore", run: runExecutionTelemetryIngestionFailureStore },
   { name: "execution/telemetry/sourceHealth", run: runExecutionTelemetrySourceHealth },
+  { name: "execution/correlation/context", run: runExecutionCorrelationContext },
+  { name: "execution/correlation/correlate", run: runExecutionCorrelationCorrelate },
+  { name: "execution/correlation/migrationContract", run: runExecutionCorrelationMigrationContract },
+  { name: "execution/correlation/observe", run: runExecutionCorrelationObserve },
+  { name: "execution/correlation/stages", run: runExecutionCorrelationStages },
+  { name: "execution/correlation/canonicalResult", run: runExecutionCorrelationCanonicalResult },
+  { name: "execution/correlation/notionM0", run: runExecutionCorrelationNotionM0 },
+  { name: "work/listWorksForNotionResourceQueryEncoding", run: runWorkListWorksForNotionResourceQueryEncoding },
 ];
 
 async function main() {
