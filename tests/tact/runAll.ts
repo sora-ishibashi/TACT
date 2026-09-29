@@ -217,6 +217,17 @@ import { run as runExecutionCorrelationExplicitWorkIdFixMigrationContract } from
 import { run as runExecutionCorrelationRpcAclHardeningMigrationContract } from "./execution/correlation/rpcAclHardeningMigrationContract.test";
 import { run as runExecutionAdaptersNotionMcpObservation } from "./execution/adapters/notionMcpObservation.test";
 import { run as runExecutionTelemetryNotionIngestionFailureTelemetry } from "./execution/telemetry/notionIngestionFailureTelemetry.test";
+import { run as runExecutionCorrelationCrossProviderExplicitWorkId } from "./execution/correlation/crossProviderExplicitWorkId.test";
+import { run as runExecutionResolveTargetWorkForCorrelation } from "./execution/resolveTargetWorkForCorrelation.test";
+import { run as runWorkEntityEvidenceReferences } from "./work/workEntityEvidenceReferences.test";
+import { run as runExecutionCorrelationConfidencePolicy } from "./execution/correlation/confidencePolicy.test";
+import { run as runExecutionCorrelationCorrectionContext } from "./execution/correlation/correctionContext.test";
+import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
+import { run as runRunsViewProjections } from "./runsView/projections.test";
+import { run as runExecutionCorrelationNotionEvidence } from "./execution/correlation/notionEvidence.test";
+import { run as runExecutionCorrelationStore } from "./execution/correlation/store.test";
+import { run as runExecutionStore } from "./execution/store.test";
+import { run as runExecutionCorrelationManualOverride } from "./execution/correlation/manualOverride.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -409,6 +420,17 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/correlation/rpcAclHardeningMigrationContract", run: runExecutionCorrelationRpcAclHardeningMigrationContract },
   { name: "execution/adapters/notionMcpObservation", run: runExecutionAdaptersNotionMcpObservation },
   { name: "execution/telemetry/notionIngestionFailureTelemetry", run: runExecutionTelemetryNotionIngestionFailureTelemetry },
+  { name: "execution/correlation/crossProviderExplicitWorkId", run: runExecutionCorrelationCrossProviderExplicitWorkId },
+  { name: "execution/resolveTargetWorkForCorrelation", run: runExecutionResolveTargetWorkForCorrelation },
+  { name: "work/workEntityEvidenceReferences", run: runWorkEntityEvidenceReferences },
+  { name: "execution/correlation/confidencePolicy", run: runExecutionCorrelationConfidencePolicy },
+  { name: "execution/correlation/correctionContext", run: runExecutionCorrelationCorrectionContext },
+  { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
+  { name: "runsView/projections", run: runRunsViewProjections },
+  { name: "execution/correlation/notionEvidence", run: runExecutionCorrelationNotionEvidence },
+  { name: "execution/correlation/store", run: runExecutionCorrelationStore },
+  { name: "execution/store", run: runExecutionStore },
+  { name: "execution/correlation/manualOverride", run: runExecutionCorrelationManualOverride },
 ];
 
 async function main() {

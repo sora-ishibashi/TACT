@@ -78,7 +78,7 @@ export function resolveDelegatedWorkIntent(
   };
 }
 
-function toEvidenceReference(item: ContextEvidenceItem): WorkEvidenceReference {
+function toEvidenceReference(item: ContextEvidenceItem, createdAt: string): WorkEvidenceReference {
   return {
     category: item.category,
     sourceType: item.sourceType,
@@ -86,19 +86,28 @@ function toEvidenceReference(item: ContextEvidenceItem): WorkEvidenceReference {
     ...(item.provenance.operation === "search" || item.provenance.operation === "read_page" || item.provenance.operation === "search_messages"
       ? { operation: item.provenance.operation }
       : {}),
+    // SOR-75: this is the only relation/provenance this write path actually
+    // has — no confidence score exists here (the user's own context surfaced
+    // this evidence; it is not a scored candidate match), so confidence and
+    // canonicalEntityId are deliberately left unset rather than fabricated.
+    relationType: "evidence",
+    source: "context_resolution",
+    createdAt,
   };
 }
 
 // The Work retains provenance, not context text. This is intentionally a
 // bounded, deterministic projection of the Context Pack.
 export function buildWorkEvidenceReferences(
-  result: ContextResolutionResult
+  result: ContextResolutionResult,
+  now: () => Date = () => new Date()
 ): WorkEvidenceReference[] {
   const seen = new Set<string>();
   const references: WorkEvidenceReference[] = [];
+  const createdAt = now().toISOString();
 
   for (const item of result.pack.evidence) {
-    const reference = toEvidenceReference(item);
+    const reference = toEvidenceReference(item, createdAt);
     const key = `${reference.category}:${reference.sourceType}:${reference.sourceRef}:${reference.operation ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
