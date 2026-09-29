@@ -141,6 +141,38 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // ---- Test7 (SOR-45): observationMode validation ----
+  {
+    const validModes = validateCaptureExecutionInput(baseInput({ observationMode: "reconciled" }));
+
+    results.push(
+      check(
+        "[Test7a] observationModeが有効な値(inline/instrumented/reconciled)ならok=true",
+        validModes.ok === true
+      )
+    );
+
+    const omittedMode = validateCaptureExecutionInput(baseInput());
+
+    results.push(
+      check(
+        "[Test7b] observationMode省略はok=true(既存契約以前の行と同じnull扱い、必須化しない)",
+        omittedMode.ok === true
+      )
+    );
+
+    const invalidMode = validateCaptureExecutionInput(
+      baseInput({ observationMode: "eventually_consistent" as unknown as CaptureExecutionInput["observationMode"] })
+    );
+
+    results.push(
+      check(
+        "[Test7c] 未知のobservationModeはok=falseを返す(fail closed)",
+        invalidMode.ok === false && invalidMode.errors.some((e) => e.includes("observationMode"))
+      )
+    );
+  }
+
   return summarize("TACT Canonical Execution — Validation", results);
 
 }

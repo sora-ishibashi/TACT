@@ -116,6 +116,12 @@ export function normalizeSlackAppMentionEventToExecution(
     externalEventId: envelope.event_id,
     adapterVersion: SLACK_APP_MENTION_ADAPTER_VERSION,
 
+    // SOR-45: 下記コメントの通り、Slackはwebhook配信時点で既にaction
+    // (messageの作成)を完了させている——TACTはこのcallをinstrumentして
+    // いない(TACT自身がSlackへのpost呼び出しの経路上にいない)、事後的な
+    // 発見・記録(reconciled)である既知の事実(推測ではない)。
+    observationMode: "reconciled",
+
     // message本文(text)は含めない(絶対条件、上記コメント参照)。
     // teamId(SOR-52 Closeout Hardening Part8)を含めることで、
     // core/tact-execution/correlation/context.tsのStructural

@@ -15,6 +15,7 @@ import type { JsonValue } from "../tact-work/approvalIntegrity";
 import {
   EXECUTION_ACTOR_KINDS,
   EXECUTION_ACTION_CATEGORIES,
+  EXECUTION_OBSERVATION_MODES,
   EXECUTION_PERMISSION_STATUSES,
   EXECUTION_PROVIDERS,
   EXECUTION_SOURCE_TYPES,
@@ -157,6 +158,10 @@ export function validateCaptureExecutionInput(
 
   if (input.permissionStatus != null && !EXECUTION_PERMISSION_STATUSES.includes(input.permissionStatus)) {
     errors.push(`permissionStatus must be one of ${EXECUTION_PERMISSION_STATUSES.join(", ")}`);
+  }
+
+  if (input.observationMode != null && !EXECUTION_OBSERVATION_MODES.includes(input.observationMode)) {
+    errors.push(`observationMode must be one of ${EXECUTION_OBSERVATION_MODES.join(", ")}`);
   }
 
   if (!isValidTimestampOrNull(input.providerOccurredAt)) {

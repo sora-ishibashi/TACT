@@ -42,6 +42,7 @@ import { check, summarize, type CheckResult } from "../lib/check";
 function baseExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
   return {
     id: "exec-1",
+    schemaVersion: 1,
     userId: "user-1",
     organizationId: null,
     workspaceId: null,
@@ -59,6 +60,8 @@ function baseExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalEx
     adapterVersion: "1",
     sourceMetadata: null,
     rawPayloadRef: null,
+    observationMode: null,
+    preExecutionVisible: false,
     actionCategory: "read",
     operation: "notion_read",
     resourceType: "page",

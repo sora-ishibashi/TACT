@@ -20,6 +20,7 @@ const W_001 = "W-001";
 function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
   return {
     id: "exec-1",
+    schemaVersion: 1,
     userId: "user-1",
     organizationId: null,
     workspaceId: null,
@@ -37,6 +38,8 @@ function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): Canon
     adapterVersion: "notion-mcp-v1",
     sourceMetadata: null,
     rawPayloadRef: null,
+    observationMode: null,
+    preExecutionVisible: false,
     actionCategory: "update",
     operation: "notion_update_page",
     resourceType: "notion_page",

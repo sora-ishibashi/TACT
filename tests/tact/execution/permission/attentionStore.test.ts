@@ -56,6 +56,7 @@ function makeAttentionRowFixture(overrides: Partial<AttentionRow> = {}): Attenti
 function makeExecutionRowFixture(overrides: Partial<ExecutionRow> = {}): ExecutionRow {
   return {
     id: "exec-1",
+    schema_version: 1,
     user_id: "user-1",
     organization_id: null,
     workspace_id: null,
@@ -73,6 +74,8 @@ function makeExecutionRowFixture(overrides: Partial<ExecutionRow> = {}): Executi
     adapter_version: "notion-mcp-v1",
     source_metadata: null,
     raw_payload_ref: null,
+    observation_mode: "instrumented",
+    pre_execution_visible: false,
     action_category: "update",
     operation: "notion_update_page",
     resource_type: "notion_page",

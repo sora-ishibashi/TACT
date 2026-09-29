@@ -160,6 +160,10 @@ export function normalizeNotionMcpInvocationToExecution(
       externalEventId: invocationId,
       adapterVersion: NOTION_MCP_ADAPTER_VERSION,
       sourceMetadata: metadata,
+      // SOR-45: executeWithNotionMcpObservation()(observeNotionMcpExecution.ts)
+      // がexecuteTool()呼び出しを直接wrapしている——TACT自身のコードが
+      // 実際のprovider呼び出しを計装している既知の事実(推測ではない)。
+      observationMode: "instrumented",
       actionCategory: fields.actionCategory,
       operation: fields.operation,
       resourceType: canonicalResourceType(observation.resource?.type) ?? null,
