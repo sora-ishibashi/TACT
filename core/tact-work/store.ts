@@ -580,6 +580,107 @@ export async function getWork(
 
 }
 
+// SOR-52(Canonical Execution → Work Correlation)向けの読み取り専用
+// query。Workのstate遷移・所有権判定ロジックは一切変更せず、既存の
+// createRequestScopedClient(accessToken)パターンをそのまま使う
+// (token-agnostic設計、store.ts冒頭コメント参照——Trusted Execution
+// Boundary経由でservice role keyをaccessTokenとして渡すことも既に
+// 想定済み)。同一Conversationに複数Workが紐付く場合(ambiguous
+// correlationの実データ)もそのまま複数件返す——ここでは絞り込みや
+// 優先順位付けを行わない(呼び出し元のCorrelatorの責務)。
+export async function listWorksForConversation(
+  conversationId: string,
+  userId: string,
+  accessToken: string
+): Promise<Work[]> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_works")
+    .select(WORK_COLUMNS)
+    .eq("primary_conversation_id", conversationId)
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((row) => toWork(row as WorkRow));
+
+}
+
+// SOR-53(Notion Structural Correlator)向けの読み取り専用query。
+// listWorksForConversation()と同じ設計方針(Workのstate遷移・所有権
+// 判定ロジックは一切変更せず、既存のcreateRequestScopedClient(accessToken)
+// パターンをそのまま使う)。新しいgeneric resource graphは作らない
+// ——既存のevidenceRefs(WorkEvidenceReference、ARCH-R2で既に
+// sourceType:"notion"を型として想定済み)を、jsonb containment(`@>`)で
+// 照会するだけ。このevidence_refsを実際に書き込む経路(SOR-53の
+// scope外)が無ければ常に空集合を返す——それ自体はNever Guess Ruleに
+// 沿った安全側の挙動である(候補が無ければunresolvedへ倒れるだけ)。
+export async function listWorksForNotionResource(
+  resourceRef: string,
+  userId: string,
+  accessToken: string
+): Promise<Work[]> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  // SOR-53 hardening(実Staging検証で発見、22P02): supabase-js/
+  // postgrest-jsの.contains()へ生のJS object配列をそのまま渡すと、
+  // (real Postgres/PostgRESTに対しては)Array.prototype.toString()
+  // 相当("[object Object]")で直列化され、`cs.{[object Object]}`という
+  // 不正なjsonbリテラルになりPostgresが22P02で拒否する(mockベースの
+  // 既存unit testはこの直列化経路を一切通らないため検出できなかった)。
+  // jsonb containment用の値はJSON.stringify()した文字列として渡す
+  // ——contains()の型定義自体がstringを正式に許容している(postgrest-js
+  // 自身のcontains<...>(column, value: string | ReadonlyArray<...> |
+  // Record<string, unknown>)参照)。containmentの意味(`evidence_refs`
+  // jsonb配列が{sourceType:"notion", sourceRef: resourceRef}を含むか)
+  // 自体は変更しない。
+  const { data, error } = await client
+    .from("tact_works")
+    .select(WORK_COLUMNS)
+    .eq("user_id", userId)
+    .contains("evidence_refs", JSON.stringify([{ sourceType: "notion", sourceRef: resourceRef }]))
+    .order("updated_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((row) => toWork(row as WorkRow));
+
+}
+
+// SOR-52 Temporal/Participant Correlator向け。「直近activeだったWork」
+// の候補集合を返すだけの読み取り専用query——「これだけで自動確定しない」
+// (SOR-52絶対条件)ための絞り込み・confidence判定は呼び出し元が行う。
+export async function listRecentWorksForUser(
+  userId: string,
+  accessToken: string,
+  options: { limit?: number } = {}
+): Promise<Work[]> {
+
+  const client = createRequestScopedClient(accessToken);
+
+  const { data, error } = await client
+    .from("tact_works")
+    .select(WORK_COLUMNS)
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false })
+    .limit(options.limit ?? 5);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((row) => toWork(row as WorkRow));
+
+}
+
 // status遷移に伴い、対応するタイムスタンプ列を1回だけ設定する
 // (絶対条件: 既に設定済みの値は上書きしない。同じstatusへ複数回
 // 遷移してもstartedAt等の意味——「最初にその状態になった時刻」——が
