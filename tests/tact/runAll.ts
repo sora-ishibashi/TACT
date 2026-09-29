@@ -188,6 +188,9 @@ import { run as runWorkGmailReferentCandidates } from "./work/gmailReferentCandi
 import { run as runWorkExecutionPreview } from "./work/executionPreview.test";
 import { run as runWorkMultiTaskWork } from "./work/multiTaskWork.test";
 import { run as runWorkCapability } from "./work/capability.test";
+import { run as runExecutionMapping } from "./execution/mapping.test";
+import { run as runExecutionValidation } from "./execution/validation.test";
+import { run as runExecutionAdaptersSlackAdapter } from "./execution/adapters/slackAdapter.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -351,6 +354,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/executionPreview", run: runWorkExecutionPreview },
   { name: "work/multiTaskWork", run: runWorkMultiTaskWork },
   { name: "work/capability", run: runWorkCapability },
+  { name: "execution/mapping", run: runExecutionMapping },
+  { name: "execution/validation", run: runExecutionValidation },
+  { name: "execution/adapters/slackAdapter", run: runExecutionAdaptersSlackAdapter },
 ];
 
 async function main() {
