@@ -215,6 +215,8 @@ import { run as runExecutionCorrelationNotionM0 } from "./execution/correlation/
 import { run as runWorkListWorksForNotionResourceQueryEncoding } from "./work/listWorksForNotionResourceQueryEncoding.test";
 import { run as runExecutionCorrelationExplicitWorkIdFixMigrationContract } from "./execution/correlation/explicitWorkIdCorrelationStatusFixMigrationContract.test";
 import { run as runExecutionCorrelationRpcAclHardeningMigrationContract } from "./execution/correlation/rpcAclHardeningMigrationContract.test";
+import { run as runExecutionAdaptersNotionMcpObservation } from "./execution/adapters/notionMcpObservation.test";
+import { run as runExecutionTelemetryNotionIngestionFailureTelemetry } from "./execution/telemetry/notionIngestionFailureTelemetry.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -405,6 +407,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "work/listWorksForNotionResourceQueryEncoding", run: runWorkListWorksForNotionResourceQueryEncoding },
   { name: "execution/correlation/explicitWorkIdCorrelationStatusFixMigrationContract", run: runExecutionCorrelationExplicitWorkIdFixMigrationContract },
   { name: "execution/correlation/rpcAclHardeningMigrationContract", run: runExecutionCorrelationRpcAclHardeningMigrationContract },
+  { name: "execution/adapters/notionMcpObservation", run: runExecutionAdaptersNotionMcpObservation },
+  { name: "execution/telemetry/notionIngestionFailureTelemetry", run: runExecutionTelemetryNotionIngestionFailureTelemetry },
 ];
 
 async function main() {
