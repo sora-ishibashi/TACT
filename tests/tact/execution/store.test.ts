@@ -59,6 +59,7 @@ function baseInput(overrides: Partial<CaptureExecutionInput> = {}): CaptureExecu
 function makeRowFixture(overrides: Partial<ExecutionRow> = {}): ExecutionRow {
   return {
     id: "exec-1",
+    schema_version: 1,
     user_id: "user-1",
     organization_id: null,
     workspace_id: null,
@@ -76,6 +77,8 @@ function makeRowFixture(overrides: Partial<ExecutionRow> = {}): ExecutionRow {
     adapter_version: "slack-app-mention-v1",
     source_metadata: null,
     raw_payload_ref: null,
+    observation_mode: null,
+    pre_execution_visible: false,
     action_category: "create",
     operation: "app_mention",
     resource_type: null,
@@ -334,6 +337,58 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[Ref] service role client不可時はstatus=unavailableを返す(fail closed)",
         outcome.status === "unavailable"
+      )
+    );
+  }
+
+  // ---- Test7 (SOR-45): schemaVersion常に1・observationMode/
+  // preExecutionVisibleがinsert payload/戻り値へ正しく伝わる ----
+  {
+    const rowFixture = makeRowFixture({
+      schema_version: 1,
+      observation_mode: "instrumented",
+      pre_execution_visible: false,
+    });
+    let insertedPayload: Record<string, unknown> | undefined;
+
+    const deps: CaptureExecutionDeps = {
+      getClient: () =>
+        makeFakeClient([{ data: rowFixture, error: null }], (payload) => {
+          insertedPayload = payload;
+        }),
+      resolveTargetWorkForCorrelation: notFoundResolveTargetWorkForCorrelation,
+    };
+
+    const outcome = await captureExecution(baseInput({ observationMode: "instrumented" }), deps);
+
+    results.push(
+      check(
+        "[Test7a] captureExecution()は呼び出し元の指定に関わらず常にschema_version=1をinsertする",
+        insertedPayload?.schema_version === 1
+      )
+    );
+
+    results.push(
+      check(
+        "[Test7b] observationModeがinsert payloadへそのまま伝わる",
+        insertedPayload?.observation_mode === "instrumented"
+      )
+    );
+
+    results.push(
+      check(
+        "[Test7c] preExecutionVisible省略時はfalseがinsert payloadへ入る(現在の全adapterの実態と一致)",
+        insertedPayload?.pre_execution_visible === false
+      )
+    );
+
+    results.push(
+      check(
+        "[Test7d] 戻り値のCanonicalExecutionにschemaVersion/observationMode/preExecutionVisibleが反映される",
+        outcome.status === "captured" &&
+          outcome.execution.schemaVersion === 1 &&
+          outcome.execution.observationMode === "instrumented" &&
+          outcome.execution.preExecutionVisible === false
       )
     );
   }

@@ -229,6 +229,7 @@ import { run as runExecutionCorrelationStore } from "./execution/correlation/sto
 import { run as runExecutionStore } from "./execution/store.test";
 import { run as runExecutionCorrelationManualOverride } from "./execution/correlation/manualOverride.test";
 import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
+import { run as runExecutionV1ObservationContractMigrationContract } from "./execution/v1ObservationContractMigrationContract.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -433,6 +434,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/store", run: runExecutionStore },
   { name: "execution/correlation/manualOverride", run: runExecutionCorrelationManualOverride },
   { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
+  { name: "execution/v1ObservationContractMigrationContract", run: runExecutionV1ObservationContractMigrationContract },
 ];
 
 async function main() {

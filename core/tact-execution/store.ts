@@ -32,11 +32,17 @@ import type {
   ExecutionActorKind,
   ExecutionActionCategory,
   ExecutionCorrelationStatus,
+  ExecutionObservationMode,
   ExecutionPermissionStatus,
   ExecutionProvider,
   ExecutionSourceType,
   ExecutionStatus,
 } from "./types";
+
+// SOR-45: captureExecution()が常に書き込む、現在のCanonicalExecution
+// 契約バージョン。呼び出し元から上書き不可(CaptureExecutionInputには
+// 含まれない、store層自身が保証する値であるため)。
+const CANONICAL_EXECUTION_SCHEMA_VERSION = 1;
 
 // PostgreSQL/PostgRESTのunique_violationエラーコード(tact_bot_processed_events
 // のclaimExternalEvent()と同じ判定)。
@@ -120,6 +126,8 @@ export interface ExecutionRow {
 
   id: string;
 
+  schema_version: number;
+
   user_id: string;
 
   organization_id: string | null;
@@ -153,6 +161,10 @@ export interface ExecutionRow {
   source_metadata: JsonValue | null;
 
   raw_payload_ref: string | null;
+
+  observation_mode: ExecutionObservationMode | null;
+
+  pre_execution_visible: boolean;
 
   action_category: ExecutionActionCategory;
 
@@ -192,12 +204,13 @@ export interface ExecutionRow {
 // によるcolumn型推論を壊してしまう(GenericStringErrorへ falls back
 // する)ため、必ず1つの文字列literalのまま保つ。
 const EXECUTION_COLUMNS =
-  "id, user_id, organization_id, workspace_id, work_id, correlation_status, connection_id, actor_kind, actor_id, agent_id, on_behalf_of_actor_kind, on_behalf_of_actor_id, provider, source_type, external_event_id, adapter_version, source_metadata, raw_payload_ref, action_category, operation, resource_type, resource_identifier, target_provider, status, error_code, error_message, permission_status, permission_reason_code, permission_evaluated_at, provider_occurred_at, observed_at, persisted_at, updated_at";
+  "id, schema_version, user_id, organization_id, workspace_id, work_id, correlation_status, connection_id, actor_kind, actor_id, agent_id, on_behalf_of_actor_kind, on_behalf_of_actor_id, provider, source_type, external_event_id, adapter_version, source_metadata, raw_payload_ref, observation_mode, pre_execution_visible, action_category, operation, resource_type, resource_identifier, target_provider, status, error_code, error_message, permission_status, permission_reason_code, permission_evaluated_at, provider_occurred_at, observed_at, persisted_at, updated_at";
 
 export function toCanonicalExecution(row: ExecutionRow): CanonicalExecution {
 
   return {
     id: row.id,
+    schemaVersion: row.schema_version,
     userId: row.user_id,
     organizationId: row.organization_id,
     workspaceId: row.workspace_id,
@@ -215,6 +228,8 @@ export function toCanonicalExecution(row: ExecutionRow): CanonicalExecution {
     adapterVersion: row.adapter_version,
     sourceMetadata: row.source_metadata,
     rawPayloadRef: row.raw_payload_ref,
+    observationMode: row.observation_mode,
+    preExecutionVisible: row.pre_execution_visible,
     actionCategory: row.action_category,
     operation: row.operation,
     resourceType: row.resource_type,
@@ -323,6 +338,7 @@ export async function captureExecution(
   const { data, error } = await client
     .from("tact_canonical_executions")
     .insert({
+      schema_version: CANONICAL_EXECUTION_SCHEMA_VERSION,
       user_id: input.userId,
       organization_id: input.organizationId ?? null,
       workspace_id: input.workspaceId ?? null,
@@ -339,6 +355,8 @@ export async function captureExecution(
       adapter_version: input.adapterVersion,
       source_metadata: input.sourceMetadata ?? null,
       raw_payload_ref: input.rawPayloadRef ?? null,
+      observation_mode: input.observationMode ?? null,
+      pre_execution_visible: input.preExecutionVisible ?? false,
       action_category: input.actionCategory,
       operation: input.operation,
       resource_type: input.resourceType ?? null,

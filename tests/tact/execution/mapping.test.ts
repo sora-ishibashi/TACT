@@ -19,6 +19,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     const row: ExecutionRow = {
       id: "exec-1",
+      schema_version: 1,
       user_id: "user-1",
       organization_id: null,
       workspace_id: null,
@@ -36,6 +37,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       adapter_version: "slack-app-mention-v1",
       source_metadata: { channel: "C1" },
       raw_payload_ref: null,
+      observation_mode: "reconciled",
+      pre_execution_visible: false,
       action_category: "create",
       operation: "app_mention",
       resource_type: "slack_message",
@@ -100,12 +103,22 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       )
     );
 
+    results.push(
+      check(
+        "[Test1] toCanonicalExecution() (SOR-45): schemaVersion/observationMode/preExecutionVisibleが変換される",
+        execution.schemaVersion === 1 &&
+          execution.observationMode === "reconciled" &&
+          execution.preExecutionVisible === false
+      )
+    );
+
   }
 
   // ---- Test2: toCanonicalExecution() — Work IDあり(相関済み) ----
   {
     const row: ExecutionRow = {
       id: "exec-2",
+      schema_version: 1,
       user_id: "user-1",
       organization_id: null,
       workspace_id: null,
@@ -123,6 +136,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       adapter_version: "openai-v1",
       source_metadata: null,
       raw_payload_ref: null,
+      observation_mode: null,
+      pre_execution_visible: false,
       action_category: "execute",
       operation: "tool_call",
       resource_type: null,

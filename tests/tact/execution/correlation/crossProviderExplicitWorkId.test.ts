@@ -30,6 +30,7 @@ const SHARED_WORK_ID = "work-shared-1";
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
   return {
     id: "exec-1",
+    schemaVersion: 1,
     userId: "user-1",
     organizationId: null,
     workspaceId: null,
@@ -47,6 +48,8 @@ function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalEx
     adapterVersion: "v1",
     sourceMetadata: null,
     rawPayloadRef: null,
+    observationMode: null,
+    preExecutionVisible: false,
     actionCategory: "create",
     operation: "app_mention",
     resourceType: null,
@@ -106,6 +109,7 @@ function baseInput(overrides: Partial<CaptureExecutionInput> = {}): CaptureExecu
 function makeRowFixture(overrides: Partial<ExecutionRow> = {}): ExecutionRow {
   return {
     id: "exec-1",
+    schema_version: 1,
     user_id: "user-1",
     organization_id: null,
     workspace_id: null,
@@ -123,6 +127,8 @@ function makeRowFixture(overrides: Partial<ExecutionRow> = {}): ExecutionRow {
     adapter_version: "v1",
     source_metadata: null,
     raw_payload_ref: null,
+    observation_mode: null,
+    pre_execution_visible: false,
     action_category: "create",
     operation: "app_mention",
     resource_type: null,

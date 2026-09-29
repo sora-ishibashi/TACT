@@ -21,6 +21,7 @@ import { check, summarize, type CheckResult } from "../../lib/check";
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
   return {
     id: "exec-1",
+    schemaVersion: 1,
     userId: "user-1",
     organizationId: null,
     workspaceId: null,
@@ -38,6 +39,8 @@ function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalEx
     adapterVersion: "v1",
     sourceMetadata: { teamId: "T1", channel: "C1", threadTs: "100.001" },
     rawPayloadRef: null,
+    observationMode: null,
+    preExecutionVisible: false,
     actionCategory: "create",
     operation: "app_mention",
     resourceType: "slack_message",

@@ -130,6 +130,36 @@ export const EXECUTION_CORRELATION_STATUSES: readonly ExecutionCorrelationStatus
   "unresolved",
 ];
 
+// SOR-45: sourceType(webhook/poll/manual_report/sdk_callback/runtime_dispatch)
+// とは別の軸。sourceTypeは「どういうtransportでこのeventが届いたか」を
+// 表すのに対し、observationModeは「TACTの観測が、実際のprovider側action
+// に対してどういう時間的/因果的関係にあるか」を表す——同じsourceTypeでも
+// observationModeが異なりうる(例: 将来webhookでも準リアルタイムに
+// instrumentedな観測を行う経路がありえる)ため、意図的に独立させる。
+//   - "inline": TACT自身がaction dispatchの経路上にあり、実行と同期的に
+//     観測する(現時点でこのmodeを使うadapterは無い、将来のruntime
+//     dispatch経路向けの契約枠)。
+//   - "instrumented": TACTのコードが実際のprovider呼び出しを明示的に
+//     wrapして観測する(例: core/tact-execution/adapters/notion/
+//     observeNotionMcpExecution.tsのexecuteWithNotionMcpObservation()。
+//     ただし現在の実装はexecuteTool()完了後にのみcaptureする——
+//     wrap=instrumentedであることと、preExecutionVisible(下記)が
+//     trueであることは独立した事実である)。
+//   - "reconciled": provider側で既に完結したactionを、TACTが事後的に
+//     (webhook通知・poll等で)発見・記録する(例: Slack webhook経由の
+//     normalizeSlackExecutionEvent.ts、現状core/tact-bot側の本番配線は
+//     未接続だがadapter自体はこのmodeで正しい)。
+// 既存行(この契約導入以前にcaptureされた行)の真のmodeは推測できない
+// ため、column自体をnullableとし、null="この契約導入前、または
+// 呼び出し元が未分類"を意味する(絶対条件、Unknownな値を推測で埋めない)。
+export type ExecutionObservationMode = "inline" | "instrumented" | "reconciled";
+
+export const EXECUTION_OBSERVATION_MODES: readonly ExecutionObservationMode[] = [
+  "inline",
+  "instrumented",
+  "reconciled",
+];
+
 export interface ExecutionActorReference {
 
   kind: ExecutionActorKind;
@@ -145,6 +175,14 @@ export interface ExecutionActorReference {
 export interface CanonicalExecution {
 
   id: string;
+
+  // SOR-45: このrowが記録された時点でのCanonicalExecution契約のバージョン。
+  // captureExecution()が常に1を書き込む(呼び出し元から指定不可、
+  // 「このstore層が保証する契約の版数」であり、adapter固有の
+  // adapterVersionとは意味が異なる)。将来v2が必要になった場合も、
+  // 既存v1行は変更せずschemaVersion=1のまま残す(destructive migration
+  // 禁止)。
+  schemaVersion: number;
 
   // ---- Identity ----
 
@@ -189,6 +227,19 @@ export interface CanonicalExecution {
   sourceMetadata: JsonValue | null;
 
   rawPayloadRef: string | null;
+
+  // SOR-45: 上記ExecutionObservationMode参照。既存契約導入前の行は null。
+  observationMode: ExecutionObservationMode | null;
+
+  // SOR-45: このExecution行が、provider側actionの実際の完了より前に
+  // 作成された(=事前に可視だった)かどうか。現時点では、この値を
+  // trueにするadapterは一つも無い(instrumentedなNotion MCP経路も
+  // executeTool()完了後にのみcaptureする、observeNotionMcpExecution.ts
+  // 参照)——将来、真にinlineなruntime dispatch経路が実装された際に
+  // trueを設定する契約枠として追加する。observationModeから機械的に
+  // 導出できる値ではない(instrumentedでも今日はfalseになりうる)ため、
+  // 独立したfieldとして持つ。
+  preExecutionVisible: boolean;
 
   // ---- Action ----
 
@@ -273,6 +324,15 @@ export interface CaptureExecutionInput {
   sourceMetadata?: JsonValue | null;
 
   rawPayloadRef?: string | null;
+
+  // SOR-45: 省略時はnull(未分類)。schemaVersionはここに含めない——
+  // captureExecution()がstore層の契約として常に自分で1を書き込む
+  // (adapterが指定できる値ではない)。
+  observationMode?: ExecutionObservationMode | null;
+
+  // SOR-45: 省略時はfalse(現在の全adapterの実態と一致、上記コメント
+  // 参照)。
+  preExecutionVisible?: boolean;
 
   actionCategory: ExecutionActionCategory;
 

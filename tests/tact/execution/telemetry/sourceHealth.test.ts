@@ -9,6 +9,7 @@ import { check, summarize, type CheckResult } from "../../lib/check";
 function execution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
   return {
     id: "exec-1",
+    schemaVersion: 1,
     userId: "user-1",
     organizationId: null,
     workspaceId: null,
@@ -26,6 +27,8 @@ function execution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecut
     adapterVersion: "notion-mcp-v1",
     sourceMetadata: null,
     rawPayloadRef: null,
+    observationMode: null,
+    preExecutionVisible: false,
     actionCategory: "read",
     operation: "notion_read",
     resourceType: null,
