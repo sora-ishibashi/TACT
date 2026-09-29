@@ -52,7 +52,24 @@ create table if not exists public.conversations (
   -- 将来Supabase Authを導入した際にスキーマ変更なしで移行できるよう、
   -- 今のうちにFKだけ張っておく。ON DELETE SET NULLとし、
   -- usersが削除されてもconversations自体は消さない。
-  user_id uuid null references public.users (id) on delete set null,
+  --
+  -- SOR-121 fresh-environment互換性修正 (migration-history compatibility fix):
+  --   当初はpublic.users(id)を参照していたが、public.usersを作成する
+  --   migrationはrepository内に一度も存在しなかったため、空のDBから
+  --   migration historyを最初から適用すると本migrationの時点で必ず失敗
+  --   していた(20260820000000のコメント参照: public.usersは当時から
+  --   未使用のテーブルだった)。20260820000000で参照先がauth.users(id)へ
+  --   修正され、それ以降のmigration(20260821000000/20260822000000の
+  --   STEP207コメント参照)もauth.users(id) on delete set nullを正規
+  --   パターンとして踏襲している。この修正は、20260820000000が実際に
+  --   到達していた最終形(auth.users参照)へ本migration自身を合わせる
+  --   ものであり、20260820000000のdrop constraint if exists /
+  --   add constraint(制約名conversations_user_id_fkeyで一致)は
+  --   その後も冪等に成立する(既存制約を削除して同一定義を再作成する
+  --   no-opになる)。既に適用済みのStaging/Production環境は
+  --   version基準でmigration適用要否を判定するため、本ファイルの内容
+  --   変更によって再実行されることはない。
+  user_id uuid null references auth.users (id) on delete set null,
 
   title text null,
 
