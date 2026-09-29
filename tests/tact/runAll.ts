@@ -195,6 +195,9 @@ import { run as runExecutionPermissionEvaluate } from "./execution/permission/ev
 import { run as runExecutionPermissionNotionM0Matrix } from "./execution/permission/notionM0Matrix.test";
 import { run as runExecutionPermissionPolicy } from "./execution/permission/policy.test";
 import { run as runExecutionPermissionStore } from "./execution/permission/store.test";
+import { run as runExecutionPermissionRegistryEvaluate } from "./execution/permission/registryEvaluate.test";
+import { run as runExecutionPermissionRegistryMigrationContract } from "./execution/permission/registryMigrationContract.test";
+import { run as runExecutionPermissionRegistryStore } from "./execution/permission/registryStore.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -365,6 +368,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/permission/notionM0Matrix", run: runExecutionPermissionNotionM0Matrix },
   { name: "execution/permission/policy", run: runExecutionPermissionPolicy },
   { name: "execution/permission/store", run: runExecutionPermissionStore },
+  { name: "execution/permission/registryEvaluate", run: runExecutionPermissionRegistryEvaluate },
+  { name: "execution/permission/registryMigrationContract", run: runExecutionPermissionRegistryMigrationContract },
+  { name: "execution/permission/registryStore", run: runExecutionPermissionRegistryStore },
 ];
 
 async function main() {
