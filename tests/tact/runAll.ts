@@ -213,6 +213,8 @@ import { run as runExecutionCorrelationStages } from "./execution/correlation/st
 import { run as runExecutionCorrelationCanonicalResult } from "./execution/correlation/canonicalResult.test";
 import { run as runExecutionCorrelationNotionM0 } from "./execution/correlation/notionM0.test";
 import { run as runWorkListWorksForNotionResourceQueryEncoding } from "./work/listWorksForNotionResourceQueryEncoding.test";
+import { run as runExecutionCorrelationExplicitWorkIdFixMigrationContract } from "./execution/correlation/explicitWorkIdCorrelationStatusFixMigrationContract.test";
+import { run as runExecutionCorrelationRpcAclHardeningMigrationContract } from "./execution/correlation/rpcAclHardeningMigrationContract.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -401,6 +403,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/correlation/canonicalResult", run: runExecutionCorrelationCanonicalResult },
   { name: "execution/correlation/notionM0", run: runExecutionCorrelationNotionM0 },
   { name: "work/listWorksForNotionResourceQueryEncoding", run: runWorkListWorksForNotionResourceQueryEncoding },
+  { name: "execution/correlation/explicitWorkIdCorrelationStatusFixMigrationContract", run: runExecutionCorrelationExplicitWorkIdFixMigrationContract },
+  { name: "execution/correlation/rpcAclHardeningMigrationContract", run: runExecutionCorrelationRpcAclHardeningMigrationContract },
 ];
 
 async function main() {
