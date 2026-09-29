@@ -316,28 +316,45 @@ export async function listWorkCorrelationDecisionsForExecution(
 }
 
 // =========================
-// listLatestCorrelationMethodsForExecutions (SOR-77 UX gap fix)
+// listLatestCorrelationDecisionsForExecutions (SOR-77 UX gap fix,
+// extended by SOR-23 OBS-UX-P1 for Work Timeline "why" display)
 // =========================
 //
-// live Staging検証で発見したUX gap: 一度manual_overrideで訂正した
-// Execution(correlationStatus="matched")は、Activity画面上でReview/
-// History導線が完全に消えていた——WorkReference(components/tact/runs/
-// badges.tsx)がCORRELATED行では常に「Workへのlinkのみ」を出す既存分岐
-// しか持たなかったため。「この行は人間が訂正したものか」は
+// live Staging検証で発見したUX gap(SOR-77): 一度manual_overrideで訂正
+// したExecution(correlationStatus="matched")は、Activity画面上で
+// Review/History導線が完全に消えていた——WorkReference(components/
+// tact/runs/badges.tsx)がCORRELATED行では常に「Workへのlinkのみ」を
+// 出す既存分岐しか持たなかったため。「この行は人間が訂正したものか」は
 // tact_canonical_executions自体には存在しない(絶対条件、SOR-77
 // 「do not add duplicate columns」)——既存のappend-only historyから
 // 都度導出する。
+//
+// SOR-23: Work Timelineの「なぜこのExecutionはこのWorkへ割り当てられ
+// たか」表示も、method単体ではなくconfidence/reasonCodeまで必要になった
+// ため、返り値をWorkCorrelationMethod単体からsummary object全体へ拡張
+// した(呼び出し元のActivity/Unassignedは`.method`だけを見ればよく、
+// 挙動は変わらない)。
 //
 // 既存のfetchRelatedRecords()(core/tact-execution/permission/
 // attentionStore.ts)と同じ「単純な.in()一括取得 + application層で
 // executionId単位に整理」という規約をそのまま踏襲する(PostgRESTの
 // relational embeddingや複雑なSQLに依存しない)。correlated_at descで
 // 取得するため、同じexecution_idの最初の出現が必ず最新のdecisionになる。
-export async function listLatestCorrelationMethodsForExecutions(
-  executionIds: readonly string[]
-): Promise<Map<string, WorkCorrelationMethod>> {
+export interface LatestCorrelationDecisionSummary {
 
-  const latest = new Map<string, WorkCorrelationMethod>();
+  method: WorkCorrelationMethod;
+
+  confidence: number | null;
+
+  reasonCode: string;
+
+}
+
+export async function listLatestCorrelationDecisionsForExecutions(
+  executionIds: readonly string[]
+): Promise<Map<string, LatestCorrelationDecisionSummary>> {
+
+  const latest = new Map<string, LatestCorrelationDecisionSummary>();
 
   const uniqueIds = [...new Set(executionIds)];
 
@@ -353,14 +370,19 @@ export async function listLatestCorrelationMethodsForExecutions(
 
   const { data } = await client
     .from("tact_execution_work_correlations")
-    .select("execution_id, method, correlated_at")
+    .select("execution_id, method, confidence, reason_code, correlated_at")
     .in("execution_id", uniqueIds)
     .order("correlated_at", { ascending: false });
 
-  for (const row of (data ?? []) as Array<{ execution_id: string; method: WorkCorrelationMethod }>) {
+  for (const row of (data ?? []) as Array<{
+    execution_id: string;
+    method: WorkCorrelationMethod;
+    confidence: number | null;
+    reason_code: string;
+  }>) {
 
     if (!latest.has(row.execution_id)) {
-      latest.set(row.execution_id, row.method);
+      latest.set(row.execution_id, { method: row.method, confidence: row.confidence, reasonCode: row.reason_code });
     }
 
   }

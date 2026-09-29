@@ -216,12 +216,19 @@ export interface ActivityItemView {
 
   workId: string | null;
 
+  // SOR-23 (OBS-UX-P1): human-readable Work identity — replaces raw UUID
+  // display in the primary Activity path (AttentionCardView.workTitle
+  // already did this since SOR-18; ActivityItemView never carried it).
+  // tenant-safe読み時join(listWorkTitlesByIds())の結果、workId===nullの
+  // 場合は常にnull(No-Fabrication、workId自体はそのまま残す)。
+  workTitle: string | null;
+
   correlationStatus: CanonicalCorrelationResult;
 
   // SOR-77 live Staging verification defect(UX gap): tact_canonical_
   // executions自体には「人間が訂正したか」を表す列が無い(絶対条件、
   // do not add duplicate columns)——呼び出し元(API route)が
-  // listLatestCorrelationMethodsForExecutions()で既存のappend-only
+  // listLatestCorrelationDecisionsForExecutions()で既存のappend-only
   // historyから導出し、ここへ渡す。CORRELATED行でReview/History導線を
   // 出すかどうかの唯一の判断材料(このfile自身は「出す/出さない」の
   // 判定をしない、値をそのまま運ぶだけ)。
@@ -229,7 +236,11 @@ export interface ActivityItemView {
 
 }
 
-export function toActivityItemView(execution: CanonicalExecution, isHumanCorrected: boolean): ActivityItemView {
+export function toActivityItemView(
+  execution: CanonicalExecution,
+  workTitle: string | null,
+  isHumanCorrected: boolean
+): ActivityItemView {
 
   return {
     executionId: execution.id,
@@ -241,8 +252,92 @@ export function toActivityItemView(execution: CanonicalExecution, isHumanCorrect
     permissionEvaluation: toCanonicalPermissionResultFromExecutionStatus(execution.permissionStatus),
     executionStatus: execution.status,
     workId: execution.workId,
+    workTitle,
     correlationStatus: toCanonicalExecutionCorrelationStatus(execution.correlationStatus),
     isHumanCorrected,
+  };
+
+}
+
+// =========================
+// Activity filters (SOR-23 OBS-UX-P1 Priority 4/5)
+// =========================
+//
+// 絶対条件(SOR-23指示「Do not build a large query framework just for
+// completeness」): 新しいAPI/queryは一切追加しない。既にActivity画面が
+// 読み込み済みのActivityItemView[]に対する、pureなclient-side filterと
+// distinct値の抽出だけ——「No business logic in React」の実践として、
+// filter適用ロジック自体をcomponent(RunsSection/ActivityFilters)へ
+// 書かず、この既存leaf fileへ置く(他のtoXView()関数と同じ「判定は
+// ここに集約する」規約)。Multi-dimensional traceability(SOR-23
+// Priority 5: 同じExecutionをWork/Agent/SaaS/Principalから追える)は、
+// 別のledgerを作らず、この1つのfilter機構で満たす。
+export interface ActivityItemFilters {
+
+  agentLabel?: string;
+
+  principalLabel?: string;
+
+  providerLabel?: string;
+
+  permissionEvaluation?: CanonicalPermissionResult;
+
+  executionStatus?: ExecutionStatus;
+
+  correlationStatus?: CanonicalCorrelationResult;
+
+  // ネイティブ<input type="date">と同じ"YYYY-MM-DD"形式(呼び出し元は
+  // 値をそのまま渡すだけでよい、ISO変換はこの関数の中で行う)。
+  observedFrom?: string;
+
+  observedTo?: string;
+
+}
+
+export function filterActivityItems(
+  items: readonly ActivityItemView[],
+  filters: ActivityItemFilters
+): ActivityItemView[] {
+
+  const fromIso = filters.observedFrom ? `${filters.observedFrom}T00:00:00.000Z` : null;
+  const toIso = filters.observedTo ? `${filters.observedTo}T23:59:59.999Z` : null;
+
+  return items.filter((item) => {
+
+    if (filters.agentLabel && item.agentLabel !== filters.agentLabel) return false;
+    if (filters.principalLabel && item.principalLabel !== filters.principalLabel) return false;
+    if (filters.providerLabel && item.targetSystem.label !== filters.providerLabel) return false;
+    if (filters.permissionEvaluation && item.permissionEvaluation !== filters.permissionEvaluation) return false;
+    if (filters.executionStatus && item.executionStatus !== filters.executionStatus) return false;
+    if (filters.correlationStatus && item.correlationStatus !== filters.correlationStatus) return false;
+    if (fromIso && item.observedAt < fromIso) return false;
+    if (toIso && item.observedAt > toIso) return false;
+
+    return true;
+
+  });
+
+}
+
+export interface ActivityFilterOptions {
+
+  agentLabels: string[];
+
+  principalLabels: string[];
+
+  providerLabels: string[];
+
+}
+
+// SOR-23 Priority 4: filterの選択肢は既に読み込み済みのActivityItemView[]
+// から導出する(推測・hardcodeしない——実際に観測されたAgent/Principal/
+// SaaSだけが選択肢に現れる)。
+export function distinctActivityFilterOptions(items: readonly ActivityItemView[]): ActivityFilterOptions {
+
+  return {
+    agentLabels: [...new Set(items.map((item) => item.agentLabel))].sort(),
+    principalLabels: [...new Set(items.map((item) => item.principalLabel))].sort(),
+    providerLabels: [...new Set(items.map((item) => item.targetSystem.label))].sort(),
   };
 
 }
@@ -344,6 +439,25 @@ export interface WorkTimelineItemView {
 
   executionStatus: ExecutionStatus;
 
+  // SOR-23 (OBS-UX-P1 Priority 2 "why was this assigned to this Work"):
+  // every Execution in a Work Timeline is, by construction, CORRELATED
+  // (listExecutionsForWork() only returns work_id-matched rows) — this
+  // exposes the LATEST correlation decision's method/confidence/reason,
+  // derived from the same append-only history SOR-77 already reads
+  // (listLatestCorrelationDecisionsForExecutions()). null only when no
+  // decision has ever been recorded (should not normally happen for a
+  // CORRELATED row, but never fabricated if it does).
+  correlationMethodLabel: string | null;
+
+  correlationConfidence: number | null;
+
+  correlationReasonCode: string | null;
+
+  // SOR-77と同じ意味・同じ導出元(isHumanCorrected===trueの場合のみ
+  // Work DetailからもReview/History導線を出す——「すべてのCORRELATED行に
+  // 無条件で出す必要はない」という既存のSOR-77絶対条件をここでも維持する)。
+  isHumanCorrected: boolean;
+
 }
 
 // 絶対条件(SOR-53指示「別のTimeline ledgerを作らない」の帰結、SOR-54
@@ -351,7 +465,25 @@ export interface WorkTimelineItemView {
 // (既存、SOR-50)で絞り込んだExecution配列をそのまま渡す前提——この
 // 関数自身はfilteringを一切行わない(Canonical Execution Ledgerを
 // filter by workIdした結果をderived viewへ変換するだけ)。
-export function toWorkTimelineItemView(execution: CanonicalExecution): WorkTimelineItemView {
+// SOR-23: the latest correlation decision summary for one Execution,
+// exactly the shape listLatestCorrelationDecisionsForExecutions() produces
+// per id — kept as a small standalone type so this leaf file never imports
+// the heavy correlation store module as a value (same bundling concern as
+// the rest of this file's header comment).
+export interface WorkTimelineCorrelationSummary {
+
+  method: WorkCorrelationMethod;
+
+  confidence: number | null;
+
+  reasonCode: string;
+
+}
+
+export function toWorkTimelineItemView(
+  execution: CanonicalExecution,
+  correlation: WorkTimelineCorrelationSummary | undefined
+): WorkTimelineItemView {
 
   return {
     executionId: execution.id,
@@ -362,6 +494,10 @@ export function toWorkTimelineItemView(execution: CanonicalExecution): WorkTimel
     action: actionLabel(execution.operation, execution.provider, execution.targetProvider),
     permissionEvaluation: toCanonicalPermissionResultFromExecutionStatus(execution.permissionStatus),
     executionStatus: execution.status,
+    correlationMethodLabel: correlation ? workCorrelationMethodLabel(correlation.method) : null,
+    correlationConfidence: correlation?.confidence ?? null,
+    correlationReasonCode: correlation?.reasonCode ?? null,
+    isHumanCorrected: correlation?.method === "manual_override",
   };
 
 }
@@ -641,7 +777,7 @@ export function toCorrelationReviewView(
 // 一切受け取らない引数shapeになっていることが一次の保証)。
 export const ACTIVITY_ITEM_VIEW_KEYS: readonly (keyof ActivityItemView)[] = [
   "executionId", "observedAt", "principalLabel", "agentLabel", "targetSystem",
-  "action", "permissionEvaluation", "executionStatus", "workId", "correlationStatus",
+  "action", "permissionEvaluation", "executionStatus", "workId", "workTitle", "correlationStatus",
   "isHumanCorrected",
 ];
 
@@ -657,6 +793,12 @@ export const SUGGESTED_WORK_CANDIDATE_VIEW_KEYS: readonly (keyof SuggestedWorkCa
 export const CORRELATION_HISTORY_ENTRY_VIEW_KEYS: readonly (keyof CorrelationHistoryEntryView)[] = [
   "methodLabel", "canonicalStatus", "workId", "confidence", "reasonCode",
   "changedByActorKind", "changedByActorId", "correlatedAt",
+];
+
+export const WORK_TIMELINE_ITEM_VIEW_KEYS: readonly (keyof WorkTimelineItemView)[] = [
+  "executionId", "observedAt", "principalLabel", "agentLabel", "targetSystem",
+  "action", "permissionEvaluation", "executionStatus",
+  "correlationMethodLabel", "correlationConfidence", "correlationReasonCode", "isHumanCorrected",
 ];
 
 export type { AttentionReason, CanonicalPermissionResult, CanonicalCorrelationResult };
