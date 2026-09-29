@@ -150,11 +150,43 @@ export type WorkCompletionCondition =
   | "result_synthesized"
   | "result_delivered";
 
+// SOR-75 (WORK-ENTITY-P0): this already *is* TACT's minimum provider-neutral
+// "WorkEntity" — a typed, tenant-scoped (via the parent Work.userId, never
+// duplicated onto the entry itself — one source of truth for tenant) link
+// from a Work to an external business object. core/tact-execution/
+// correlation/stages/structural.ts's runNotionStructuralCorrelation() already
+// turns Execution resource metadata into Work candidates through it via
+// listWorksForNotionResource()'s jsonb containment query — this file does not
+// duplicate that correlator. The fields below only add the provenance/
+// confidence bookkeeping SOR-75 asked for; they are purely additive on a
+// jsonb column, so no migration is needed and no historical row is affected.
 export interface WorkEvidenceReference {
   category: "conversation" | "organizational" | "communication";
   sourceType: "slack" | "notion" | "gmail";
   sourceRef: string;
   operation?: "search" | "read_page" | "search_messages";
+
+  // The one relation this mechanism actually expresses today. Not a
+  // taxonomy to extend speculatively (SOR-75: no semantic ranking).
+  relationType?: "evidence";
+
+  // How this link was established. "context_resolution" is the only
+  // producer that exists (core/tact-work/delegatedIntent.ts); absent on
+  // pre-SOR-75 rows, which is honest (they predate this field) rather than
+  // guessed.
+  source?: "context_resolution" | "manual" | null;
+
+  // Never fabricated: absent/null means "not scored," never "0 confidence."
+  // No producer sets this yet — reserved for a future scored candidate path.
+  confidence?: number | null;
+
+  createdAt?: string;
+
+  // Reserved for future entity-resolution/dedup across sourceRefs that turn
+  // out to be the same external object. No producer or consumer exists yet
+  // (same "reserve the column, build nothing behind it" pattern already used
+  // by Work.organizationId above).
+  canonicalEntityId?: string | null;
 }
 
 export interface ResolvedWorkIntent {
