@@ -37,6 +37,7 @@ import type {
   ExecutionStatus,
 } from "../tact-execution/types";
 import type { Work, WorkStatus } from "../tact-work/types";
+import { GITHUB_ISSUE_ADAPTER_VERSION } from "../tact-execution/adapters/github/normalizeGithubIssueExecution";
 
 // =========================
 // Shared label helpers
@@ -75,14 +76,38 @@ export interface TargetSystemLabel {
   subLabel: string | null;
 }
 
+// SOR-44 residual fix Part 1: providerが実体を表せない場合
+// (ExecutionProviderに正式値が無いprovider、現状はGitHub一つだけ、
+// provider="custom")の人間向け表示名override。persisted canonical
+// provider値("custom")は一切変更しない——ここはpresentation-onlyの
+// read-model層(core/tact-runs-view、Permission/Correlation/Attention
+// Coreではない)。
+//
+// 絶対条件: 「custom providerを全部GitHub扱い」しない。adapterVersion
+// (既にCanonicalExecutionへ確実に付与されている既存evidence、
+// GITHUB_ISSUE_ADAPTER_VERSION定数そのもの)がGitHub adapterの
+// exact文字列と一致した場合にのみoverrideする。将来別のcustom
+// providerが追加されても、adapterVersionが一致しない限り既存の
+// "Custom" fallbackのまま。
+const CUSTOM_PROVIDER_DISPLAY_OVERRIDES: Readonly<Record<string, string>> = {
+  [GITHUB_ISSUE_ADAPTER_VERSION]: "GitHub",
+};
+
 // 絶対条件(SOR-54指示「Provider / targetSystem」): 内部provider="mcp"
 // だけを主表示にしない。ユーザーには実際の対象system(targetProvider、
 // 無ければprovider自体)を主表示にし、MCP経由であることは補助的な
 // sub-labelとしてのみ出す。
-export function targetSystemLabel(provider: ExecutionProvider, targetProvider: ExecutionProvider | null): TargetSystemLabel {
+export function targetSystemLabel(
+  provider: ExecutionProvider,
+  targetProvider: ExecutionProvider | null,
+  adapterVersion?: string | null
+): TargetSystemLabel {
 
   const system = targetProvider ?? provider;
-  const label = PROVIDER_LABELS[system] ?? system;
+
+  const override = system === "custom" && adapterVersion ? CUSTOM_PROVIDER_DISPLAY_OVERRIDES[adapterVersion] : undefined;
+
+  const label = override ?? PROVIDER_LABELS[system] ?? system;
   const subLabel = provider === "mcp" && targetProvider && targetProvider !== "mcp" ? "via MCP" : null;
 
   return { label, subLabel };
@@ -248,7 +273,7 @@ export function toActivityItemView(
     observedAt: execution.observedAt,
     principalLabel: principalLabel(execution.actorId),
     agentLabel: agentLabel(execution.agentId),
-    targetSystem: targetSystemLabel(execution.provider, execution.targetProvider),
+    targetSystem: targetSystemLabel(execution.provider, execution.targetProvider, execution.adapterVersion),
     action: actionLabel(execution.operation, execution.provider, execution.targetProvider),
     permissionEvaluation: toCanonicalPermissionResultFromExecutionStatus(execution.permissionStatus),
     executionStatus: execution.status,
@@ -402,7 +427,7 @@ export function toAttentionCardView(item: AttentionItemView): AttentionCardView 
     createdAt: item.createdAt,
     principalLabel: principalLabel(item.actor.id),
     agentLabel: agentLabel(item.agentId),
-    targetSystem: targetSystemLabel(item.provider, item.targetProvider),
+    targetSystem: targetSystemLabel(item.provider, item.targetProvider, item.adapterVersion),
     action: actionLabel(item.action.operation, item.provider, item.targetProvider),
     attentionReason: item.reason,
     attentionReasonLabel: attentionReasonLabel(item.reason),
@@ -501,7 +526,7 @@ export function toWorkTimelineItemView(
     observedAt: execution.observedAt,
     principalLabel: principalLabel(execution.actorId),
     agentLabel: agentLabel(execution.agentId),
-    targetSystem: targetSystemLabel(execution.provider, execution.targetProvider),
+    targetSystem: targetSystemLabel(execution.provider, execution.targetProvider, execution.adapterVersion),
     action: actionLabel(execution.operation, execution.provider, execution.targetProvider),
     permissionEvaluation: toCanonicalPermissionResultFromExecutionStatus(execution.permissionStatus),
     executionStatus: execution.status,
