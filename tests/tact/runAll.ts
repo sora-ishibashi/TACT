@@ -237,6 +237,8 @@ import { run as runExecutionGatewayObserveCanonicalExecution } from "./execution
 import { run as runExecutionAdaptersSlackObservation } from "./execution/adapters/slackObservation.test";
 import { run as runExecutionAdaptersGithubIssueAdapter } from "./execution/adapters/githubIssueAdapter.test";
 import { run as runExecutionAdaptersSlackWebApiAdapter } from "./execution/adapters/slackWebApiAdapter.test";
+import { run as runExecutionRegistryStore } from "./execution/registry/store.test";
+import { run as runExecutionRegistryMigrationContract } from "./execution/registry/migrationContract.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -449,6 +451,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/adapters/slackObservation", run: runExecutionAdaptersSlackObservation },
   { name: "execution/adapters/githubIssueAdapter", run: runExecutionAdaptersGithubIssueAdapter },
   { name: "execution/adapters/slackWebApiAdapter", run: runExecutionAdaptersSlackWebApiAdapter },
+  { name: "execution/registry/store", run: runExecutionRegistryStore },
+  { name: "execution/registry/migrationContract", run: runExecutionRegistryMigrationContract },
 ];
 
 async function main() {
