@@ -25,6 +25,32 @@ export {
   observeSlackAppMentionExecution,
 } from "./adapters/slack/observeSlackAppMentionExecution";
 export {
+  normalizeSlackWebApiInvocationToExecution,
+  SLACK_WEB_API_ADAPTER_VERSION,
+  type SlackWebApiCanonicalOperation,
+  type SlackWebApiSafeErrorCode,
+  type SlackWebApiInvocationObservation,
+} from "./adapters/slack/normalizeSlackWebApiCallExecution";
+export {
+  observeSlackWebApiCallExecution,
+  executeWithSlackWebApiObservation,
+  type ObserveSlackWebApiCallExecutionDeps,
+  type SlackWebApiToolInvocationContext,
+} from "./adapters/slack/observeSlackWebApiCallExecution";
+export {
+  normalizeGithubIssueInvocationToExecution,
+  GITHUB_ISSUE_ADAPTER_VERSION,
+  type GithubIssueCanonicalOperation,
+  type GithubIssueSafeErrorCode,
+  type GithubIssueInvocationObservation,
+} from "./adapters/github/normalizeGithubIssueExecution";
+export {
+  observeGithubIssueExecution,
+  executeWithGithubIssueObservation,
+  type ObserveGithubIssueExecutionDeps,
+  type GithubIssueToolInvocationContext,
+} from "./adapters/github/observeGithubIssueExecution";
+export {
   normalizeNotionMcpInvocationToExecution,
   NOTION_MCP_ADAPTER_VERSION,
   type NotionMcpCanonicalOperation,

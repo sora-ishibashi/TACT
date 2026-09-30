@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx tests/tact/runAll.ts"
+    "test": "tsx tests/tact/runAll.ts",
+    "experiments:sor130-reality-test:notion": "tsx experiments/sor130-reality-test/notionRealityTest.ts",
+    "experiments:sor130-reality-test:github": "tsx experiments/sor130-reality-test/githubRealityTest.ts",
+    "experiments:sor130-reality-test:slack": "tsx experiments/sor130-reality-test/slackRealityTest.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
