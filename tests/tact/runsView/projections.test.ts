@@ -102,6 +102,7 @@ function baseAttentionItem(overrides: Partial<AttentionItemView> = {}): Attentio
     agentId: "Claude Test Agent",
     provider: "mcp",
     targetProvider: "notion",
+    adapterVersion: "notion-mcp-v1",
     action: {
       actionCategory: "update",
       operation: "notion_update_page",
@@ -235,6 +236,76 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     targetSystemLabel("mcp", "mcp").subLabel === null
   ));
 
+  // =========================
+  // SOR-44 residual fix Part 1: custom provider display override
+  // (persisted provider="custom"は変えず、presentation-onlyでGitHubを
+  // 正しく表示する。既知のadapterVersion evidenceに厳密一致した場合
+  // だけ上書きし、未知のcustom providerには波及させない)
+  // =========================
+
+  results.push(check(
+    "[SOR-44 P1#1] provider=custom + GitHub adapterVersion(github-issue-v1) -> label=\"GitHub\"",
+    targetSystemLabel("custom", "custom", "github-issue-v1").label === "GitHub"
+  ));
+
+  results.push(check(
+    "[SOR-44 P1#1] provider=custom + 未知のadapterVersion -> 既存fallback\"Custom\"のまま(勝手にGitHub扱いしない)",
+    targetSystemLabel("custom", "custom", "some-other-custom-adapter-v1").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P1#1] provider=custom + adapterVersion省略 -> 既存fallback\"Custom\"のまま",
+    targetSystemLabel("custom", "custom").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P1#1] provider=notion(custom以外) -> adapterVersionを渡しても表示は変わらない(\"Notion\"のまま)",
+    targetSystemLabel("notion", null, "github-issue-v1").label === "Notion"
+  ));
+
+  results.push(check(
+    "[SOR-44 P1#1] provider=slack(custom以外) -> 既存表示\"Slack\"を維持",
+    targetSystemLabel("slack", null).label === "Slack"
+  ));
+
+  // =========================
+  // PR #18 review (P2): CUSTOM_PROVIDER_DISPLAY_OVERRIDESの継承property
+  // 混入防止(plain object bracket-access -> Map.get()へ修正)。
+  // "constructor"/"toString"/"__proto__"のような、Object.prototypeが
+  // 実際に持つproperty名がadapterVersionとして渡されても、既存の
+  // "Custom" fallback以外の値を返してはならない。
+  // =========================
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion=\"github-issue-v1\"(正規のGitHub evidence) -> \"GitHub\"",
+    targetSystemLabel("custom", "custom", "github-issue-v1").label === "GitHub"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion=\"constructor\"(Object.prototype継承property名) -> \"Custom\"(継承propertyが漏れない)",
+    targetSystemLabel("custom", "custom", "constructor").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion=\"toString\"(Object.prototype継承property名) -> \"Custom\"",
+    targetSystemLabel("custom", "custom", "toString").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion=\"__proto__\"(prototype pollution境界値) -> \"Custom\"",
+    targetSystemLabel("custom", "custom", "__proto__").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] 未知のadapterVersion -> \"Custom\"",
+    targetSystemLabel("custom", "custom", "some-unknown-adapter-v1").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion省略 -> \"Custom\"",
+    targetSystemLabel("custom", "custom").label === "Custom"
+  ));
+
   results.push(check(
     "[Required test] actionLabel: 対象system接頭辞を取り除き大文字化する(notion_update_page -> UPDATE_PAGE)",
     actionLabel("notion_update_page", "mcp", "notion") === "UPDATE_PAGE"
@@ -305,6 +376,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   results.push(check(
     "[Required test] Attention workId=W-001(後からWork Correlationが確定した場合) -> そのままworkIdを反映する",
     toAttentionCardView(baseAttentionItem({ workId: "W-001" })).workId === "W-001"
+  ));
+
+  results.push(check(
+    "[SOR-44 P1#1] AttentionCardView: GitHub由来(provider=custom, adapterVersion=github-issue-v1) -> targetSystem.label=\"GitHub\"",
+    toAttentionCardView(baseAttentionItem({
+      provider: "custom",
+      targetProvider: "custom",
+      adapterVersion: "github-issue-v1",
+    })).targetSystem.label === "GitHub"
   ));
 
   results.push(check(

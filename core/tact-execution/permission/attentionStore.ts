@@ -370,6 +370,12 @@ export interface AttentionItemView {
 
   targetProvider: ExecutionProvider | null;
 
+  // SOR-44 residual fix Part 1: providerが実体を表せない場合
+  // (現状provider="custom"のGitHub)のUI表示name override判定に使う
+  // 既存evidence。新しいsemanticsは持たない、既存execution.adapterVersion
+  // のそのままの伝播。
+  adapterVersion: string;
+
   action: {
     actionCategory: ExecutionActionCategory;
     operation: string;
@@ -422,6 +428,7 @@ function assembleAttentionItemView(
     agentId: execution.agentId,
     provider: execution.provider,
     targetProvider: execution.targetProvider,
+    adapterVersion: execution.adapterVersion,
     action: {
       actionCategory: execution.actionCategory,
       operation: execution.operation,
