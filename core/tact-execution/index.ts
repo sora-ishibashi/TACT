@@ -38,3 +38,4 @@ export {
 export * from "./permission";
 export * from "./correlation";
 export * from "./telemetry";
+export * from "./outcome";

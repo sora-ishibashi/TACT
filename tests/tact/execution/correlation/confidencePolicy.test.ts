@@ -65,6 +65,8 @@ function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalEx
     permissionStatus: "pending",
     permissionReasonCode: null,
     permissionEvaluatedAt: null,
+    outcomeStatus: "unknown",
+    outcomeKind: null,
     providerOccurredAt: null,
     observedAt: "2026-09-20T12:00:00.000Z",
     persistedAt: "2026-09-20T12:00:00.000Z",

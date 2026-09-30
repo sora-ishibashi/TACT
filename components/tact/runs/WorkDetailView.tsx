@@ -122,6 +122,7 @@ export default function WorkDetailView({
                 <th scope="col" className="px-4 py-2.5">Action</th>
                 <th scope="col" className="px-4 py-2.5">Permission</th>
                 <th scope="col" className="px-4 py-2.5">Result</th>
+                <th scope="col" className="px-4 py-2.5">Outcome</th>
                 <th scope="col" className="px-4 py-2.5">Why this Work</th>
               </tr>
             </thead>
@@ -143,6 +144,19 @@ export default function WorkDetailView({
                   <td className="whitespace-nowrap px-4 py-2.5 font-medium">{item.action}</td>
                   <td className="px-4 py-2.5"><PermissionBadge result={item.permissionEvaluation} /></td>
                   <td className="px-4 py-2.5"><ResultBadge status={item.executionStatus} /></td>
+                  <td className="px-4 py-2.5">
+                    {/* SOR-119: Execution status(技術的成否、左のResult列)とは
+                        別に、「結局何が変わったか」を表示する。
+                        outcomeKind=nullはoutcomeStatus="unknown"を意味し、
+                        これは正常な状態(絶対条件)——エラー表示ではなく、
+                        Disabled文字色(#8A8A8A、docs/ui-design-rules.md)で
+                        中立的に示す。値の再計算・推測はここでも行わない。 */}
+                    {item.outcomeKind ? (
+                      <span className="text-[12px] text-[#112278]">{item.outcomeKind}</span>
+                    ) : (
+                      <span className="text-[12px] text-[#8A8A8A]">Unknown</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2">
                       <div className="flex flex-col">

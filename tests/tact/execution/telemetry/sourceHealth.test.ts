@@ -40,6 +40,8 @@ function execution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecut
     permissionStatus: "allowed",
     permissionReasonCode: null,
     permissionEvaluatedAt: null,
+    outcomeStatus: "unknown",
+    outcomeKind: null,
     providerOccurredAt: null,
     observedAt: "2026-09-25T00:00:00.000Z",
     persistedAt: "2026-09-25T00:00:00.500Z",

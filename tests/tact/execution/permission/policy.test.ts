@@ -47,6 +47,8 @@ function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalEx
     permissionStatus: "unknown",
     permissionReasonCode: null,
     permissionEvaluatedAt: null,
+    outcomeStatus: "unknown",
+    outcomeKind: null,
     providerOccurredAt: null,
     observedAt: "2026-09-20T00:00:00.000Z",
     persistedAt: "2026-09-20T00:00:00.000Z",

@@ -230,6 +230,9 @@ import { run as runExecutionStore } from "./execution/store.test";
 import { run as runExecutionCorrelationManualOverride } from "./execution/correlation/manualOverride.test";
 import { run as runRunsViewActivityFilters } from "./runsView/activityFilters.test";
 import { run as runExecutionV1ObservationContractMigrationContract } from "./execution/v1ObservationContractMigrationContract.test";
+import { run as runExecutionOutcomeValidation } from "./execution/outcome/validation.test";
+import { run as runExecutionOutcomeStore } from "./execution/outcome/store.test";
+import { run as runExecutionOutcomeMigrationContract } from "./execution/outcome/migrationContract.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -435,6 +438,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/correlation/manualOverride", run: runExecutionCorrelationManualOverride },
   { name: "runsView/activityFilters", run: runRunsViewActivityFilters },
   { name: "execution/v1ObservationContractMigrationContract", run: runExecutionV1ObservationContractMigrationContract },
+  { name: "execution/outcome/validation", run: runExecutionOutcomeValidation },
+  { name: "execution/outcome/store", run: runExecutionOutcomeStore },
+  { name: "execution/outcome/migrationContract", run: runExecutionOutcomeMigrationContract },
 ];
 
 async function main() {

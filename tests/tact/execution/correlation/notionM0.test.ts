@@ -51,6 +51,8 @@ function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): Canon
     permissionStatus: "pending",
     permissionReasonCode: null,
     permissionEvaluatedAt: null,
+    outcomeStatus: "unknown",
+    outcomeKind: null,
     providerOccurredAt: null,
     observedAt: "2026-09-22T00:00:00.000Z",
     persistedAt: "2026-09-22T00:00:00.000Z",
