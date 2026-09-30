@@ -27,6 +27,18 @@ export type AttributionConfidence = "none" | "low" | "medium" | "high";
 
 export const ATTRIBUTION_CONFIDENCES: readonly AttributionConfidence[] = ["none", "low", "medium", "high"];
 
+// SOR-131: Runs v1 observation priority(docs/architecture/
+// runs-v1-observation-first-connection-strategy.md §4)。優先順位の
+// 上下は「正当性の階層」ではなく「新しい観測経路を作る際にどこまで
+// 到達を目指すか」の指針——現時点でinlineを使うadapterは無い
+// (ExecutionObservationModeの既存コメント参照)。Browser/Desktop
+// observationはv1では扱わないためこの配列に含まれない。
+export const OBSERVATION_MODE_PRIORITY_V1: readonly ExecutionObservationMode[] = [
+  "inline",
+  "instrumented",
+  "reconciled",
+];
+
 // SOR-130絶対条件(Work IDについて): legitimateなexplicit carrierが
 // 無い限り'none'。'explicit_claim'は呼び出し元(adapter/MCPホスト等)
 // がworkIdを明示的に主張できる経路、'reconciled_correlation'は
