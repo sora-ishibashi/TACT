@@ -233,6 +233,8 @@ import { run as runExecutionV1ObservationContractMigrationContract } from "./exe
 import { run as runExecutionOutcomeValidation } from "./execution/outcome/validation.test";
 import { run as runExecutionOutcomeStore } from "./execution/outcome/store.test";
 import { run as runExecutionOutcomeMigrationContract } from "./execution/outcome/migrationContract.test";
+import { run as runExecutionGatewayObserveCanonicalExecution } from "./execution/gateway/observeCanonicalExecution.test";
+import { run as runExecutionAdaptersSlackObservation } from "./execution/adapters/slackObservation.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -441,6 +443,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/outcome/validation", run: runExecutionOutcomeValidation },
   { name: "execution/outcome/store", run: runExecutionOutcomeStore },
   { name: "execution/outcome/migrationContract", run: runExecutionOutcomeMigrationContract },
+  { name: "execution/gateway/observeCanonicalExecution", run: runExecutionGatewayObserveCanonicalExecution },
+  { name: "execution/adapters/slackObservation", run: runExecutionAdaptersSlackObservation },
 ];
 
 async function main() {

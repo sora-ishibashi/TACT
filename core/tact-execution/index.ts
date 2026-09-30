@@ -22,6 +22,9 @@ export {
   SLACK_APP_MENTION_ADAPTER_VERSION,
 } from "./adapters/slack/normalizeSlackExecutionEvent";
 export {
+  observeSlackAppMentionExecution,
+} from "./adapters/slack/observeSlackAppMentionExecution";
+export {
   normalizeNotionMcpInvocationToExecution,
   NOTION_MCP_ADAPTER_VERSION,
   type NotionMcpCanonicalOperation,
@@ -39,3 +42,4 @@ export * from "./permission";
 export * from "./correlation";
 export * from "./telemetry";
 export * from "./outcome";
+export * from "./gateway";
