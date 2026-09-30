@@ -90,6 +90,8 @@ function makeRowFixture(overrides: Partial<ExecutionRow> = {}): ExecutionRow {
     permission_status: "unknown",
     permission_reason_code: null,
     permission_evaluated_at: null,
+    outcome_status: "unknown",
+    outcome_kind: null,
     provider_occurred_at: null,
     observed_at: "2026-09-20T00:00:01.000Z",
     persisted_at: "2026-09-20T00:00:02.000Z",

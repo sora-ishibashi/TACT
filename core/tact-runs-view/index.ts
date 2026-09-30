@@ -31,6 +31,7 @@ import type { WorkCorrelationMethod, WorkCorrelationDecision } from "../tact-exe
 import type { ExecutionCorrelationView, ExecutionCorrectionContext } from "../tact-execution/correlation/store";
 import type {
   CanonicalExecution,
+  ExecutionOutcomeStatus,
   ExecutionPermissionStatus,
   ExecutionProvider,
   ExecutionStatus,
@@ -458,6 +459,16 @@ export interface WorkTimelineItemView {
   // 無条件で出す必要はない」という既存のSOR-77絶対条件をここでも維持する)。
   isHumanCorrected: boolean;
 
+  // SOR-119: Execution.status(技術的成否)とは別の、「現実・業務・
+  // 対象の状態がどう変わったか」の要約。outcomeKind=nullは
+  // outcomeStatus="unknown"を意味し、これは正常な状態である(絶対条件、
+  // UNKNOWNは正常な状態)——UIはnullを常に「Outcome unknown」として
+  // 表示すればよく、エラー状態として扱わない。値の再計算・推測は
+  // 一切行わない(execution.outcomeKindをそのまま渡すだけ)。
+  outcomeStatus: ExecutionOutcomeStatus;
+
+  outcomeKind: string | null;
+
 }
 
 // 絶対条件(SOR-53指示「別のTimeline ledgerを作らない」の帰結、SOR-54
@@ -498,6 +509,8 @@ export function toWorkTimelineItemView(
     correlationConfidence: correlation?.confidence ?? null,
     correlationReasonCode: correlation?.reasonCode ?? null,
     isHumanCorrected: correlation?.method === "manual_override",
+    outcomeStatus: execution.outcomeStatus,
+    outcomeKind: execution.outcomeKind,
   };
 
 }
@@ -799,6 +812,7 @@ export const WORK_TIMELINE_ITEM_VIEW_KEYS: readonly (keyof WorkTimelineItemView)
   "executionId", "observedAt", "principalLabel", "agentLabel", "targetSystem",
   "action", "permissionEvaluation", "executionStatus",
   "correlationMethodLabel", "correlationConfidence", "correlationReasonCode", "isHumanCorrected",
+  "outcomeStatus", "outcomeKind",
 ];
 
 export type { AttentionReason, CanonicalPermissionResult, CanonicalCorrelationResult };

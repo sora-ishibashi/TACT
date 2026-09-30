@@ -130,6 +130,17 @@ export const EXECUTION_CORRELATION_STATUSES: readonly ExecutionCorrelationStatus
   "unresolved",
 ];
 
+// SOR-119: Execution.status(技術的に処理が成功/失敗したか)とは絶対に
+// 混同しない別概念——「現実・業務・対象の状態がどう変わったか」の要約
+// 状態。source of truth(履歴)はcore/tact-execution/outcome/store.tsの
+// tact_execution_outcomes(tact_execution_work_correlationsと同じ
+// 「summary列+append-only履歴」設計)。"unknown"は正常な状態であり、
+// 「まだ誰も確認していない」場合と「確認を試みたが判断できなかった」
+// 場合の両方を表す(推測でOutcomeを確定しない、絶対条件)。
+export type ExecutionOutcomeStatus = "unknown" | "asserted";
+
+export const EXECUTION_OUTCOME_STATUSES: readonly ExecutionOutcomeStatus[] = ["unknown", "asserted"];
+
 // SOR-45: sourceType(webhook/poll/manual_report/sdk_callback/runtime_dispatch)
 // とは別の軸。sourceTypeは「どういうtransportでこのeventが届いたか」を
 // 表すのに対し、observationModeは「TACTの観測が、実際のprovider側action
@@ -268,6 +279,14 @@ export interface CanonicalExecution {
   permissionReasonCode: string | null;
 
   permissionEvaluatedAt: string | null;
+
+  // ---- Outcome ----
+  // SOR-119: source of truth(履歴)はcore/tact-execution/outcome/store.ts
+  // のtact_execution_outcomes。ここは「現在の最新Outcome」を表す要約
+  // (work_id/correlationStatusと同じ位置づけ)。
+  outcomeStatus: ExecutionOutcomeStatus;
+
+  outcomeKind: string | null;
 
   // ---- Time ----
 

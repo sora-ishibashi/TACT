@@ -73,6 +73,8 @@ function baseExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalEx
     permissionStatus: "allowed",
     permissionReasonCode: null,
     permissionEvaluatedAt: null,
+    outcomeStatus: "unknown",
+    outcomeKind: null,
     providerOccurredAt: null,
     observedAt: "2026-09-24T00:00:00.000Z",
     persistedAt: "2026-09-24T00:00:00.000Z",
@@ -373,6 +375,22 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       const view = toWorkTimelineItemView(baseExecution({ id: "exec-12" }), undefined);
       return view.correlationMethodLabel === null && view.correlationConfidence === null &&
         view.correlationReasonCode === null && view.isHumanCorrected === false;
+    })()
+  ));
+
+  results.push(check(
+    "[SOR-119] toWorkTimelineItemView passes execution.outcomeStatus/outcomeKind through unchanged, never recomputing or guessing Outcome from execution status",
+    (() => {
+      const asserted = toWorkTimelineItemView(
+        baseExecution({ id: "exec-outcome-1", status: "succeeded", outcomeStatus: "asserted", outcomeKind: "page_updated" }),
+        undefined
+      );
+      const unknown = toWorkTimelineItemView(
+        baseExecution({ id: "exec-outcome-2", status: "succeeded", outcomeStatus: "unknown", outcomeKind: null }),
+        undefined
+      );
+      return asserted.outcomeStatus === "asserted" && asserted.outcomeKind === "page_updated" &&
+        unknown.outcomeStatus === "unknown" && unknown.outcomeKind === null;
     })()
   ));
 

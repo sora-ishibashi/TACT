@@ -33,6 +33,7 @@ import type {
   ExecutionActionCategory,
   ExecutionCorrelationStatus,
   ExecutionObservationMode,
+  ExecutionOutcomeStatus,
   ExecutionPermissionStatus,
   ExecutionProvider,
   ExecutionSourceType,
@@ -188,6 +189,10 @@ export interface ExecutionRow {
 
   permission_evaluated_at: string | null;
 
+  outcome_status: ExecutionOutcomeStatus;
+
+  outcome_kind: string | null;
+
   provider_occurred_at: string | null;
 
   observed_at: string;
@@ -204,7 +209,7 @@ export interface ExecutionRow {
 // によるcolumn型推論を壊してしまう(GenericStringErrorへ falls back
 // する)ため、必ず1つの文字列literalのまま保つ。
 const EXECUTION_COLUMNS =
-  "id, schema_version, user_id, organization_id, workspace_id, work_id, correlation_status, connection_id, actor_kind, actor_id, agent_id, on_behalf_of_actor_kind, on_behalf_of_actor_id, provider, source_type, external_event_id, adapter_version, source_metadata, raw_payload_ref, observation_mode, pre_execution_visible, action_category, operation, resource_type, resource_identifier, target_provider, status, error_code, error_message, permission_status, permission_reason_code, permission_evaluated_at, provider_occurred_at, observed_at, persisted_at, updated_at";
+  "id, schema_version, user_id, organization_id, workspace_id, work_id, correlation_status, connection_id, actor_kind, actor_id, agent_id, on_behalf_of_actor_kind, on_behalf_of_actor_id, provider, source_type, external_event_id, adapter_version, source_metadata, raw_payload_ref, observation_mode, pre_execution_visible, action_category, operation, resource_type, resource_identifier, target_provider, status, error_code, error_message, permission_status, permission_reason_code, permission_evaluated_at, outcome_status, outcome_kind, provider_occurred_at, observed_at, persisted_at, updated_at";
 
 export function toCanonicalExecution(row: ExecutionRow): CanonicalExecution {
 
@@ -241,6 +246,8 @@ export function toCanonicalExecution(row: ExecutionRow): CanonicalExecution {
     permissionStatus: row.permission_status,
     permissionReasonCode: row.permission_reason_code,
     permissionEvaluatedAt: row.permission_evaluated_at,
+    outcomeStatus: row.outcome_status,
+    outcomeKind: row.outcome_kind,
     providerOccurredAt: row.provider_occurred_at,
     observedAt: row.observed_at,
     persistedAt: row.persisted_at,

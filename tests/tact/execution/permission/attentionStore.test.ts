@@ -87,6 +87,8 @@ function makeExecutionRowFixture(overrides: Partial<ExecutionRow> = {}): Executi
     permission_status: "approval_required",
     permission_reason_code: "notion_m0_update_page_approval_required",
     permission_evaluated_at: "2026-09-20T00:00:01.000Z",
+    outcome_status: "unknown",
+    outcome_kind: null,
     provider_occurred_at: null,
     observed_at: "2026-09-20T00:00:00.000Z",
     persisted_at: "2026-09-20T00:00:00.000Z",
