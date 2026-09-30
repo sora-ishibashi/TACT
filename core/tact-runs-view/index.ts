@@ -89,9 +89,17 @@ export interface TargetSystemLabel {
 // exact文字列と一致した場合にのみoverrideする。将来別のcustom
 // providerが追加されても、adapterVersionが一致しない限り既存の
 // "Custom" fallbackのまま。
-const CUSTOM_PROVIDER_DISPLAY_OVERRIDES: Readonly<Record<string, string>> = {
-  [GITHUB_ISSUE_ADAPTER_VERSION]: "GitHub",
-};
+//
+// PR #18レビュー指摘(P2)修正: plain object(Record<string,string>)を
+// bracket-accessでlookupすると、"constructor"/"toString"/"__proto__"等
+// のadapterVersion文字列に対してObject.prototypeの継承propertyが
+// 返ってしまう(意図しない真値、fake overrideになりうる)。
+// Map<string,string> + Map.get()は独自のprototype chainを持たず、
+// 継承propertyの混入が起こらないため、完全一致したキーだけを
+// 確実に返す。
+const CUSTOM_PROVIDER_DISPLAY_OVERRIDES: ReadonlyMap<string, string> = new Map([
+  [GITHUB_ISSUE_ADAPTER_VERSION, "GitHub"],
+]);
 
 // 絶対条件(SOR-54指示「Provider / targetSystem」): 内部provider="mcp"
 // だけを主表示にしない。ユーザーには実際の対象system(targetProvider、
@@ -105,7 +113,7 @@ export function targetSystemLabel(
 
   const system = targetProvider ?? provider;
 
-  const override = system === "custom" && adapterVersion ? CUSTOM_PROVIDER_DISPLAY_OVERRIDES[adapterVersion] : undefined;
+  const override = system === "custom" && adapterVersion ? CUSTOM_PROVIDER_DISPLAY_OVERRIDES.get(adapterVersion) : undefined;
 
   const label = override ?? PROVIDER_LABELS[system] ?? system;
   const subLabel = provider === "mcp" && targetProvider && targetProvider !== "mcp" ? "via MCP" : null;

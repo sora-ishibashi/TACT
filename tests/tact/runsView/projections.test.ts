@@ -268,6 +268,44 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     targetSystemLabel("slack", null).label === "Slack"
   ));
 
+  // =========================
+  // PR #18 review (P2): CUSTOM_PROVIDER_DISPLAY_OVERRIDESの継承property
+  // 混入防止(plain object bracket-access -> Map.get()へ修正)。
+  // "constructor"/"toString"/"__proto__"のような、Object.prototypeが
+  // 実際に持つproperty名がadapterVersionとして渡されても、既存の
+  // "Custom" fallback以外の値を返してはならない。
+  // =========================
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion=\"github-issue-v1\"(正規のGitHub evidence) -> \"GitHub\"",
+    targetSystemLabel("custom", "custom", "github-issue-v1").label === "GitHub"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion=\"constructor\"(Object.prototype継承property名) -> \"Custom\"(継承propertyが漏れない)",
+    targetSystemLabel("custom", "custom", "constructor").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion=\"toString\"(Object.prototype継承property名) -> \"Custom\"",
+    targetSystemLabel("custom", "custom", "toString").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion=\"__proto__\"(prototype pollution境界値) -> \"Custom\"",
+    targetSystemLabel("custom", "custom", "__proto__").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] 未知のadapterVersion -> \"Custom\"",
+    targetSystemLabel("custom", "custom", "some-unknown-adapter-v1").label === "Custom"
+  ));
+
+  results.push(check(
+    "[SOR-44 P2] adapterVersion省略 -> \"Custom\"",
+    targetSystemLabel("custom", "custom").label === "Custom"
+  ));
+
   results.push(check(
     "[Required test] actionLabel: 対象system接頭辞を取り除き大文字化する(notion_update_page -> UPDATE_PAGE)",
     actionLabel("notion_update_page", "mcp", "notion") === "UPDATE_PAGE"
