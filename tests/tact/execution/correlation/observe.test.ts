@@ -8,8 +8,8 @@
 // attempt)を検証する——既にmatched(work_id確定済み)のExecutionは、
 // Correlator pipeline自体を呼び出さない。
 
-import { observeExecutionWorkCorrelation } from "../../../../core/tact-execution/correlation/observe";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+import { observeExecutionWorkCorrelation } from "@tact/runs-core/tact-execution/correlation/observe";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

@@ -7,9 +7,9 @@
 // 順序制御(早期return・fallback)とTest3(no candidate -> unresolved)・
 // Test18(permission decisionとcorrelationが独立していること)を検証する。
 
-import { correlateExecution, type CorrelateExecutionDeps } from "../../../../core/tact-execution/correlation/correlate";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { WorkReference } from "../../../../core/execution-contract";
+import { correlateExecution, type CorrelateExecutionDeps } from "@tact/runs-core/tact-execution/correlation/correlate";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

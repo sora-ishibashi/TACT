@@ -1,0 +1,12 @@
+{
+  "name": "@tact/runs-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Yolna Runs domain layer: Canonical Execution capture/permission/correlation/attention/outcome, Runs-owned Supabase client, and the Runs UI read-model projection. Zero Yolna application runtime dependency.",
+  "main": "tact-execution/index.ts",
+  "types": "tact-execution/index.ts",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.7",
+    "@tact/execution-contract": "file:../execution-contract"
+  }
+}

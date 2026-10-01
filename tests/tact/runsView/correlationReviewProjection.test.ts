@@ -18,8 +18,8 @@
 // 再検証していなかったこと。workActionability(呼び出し元がresolveTarget
 // WorkForCorrelation()で再検証した結果)を必須引数として追加した。
 
-import { toCorrelationReviewView, CORRELATION_REVIEW_VIEW_KEYS, SUGGESTED_WORK_CANDIDATE_VIEW_KEYS, type WorkActionabilityEntry } from "../../../core/tact-runs-view";
-import type { ExecutionCorrelationView, ExecutionCorrectionContext } from "../../../core/tact-execution/correlation/store";
+import { toCorrelationReviewView, CORRELATION_REVIEW_VIEW_KEYS, SUGGESTED_WORK_CANDIDATE_VIEW_KEYS, type WorkActionabilityEntry } from "@tact/runs-core/tact-runs-view";
+import type { ExecutionCorrelationView, ExecutionCorrectionContext } from "@tact/runs-core/tact-execution/correlation/store";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function correlation(overrides: Partial<ExecutionCorrelationView> = {}): ExecutionCorrelationView {

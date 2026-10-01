@@ -8,7 +8,7 @@
 // 逆方向の、instrumented/outboundなSlack呼び出し(chat.postMessage等)を
 // 扱う新規adapterのmock-based regression。
 
-import { normalizeSlackWebApiInvocationToExecution } from "../../../../core/tact-execution/adapters/slack/normalizeSlackWebApiCallExecution";
+import { normalizeSlackWebApiInvocationToExecution } from "@tact/runs-core/tact-execution/adapters/slack/normalizeSlackWebApiCallExecution";
 
 import { check, summarize, type CheckResult } from "../../lib/check";
 

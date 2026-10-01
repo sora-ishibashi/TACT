@@ -7,8 +7,8 @@
 // なし)。SOR-50が要求する「1種類の実Adapterでvertical sliceが通る」
 // ことを、実Slack app_mention event envelopeの形をした入力で証明する。
 
-import { normalizeSlackAppMentionEventToExecution } from "../../../../core/tact-execution/adapters/slack/normalizeSlackExecutionEvent";
-import type { ExecutionAdapterContext } from "../../../../core/tact-execution/adapters/types";
+import { normalizeSlackAppMentionEventToExecution } from "@tact/runs-core/tact-execution/adapters/slack/normalizeSlackExecutionEvent";
+import type { ExecutionAdapterContext } from "@tact/runs-core/tact-execution/adapters/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 const context: ExecutionAdapterContext = {

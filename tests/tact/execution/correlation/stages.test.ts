@@ -6,16 +6,16 @@
 // (explicit/structural/temporalParticipant/aiAssisted)。実Supabase
 // 接続は一切行わない(偽deps注入)。
 
-import { runExplicitCorrelation } from "../../../../core/tact-execution/correlation/stages/explicit";
-import { runStructuralCorrelation, type StructuralCorrelationDeps } from "../../../../core/tact-execution/correlation/stages/structural";
+import { runExplicitCorrelation } from "@tact/runs-core/tact-execution/correlation/stages/explicit";
+import { runStructuralCorrelation, type StructuralCorrelationDeps } from "@tact/runs-core/tact-execution/correlation/stages/structural";
 import {
   resolveTemporalParticipantCandidates,
   type TemporalParticipantCandidateDeps,
-} from "../../../../core/tact-execution/correlation/stages/temporalParticipant";
-import { runAiAssistedCorrelation } from "../../../../core/tact-execution/correlation/stages/aiAssisted";
-import { resolveCorrelationContext } from "../../../../core/tact-execution/correlation/context";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { WorkReference } from "../../../../core/execution-contract";
+} from "@tact/runs-core/tact-execution/correlation/stages/temporalParticipant";
+import { runAiAssistedCorrelation } from "@tact/runs-core/tact-execution/correlation/stages/aiAssisted";
+import { resolveCorrelationContext } from "@tact/runs-core/tact-execution/correlation/context";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

@@ -11,8 +11,8 @@ import {
   resolveTargetWorkForCorrelation,
   WORK_TERMINAL_STATUSES,
   type ResolveTargetWorkForCorrelationDeps,
-} from "../../../core/tact-execution/store";
-import type { WorkReference } from "../../../core/execution-contract";
+} from "@tact/runs-core/tact-execution/store";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 // SOR-135 Phase 1 (Runs isolation): resolveTargetWorkForCorrelation() now

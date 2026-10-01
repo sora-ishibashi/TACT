@@ -16,7 +16,7 @@ import {
   observeNotionMcpExecution,
   getExecutionById,
   type NotionMcpInvocationObservation,
-} from "../../core/tact-execution";
+} from "@tact/runs-core/tact-execution";
 import { getServiceRoleClient } from "../../core/database/supabaseServiceRole";
 import { applyLocalSupabaseEnv } from "./lib/localSupabaseEnv";
 import { ensureRealityTestUser } from "./lib/ensureRealityTestUser";

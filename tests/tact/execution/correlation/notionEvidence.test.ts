@@ -7,13 +7,13 @@
 // runNotionStructuralCorrelation()(runStructuralCorrelation()経由)。
 // stages.test.tsの既存Slack testsと同じ方針(偽deps注入、実DB接続なし)。
 
-import { resolveCorrelationContext } from "../../../../core/tact-execution/correlation/context";
+import { resolveCorrelationContext } from "@tact/runs-core/tact-execution/correlation/context";
 import {
   runStructuralCorrelation,
   type StructuralCorrelationDeps,
-} from "../../../../core/tact-execution/correlation/stages/structural";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { WorkReference } from "../../../../core/execution-contract";
+} from "@tact/runs-core/tact-execution/correlation/stages/structural";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

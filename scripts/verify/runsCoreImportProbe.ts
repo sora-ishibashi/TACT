@@ -12,7 +12,7 @@
 // TAVILY_API_KEY absent" without any of those keys, or any other test
 // file's prior import of core/llm, contaminating the result.
 
-import "../../core/tact-execution";
-import "../../core/tact-runs-view";
+import "@tact/runs-core/tact-execution";
+import "@tact/runs-core/tact-runs-view";
 
 console.log("[runsCoreImportProbe] ok");

@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { listExecutionsForUser, listLatestCorrelationDecisionsForExecutions } from "@/core/tact-execution";
-// SOR-135 Phase 1 (Runs isolation): go through the Yolna compatibility
-// adapter, not "@/core/tact-work" directly, so this Runs API route no
-// longer has a direct import-graph edge into Yolna's own Work store.
-import { listWorkTitlesByIds } from "@/core/tact-execution-yolna-adapter";
-import { toActivityItemView } from "@/core/tact-runs-view";
+import { listExecutionsForUser, listLatestCorrelationDecisionsForExecutions } from "@tact/runs-core/tact-execution";
+import { listWorkTitlesByIdsViaRegistry } from "@tact/runs-core/tact-execution/projection/registry";
+import { toActivityItemView } from "@tact/runs-core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
+// SOR-135 Phase 2 (Runs isolation): side-effect-only import. This root
+// Yolna route reads Work titles through the product-neutral projection
+// registry (listWorkTitlesByIdsViaRegistry, above) instead of Yolna's
+// tact-work store directly — importing this module registers the real
+// Yolna-backed WorkProjectionRepository so that read actually resolves
+// data here. The standalone Runs application (products/yolna-runs) has
+// the identical route MINUS this one import, so it fails closed instead
+// (no Work projection source configured yet — SOR-135 Phase 3).
+import "@/core/tact-execution-yolna-adapter";
 
 // =========================
 // GET /api/tact/runs/activity (SOR-54 Screen 1: Activity)
@@ -51,7 +57,20 @@ export async function GET(request: NextRequest) {
     const workIds = executions
       .map((e) => e.workId)
       .filter((id): id is string => id !== null);
-    const workTitles = await listWorkTitlesByIds(workIds, userId, accessToken);
+
+    // Fail closed, not fail silent: a projection failure (e.g. no
+    // WorkProjectionRepository registered, as in the standalone Runs
+    // application before SOR-135 Phase 3) must not be mistaken for "no
+    // Work titles exist" — surface it as a clear 503 instead of a
+    // misleadingly empty title map.
+    let workTitles: Map<string, string | null>;
+
+    try {
+      workTitles = await listWorkTitlesByIdsViaRegistry(workIds, userId, accessToken);
+    } catch (error) {
+      console.error("[api/tact/runs/activity] Work title projection unavailable", error);
+      return NextResponse.json({ success: false, error: "work projection unavailable" }, { status: 503 });
+    }
 
     return NextResponse.json({
       success: true,

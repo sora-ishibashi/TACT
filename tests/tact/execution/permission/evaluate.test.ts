@@ -5,8 +5,8 @@
 // 対象: core/tact-execution/permission/evaluate.tsのevaluatePermission()/
 // validatePermissionDecision()(いずれも純粋関数、DBアクセスなし)。
 
-import { evaluatePermission, validatePermissionDecision } from "../../../../core/tact-execution/permission/evaluate";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+import { evaluatePermission, validatePermissionDecision } from "@tact/runs-core/tact-execution/permission/evaluate";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

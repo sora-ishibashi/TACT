@@ -2,7 +2,7 @@
 // TACT Canonical Execution — Transactional Manual Reclassification RPC
 // =========================
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { persistManualWorkCorrelationOverride, type PersistManualWorkCorrelationOverrideDeps, type PersistManualWorkCorrelationOverrideInput } from "../../../../core/tact-execution/correlation/store";
+import { persistManualWorkCorrelationOverride, type PersistManualWorkCorrelationOverrideDeps, type PersistManualWorkCorrelationOverrideInput } from "@tact/runs-core/tact-execution/correlation/store";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function input(overrides: Partial<PersistManualWorkCorrelationOverrideInput> = {}): PersistManualWorkCorrelationOverrideInput {

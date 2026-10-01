@@ -10,9 +10,9 @@
 // 後退しないこと等)を、実際のfilter評価を通じて検証するため。
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { transitionExecutionAttention, type TransitionExecutionAttentionDeps } from "../../../../core/tact-execution/permission/attentionStore";
-import type { AttentionStatus } from "../../../../core/tact-execution/permission/attentionStore";
-import type { AttentionReason } from "../../../../core/tact-execution/permission/attention";
+import { transitionExecutionAttention, type TransitionExecutionAttentionDeps } from "@tact/runs-core/tact-execution/permission/attentionStore";
+import type { AttentionStatus } from "@tact/runs-core/tact-execution/permission/attentionStore";
+import type { AttentionReason } from "@tact/runs-core/tact-execution/permission/attention";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 interface FakeAttentionRow {

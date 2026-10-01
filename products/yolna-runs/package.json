@@ -1,0 +1,31 @@
+{
+  "name": "@tact/yolna-runs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Yolna Runs — standalone observation/audit application (SOR-135 Phase 2). Installable and buildable with zero Yolna application source tree present.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.7",
+    "@tact/execution-contract": "file:../../packages/execution-contract",
+    "@tact/runs-core": "file:../../packages/runs-core",
+    "next": "16.2.10",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.10",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.12",
+    "typescript": "^5"
+  }
+}

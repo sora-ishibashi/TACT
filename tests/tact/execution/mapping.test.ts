@@ -8,7 +8,7 @@
 // UNIQUE index/CHECK制約(migration自体)による実際の防止は、別途
 // 一時スクリプトで確認する。
 
-import { toCanonicalExecution, type ExecutionRow } from "../../../core/tact-execution/store";
+import { toCanonicalExecution, type ExecutionRow } from "@tact/runs-core/tact-execution/store";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 export async function run(): Promise<{ pass: number; fail: number }> {

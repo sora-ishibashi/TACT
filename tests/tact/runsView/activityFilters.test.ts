@@ -7,8 +7,8 @@
 // filter判定のみ(SOR-23指示「No business logic in React」の延長
 // ——判定はcomponentではなくこのpure関数に集約する)。
 
-import { filterActivityItems, distinctActivityFilterOptions } from "../../../core/tact-runs-view";
-import type { ActivityItemView } from "../../../core/tact-runs-view";
+import { filterActivityItems, distinctActivityFilterOptions } from "@tact/runs-core/tact-runs-view";
+import type { ActivityItemView } from "@tact/runs-core/tact-runs-view";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function item(overrides: Partial<ActivityItemView> = {}): ActivityItemView {

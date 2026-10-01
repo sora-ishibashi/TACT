@@ -6,7 +6,7 @@
 // toCanonicalCorrelationResult()。SOR-53指示section「Canonical
 // mapping」のRequired test 20を検証する。
 
-import { toCanonicalCorrelationResult } from "../../../../core/tact-execution/correlation/canonicalResult";
+import { toCanonicalCorrelationResult } from "@tact/runs-core/tact-execution/correlation/canonicalResult";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 export async function run(): Promise<{ pass: number; fail: number }> {

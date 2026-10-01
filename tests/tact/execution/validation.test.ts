@@ -11,8 +11,8 @@
 import {
   validateCaptureExecutionInput,
   findSuspiciousExecutionMetadataKeys,
-} from "../../../core/tact-execution/validation";
-import type { CaptureExecutionInput } from "../../../core/tact-execution/types";
+} from "@tact/runs-core/tact-execution/validation";
+import type { CaptureExecutionInput } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 function baseInput(overrides: Partial<CaptureExecutionInput> = {}): CaptureExecutionInput {

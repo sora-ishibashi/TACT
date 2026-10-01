@@ -7,7 +7,7 @@
 // が定めるinline > instrumented > reconciledの優先順位を、コード側の
 // 定数としても固定する(prose-onlyではなくmachine-readableにする)。
 
-import { OBSERVATION_MODE_PRIORITY_V1 } from "../../../../core/tact-execution/registry/types";
+import { OBSERVATION_MODE_PRIORITY_V1 } from "@tact/runs-core/tact-execution/registry/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 export async function run(): Promise<{ pass: number; fail: number }> {

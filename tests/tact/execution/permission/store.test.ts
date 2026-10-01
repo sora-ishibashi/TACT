@@ -11,9 +11,9 @@ import {
   persistPermissionDecision,
   type PersistPermissionDecisionDeps,
   type PermissionDecisionRow,
-} from "../../../../core/tact-execution/permission/store";
-import type { PermissionDecision } from "../../../../core/tact-execution/permission/types";
-import type { UpdatePermissionContextOutcome } from "../../../../core/tact-execution/store";
+} from "@tact/runs-core/tact-execution/permission/store";
+import type { PermissionDecision } from "@tact/runs-core/tact-execution/permission/types";
+import type { UpdatePermissionContextOutcome } from "@tact/runs-core/tact-execution/store";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function baseDecision(overrides: Partial<PermissionDecision> = {}): PermissionDecision {

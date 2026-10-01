@@ -27,11 +27,11 @@ import {
   isPermissionRuleValidAt,
   evaluatePermissionFromRegistry,
   PERMISSION_REGISTRY_EVALUATOR_VERSION,
-} from "../../../../core/tact-execution/permission/registryEvaluate";
-import { evaluatePermission } from "../../../../core/tact-execution/permission/evaluate";
-import { resolvePermissionSubject } from "../../../../core/tact-execution/permission/resolveSubject";
-import type { PermissionRegistryRule, PermissionSubject } from "../../../../core/tact-execution/permission/types";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+} from "@tact/runs-core/tact-execution/permission/registryEvaluate";
+import { evaluatePermission } from "@tact/runs-core/tact-execution/permission/evaluate";
+import { resolvePermissionSubject } from "@tact/runs-core/tact-execution/permission/resolveSubject";
+import type { PermissionRegistryRule, PermissionSubject } from "@tact/runs-core/tact-execution/permission/types";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

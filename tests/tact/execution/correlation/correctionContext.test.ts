@@ -13,9 +13,9 @@
 import {
   getExecutionCorrectionContext,
   type GetExecutionCorrectionContextDeps,
-} from "../../../../core/tact-execution/correlation/store";
-import type { WorkCorrelationDecision } from "../../../../core/tact-execution/correlation/types";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+} from "@tact/runs-core/tact-execution/correlation/store";
+import type { WorkCorrelationDecision } from "@tact/runs-core/tact-execution/correlation/types";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

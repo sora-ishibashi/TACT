@@ -3,8 +3,8 @@
 // (SOR-52)
 // =========================
 
-import { resolveCorrelationContext } from "../../../../core/tact-execution/correlation/context";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+import { resolveCorrelationContext } from "@tact/runs-core/tact-execution/correlation/context";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

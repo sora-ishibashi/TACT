@@ -8,7 +8,7 @@ import {
   listIngestionFailuresForUser,
   type IngestionFailureStoreDeps,
   type RecordIngestionFailureInput,
-} from "../../../../core/tact-execution/telemetry/ingestionFailureStore";
+} from "@tact/runs-core/tact-execution/telemetry/ingestionFailureStore";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function input(overrides: Partial<RecordIngestionFailureInput> = {}): RecordIngestionFailureInput {

@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getExecutionCorrelationView, getExecutionCorrectionContext, resolveTargetWorkForCorrelation } from "@/core/tact-execution";
-// SOR-135 Phase 1 (Runs isolation): go through the Yolna compatibility
-// adapter, not "@/core/tact-work" directly, so this Runs API route no
-// longer has a direct import-graph edge into Yolna's own Work store.
-import { listWorkTitlesByIds } from "@/core/tact-execution-yolna-adapter";
-import { toCorrelationReviewView, type WorkActionabilityEntry } from "@/core/tact-runs-view";
+import { getExecutionCorrelationView, getExecutionCorrectionContext, resolveTargetWorkForCorrelation } from "@tact/runs-core/tact-execution";
+import { listWorkTitlesByIdsViaRegistry } from "@tact/runs-core/tact-execution/projection/registry";
+import { toCorrelationReviewView, type WorkActionabilityEntry } from "@tact/runs-core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
+// SOR-135 Phase 2 (Runs isolation): side-effect-only import — see
+// app/api/tact/runs/activity/route.ts's identical note. Registers the
+// real Yolna-backed WorkProjectionRepository so
+// listWorkTitlesByIdsViaRegistry() below actually resolves data in the
+// root Yolna application. resolveTargetWorkForCorrelation() already fails
+// closed to not_found/not_correlatable on its own without this import
+// (SOR-135 Phase 1), so candidate actionability still degrades safely even
+// in a deployment that never imports this module.
+import "@/core/tact-execution-yolna-adapter";
 
 // =========================
 // GET /api/tact/runs/execution/[executionId]/correlation
@@ -65,7 +71,17 @@ export async function GET(
       correctionContext.correction?.previousWorkId ?? null,
     ].filter((id): id is string => id !== null);
 
-    const workTitles = await listWorkTitlesByIds(referencedWorkIds, userId, accessToken);
+    // Fail closed, not fail silent (SOR-135 Phase 2): a projection failure
+    // must not be mistaken for "no titles exist" — surface it as a clear
+    // 503 instead of silently rendering every title as unavailable.
+    let workTitles: Map<string, string | null>;
+
+    try {
+      workTitles = await listWorkTitlesByIdsViaRegistry(referencedWorkIds, userId, accessToken);
+    } catch (error) {
+      console.error("[api/tact/runs/execution/[executionId]/correlation] Work title projection unavailable", error);
+      return NextResponse.json({ success: false, error: "work projection unavailable" }, { status: 503 });
+    }
 
     // SOR-77 live Staging verification defect fix: a candidateWorkId in
     // correlation history is a historical fact, not a live guarantee the

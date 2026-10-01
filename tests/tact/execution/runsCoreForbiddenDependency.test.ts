@@ -1,20 +1,26 @@
 // =========================
-// TACT Runs Core — Forbidden Dependency Test (SOR-135 Phase 1)
+// TACT Runs Core — Forbidden Dependency Test (SOR-135 Phase 1/2)
 // =========================
 //
-// 対象: core/tact-execution/**・core/tact-runs-view/**(SOR-10監査が
-// Runs Core = observation/governance/audit planeと分類した範囲)。
+// 対象: packages/runs-core/tact-execution/**・
+// packages/runs-core/tact-runs-view/**(SOR-10監査がRuns Core =
+// observation/governance/audit planeと分類した範囲。SOR-135 Phase 2で
+// core/tact-execution・core/tact-runs-viewから物理的に移動した)。
 //
 // この2ディレクトリ配下の全.tsファイルを静的に走査し、import/export-from
 // の宣言だけから(実際にimportを評価せず)、禁止された先へのruntime
 // dependencyが存在しないことを機械的に確認する。
 //
-// 禁止対象(SOR-135指示section7):
+// 禁止対象(SOR-135 Phase1指示section7):
 //   - core/tact-orchestrator, core/llm, core/workflow, core/agents,
 //     core/brain, core/optimizer
 //   - @composio/core, @anthropic-ai/sdk, openai, @tavily/core
-// 加えて(SOR-135指示section3、Phase1の主目的そのもの):
+// 加えて(SOR-135 Phase1指示section3、Phase1の主目的そのもの):
 //   - core/tact-work, core/tact-bot への runtime import
+// 加えて(SOR-135 Phase2指示section5、Standalone Runs packageの
+// dependency audit):
+//   - @trigger.dev/sdk, pptxgenjs, mammoth, pdf-parse, xlsx, jszip,
+//     @slack/web-api, @octokit/rest
 //
 // `import type ... from "..."` / `export type ... from "..."` は対象外
 // (SOR-135指示「type-only dependencyについては…分離して扱って構わない」)。
@@ -27,7 +33,7 @@ import { check, summarize, type CheckResult } from "../lib/check";
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 
-const RUNS_CORE_DIRS = ["core/tact-execution", "core/tact-runs-view"];
+const RUNS_CORE_DIRS = ["packages/runs-core/tact-execution", "packages/runs-core/tact-runs-view"];
 
 const FORBIDDEN_INTERNAL_PREFIXES = [
   "core/tact-orchestrator",
@@ -36,13 +42,30 @@ const FORBIDDEN_INTERNAL_PREFIXES = [
   "core/agents",
   "core/brain",
   "core/optimizer",
-  // SOR-135 section3: Runs Core -> Yolna runtime import自体がPhase1の
-  // 主目的(OPENAI_API_KEY等のeager importの直接原因)。
+  // SOR-135 Phase1 section3: Runs Core -> Yolna runtime import自体が
+  // Phase1の主目的(OPENAI_API_KEY等のeager importの直接原因)。
   "core/tact-work",
   "core/tact-bot",
+  // SOR-135 Phase2: Runs Coreは、Yolna-coupledなCompatibility Adapter
+  // (root Yolna applicationのcore/tact-execution-yolna-adapter)を
+  // 自分自身からimportしてはならない(importするのは常にcaller側)。
+  "core/tact-execution-yolna-adapter",
 ];
 
-const FORBIDDEN_PACKAGES = ["@composio/core", "@anthropic-ai/sdk", "openai", "@tavily/core"];
+const FORBIDDEN_PACKAGES = [
+  "@composio/core",
+  "@anthropic-ai/sdk",
+  "openai",
+  "@tavily/core",
+  "@trigger.dev/sdk",
+  "pptxgenjs",
+  "mammoth",
+  "pdf-parse",
+  "xlsx",
+  "jszip",
+  "@slack/web-api",
+  "@octokit/rest",
+];
 
 interface ImportStatement {
   isTypeOnly: boolean;

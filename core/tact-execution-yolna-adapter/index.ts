@@ -1,38 +1,40 @@
 // =========================
-// TACT Execution — Yolna Compatibility Adapter (SOR-135 Phase 1)
+// TACT Execution — Yolna Compatibility Adapter (SOR-135 Phase 1/2)
 // =========================
 //
 // Temporary bridge between Yolna's existing Work/Conversation-link stores
 // (core/tact-work/**, core/tact-bot/**) and the product-neutral
 // WorkProjectionRepository/ConversationLinkRepository contracts
-// (core/execution-contract) that Runs Core (core/tact-execution/**,
-// core/tact-runs-view/**) depends on.
+// (@tact/execution-contract) that Runs Core (@tact/runs-core's
+// tact-execution, tact-runs-view) depends on.
 //
-// Placement matters: this file lives OUTSIDE Runs Core on purpose — it is
-// the only module in this phase allowed to import both Yolna's stores and
-// Runs Core's projection registry (core/tact-execution/projection/registry).
-// Runs Core must never import this module (or core/tact-work, or
-// core/tact-bot) directly; that is exactly the import-graph violation
-// SOR-135 Phase 1 cuts. A composition root outside Runs Core wires this
-// adapter in by calling registerYolnaProjectionAdapter() before any real
-// Work Correlation runs.
+// Placement matters: this file lives in the root Yolna application, OUTSIDE
+// the packages/runs-core package — it is the only module allowed to import
+// both Yolna's stores and Runs Core's projection registry
+// (@tact/runs-core/tact-execution/projection/registry). Runs Core must
+// never import this module (or core/tact-work, or core/tact-bot) directly;
+// that is exactly the import-graph violation SOR-135 Phase 1 cuts. SOR-135
+// Phase 2 additionally keeps this file OUT of the standalone Runs
+// application (products/yolna-runs) entirely — it is Yolna-coupled by
+// design and must never ship in a Runs-only install/build artifact. A
+// composition root outside Runs Core wires this adapter in by calling
+// registerYolnaProjectionAdapter() before any real Work Correlation runs.
 //
 // SOR-135 Phase 1 status (see completion report): none of
-// core/tact-execution/adapters/{slack,github,notion}/observe*Execution.ts
-// are wired into a live production entrypoint yet (confirmed: no file
-// under app/** or core/tact-bot/** calls them). There is therefore no
-// existing composition root to attach registerYolnaProjectionAdapter() to
-// without inventing new production wiring outside this task's scope — the
-// adapter's own file headers already defer that wiring as explicit
-// follow-up work. Call registerYolnaProjectionAdapter() once, early, from
-// whichever module first wires a real observe*Execution adapter into a
-// webhook/poll entrypoint.
+// @tact/runs-core's tact-execution/adapters/{slack,github,notion}/
+// observe*Execution.ts are wired into a live production entrypoint yet
+// (confirmed: no file under app/** or core/tact-bot/** calls them). There
+// is therefore no existing composition root to attach
+// registerYolnaProjectionAdapter() to without inventing new production
+// wiring outside this task's scope — the adapter's own file headers already
+// defer that wiring as explicit follow-up work. Call
+// registerYolnaProjectionAdapter() once, early, from whichever module first
+// wires a real observe*Execution adapter into a webhook/poll entrypoint.
 //
 // This file also re-exports Yolna's existing getWork()/listWorkTitlesByIds()
 // unchanged (same Work-shaped return types) so app/api/tact/runs/** can stop
 // importing "@/core/tact-work" directly without changing those routes'
-// response shapes in this phase — see the completion report for why a full
-// neutral-type migration of the UI/API layer is deferred to Phase 2.
+// response shapes in the root Yolna application.
 
 import {
   getWork,
@@ -46,13 +48,13 @@ import type { Work } from "../tact-work/types";
 import {
   setWorkProjectionRepository,
   setConversationLinkRepository,
-} from "../tact-execution/projection/registry";
+} from "@tact/runs-core/tact-execution/projection/registry";
 import type {
   WorkReference,
   WorkProjectionRepository,
   ConversationLinkReference,
   ConversationLinkRepository,
-} from "../execution-contract";
+} from "@tact/execution-contract";
 
 // Route/API-layer passthrough — unchanged Yolna-shaped functions/types.
 export { getWork, listWorkTitlesByIds };
@@ -87,6 +89,8 @@ export const yolnaWorkProjectionRepository: WorkProjectionRepository = {
     const works = await listRecentWorksForUser(userId, accessToken, options);
     return works.map(toWorkReference);
   },
+
+  listWorkTitlesByIds,
 
 };
 

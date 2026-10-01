@@ -16,19 +16,19 @@
 //      1:1 onto the existing WorkCorrelationStatus/CanonicalCorrelationResult
 //      values, with no fourth/parallel status introduced.
 
-import { runExplicitCorrelation } from "../../../../core/tact-execution/correlation/stages/explicit";
-import { runStructuralCorrelation, type StructuralCorrelationDeps } from "../../../../core/tact-execution/correlation/stages/structural";
-import { runAiAssistedCorrelation } from "../../../../core/tact-execution/correlation/stages/aiAssisted";
-import { resolveCorrelationContext } from "../../../../core/tact-execution/correlation/context";
+import { runExplicitCorrelation } from "@tact/runs-core/tact-execution/correlation/stages/explicit";
+import { runStructuralCorrelation, type StructuralCorrelationDeps } from "@tact/runs-core/tact-execution/correlation/stages/structural";
+import { runAiAssistedCorrelation } from "@tact/runs-core/tact-execution/correlation/stages/aiAssisted";
+import { resolveCorrelationContext } from "@tact/runs-core/tact-execution/correlation/context";
 import {
   EXPLICIT_CONFIDENCE,
   STRUCTURAL_SINGLE_CANDIDATE_CONFIDENCE,
   STRUCTURAL_AMBIGUOUS_CONFIDENCE,
   AI_ASSISTED_AMBIGUOUS_CONFIDENCE,
-} from "../../../../core/tact-execution/correlation/confidencePolicy";
-import { toCanonicalCorrelationResult } from "../../../../core/tact-execution/correlation/canonicalResult";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { WorkReference } from "../../../../core/execution-contract";
+} from "@tact/runs-core/tact-execution/correlation/confidencePolicy";
+import { toCanonicalCorrelationResult } from "@tact/runs-core/tact-execution/correlation/canonicalResult";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

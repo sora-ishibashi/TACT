@@ -8,10 +8,10 @@
 // core/tact-execution/correlation/correlate.ts)をDI経由の偽depsで
 // end-to-endに検証する——evaluator/correlator自体は一切再実装しない。
 
-import { correlateExecution, type CorrelateExecutionDeps } from "../../../../core/tact-execution/correlation/correlate";
-import { toCanonicalCorrelationResult } from "../../../../core/tact-execution/correlation/canonicalResult";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { WorkReference } from "../../../../core/execution-contract";
+import { correlateExecution, type CorrelateExecutionDeps } from "@tact/runs-core/tact-execution/correlation/correlate";
+import { toCanonicalCorrelationResult } from "@tact/runs-core/tact-execution/correlation/canonicalResult";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 // M-0専用test Work識別子(fixtureのみ、production codeへは一切書かない)。

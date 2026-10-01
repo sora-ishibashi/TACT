@@ -15,9 +15,9 @@
 // 「product-facing canonical output」という契約そのものを、実際に
 // M-0が要求する4ケース+周辺のfail-safeケースについて確認する。
 
-import { evaluatePermission } from "../../../../core/tact-execution/permission/evaluate";
-import { toCanonicalPermissionResult, type CanonicalPermissionResult } from "../../../../core/tact-execution/permission/canonicalResult";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+import { evaluatePermission } from "@tact/runs-core/tact-execution/permission/evaluate";
+import { toCanonicalPermissionResult, type CanonicalPermissionResult } from "@tact/runs-core/tact-execution/permission/canonicalResult";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
