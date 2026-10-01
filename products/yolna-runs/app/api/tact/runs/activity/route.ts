@@ -5,13 +5,15 @@ import { listWorkTitlesByIdsViaRegistry } from "@tact/runs-core/tact-execution/p
 import { toActivityItemView } from "@tact/runs-core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
-// SOR-135 Phase 2 (Standalone Runs): this route intentionally does NOT
-// import core/tact-execution-yolna-adapter (Yolna-coupled, root
-// application only, forbidden in a Runs-only install/build artifact). No
-// WorkProjectionRepository is registered here, so
-// listWorkTitlesByIdsViaRegistry() below fails closed with a 503 instead
-// of silently returning empty/guessed titles — see the Phase 2 completion
-// report for the Phase 3 plan (a Runs-owned projection store).
+// SOR-135 Phase 3 (Standalone Runs): side-effect-only import. Registers
+// this deployment's OWN Postgres-backed WorkProjectionRepository (reading
+// tact_runs_work_projection, never Yolna's tact-work store — see
+// lib/projection/postgresProjectionAdapter.ts) so
+// listWorkTitlesByIdsViaRegistry() below actually resolves data here. If
+// a projection row has not arrived yet for a given workId, that read
+// legitimately returns null for that id (Unknown), not a thrown error —
+// only a wholly unconfigured service-role client throws.
+import "@/lib/projection/postgresProjectionAdapter";
 
 // =========================
 // GET /api/tact/runs/activity (SOR-54 Screen 1: Activity)

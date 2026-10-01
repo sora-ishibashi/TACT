@@ -5,10 +5,11 @@ import { getWorkViaRegistry } from "@tact/runs-core/tact-execution/projection/re
 import { toWorkHeaderView, toWorkTimelineItemView } from "@tact/runs-core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
-// SOR-135 Phase 2 (Standalone Runs): see activity/route.ts's identical
-// note — no Yolna compatibility adapter here, getWorkViaRegistry() below
-// fails closed with a 503 until a Runs-owned projection store exists
-// (Phase 3).
+// SOR-135 Phase 3 (Standalone Runs): side-effect-only import — see
+// activity/route.ts's identical note. Registers this deployment's own
+// Postgres-backed WorkProjectionRepository so getWorkViaRegistry() below
+// actually resolves data here.
+import "@/lib/projection/postgresProjectionAdapter";
 
 // =========================
 // GET /api/tact/runs/work/[workId] (SOR-54 Screen 3: Work Detail)

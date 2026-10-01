@@ -7,7 +7,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:independence-check": "bash scripts/dbIndependenceCheck.sh",
+    "db:reality-test": "tsx scripts/dbRealityTest.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",

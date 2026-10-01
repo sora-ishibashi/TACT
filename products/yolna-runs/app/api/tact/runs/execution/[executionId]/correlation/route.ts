@@ -5,11 +5,12 @@ import { listWorkTitlesByIdsViaRegistry } from "@tact/runs-core/tact-execution/p
 import { toCorrelationReviewView, type WorkActionabilityEntry } from "@tact/runs-core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
-// SOR-135 Phase 2 (Standalone Runs): see activity/route.ts's identical
-// note — no Yolna compatibility adapter here. resolveTargetWorkForCorrelation()
-// already fails closed to not_found/not_correlatable on its own (SOR-135
-// Phase 1), so candidate actionability degrades safely; the title lookup
-// below fails closed with a 503 instead.
+// SOR-135 Phase 3 (Standalone Runs): side-effect-only import — see
+// activity/route.ts's identical note. Registers this deployment's own
+// Postgres-backed WorkProjectionRepository so
+// listWorkTitlesByIdsViaRegistry() and resolveTargetWorkForCorrelation()
+// below both actually resolve data here.
+import "@/lib/projection/postgresProjectionAdapter";
 
 // =========================
 // GET /api/tact/runs/execution/[executionId]/correlation

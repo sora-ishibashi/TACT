@@ -170,3 +170,80 @@ export type JsonValue =
   | null
   | JsonValue[]
   | { [key: string]: JsonValue };
+
+// =========================
+// Yolna -> Runs Projection Contract (SOR-135 Phase 3)
+// =========================
+//
+// The write-side counterpart to WorkProjectionRepository/
+// ConversationLinkRepository above. Where those two interfaces are "how
+// Runs Core reads Work/Conversation-link data" (implemented once per
+// deployment: the root app's core/tact-execution-yolna-adapter, or the
+// standalone app's own Postgres-backed projection store), these two are
+// "how Yolna tells a Runs projection store about a Work/Conversation-link
+// it knows about" — the explicit telemetry/projection boundary SOR-135
+// section 8 calls for, instead of a live cross-database join.
+//
+// This phase defines the contract and a real standalone implementation
+// (products/yolna-runs's own projection writer, backed by its own
+// Postgres) but does not wire Yolna's production code to call it over a
+// network — no deployment topology exists yet for that call to cross a
+// real process/database boundary (SOR-135 Phase 4+). The root app
+// continues reading Work data through core/tact-execution-yolna-adapter's
+// live query against its own tact-work store for now; this contract is
+// the seam a future phase connects on the write side once Runs has its
+// own reachable endpoint to call.
+//
+// Data minimization (absolute condition, same as every other type in this
+// file): these DTOs may carry identity/reference/title/status/correlation
+// metadata only. Never prompt text, message/document bodies, credentials,
+// or OAuth/SaaS tokens — there is deliberately no field for any of that,
+// so adding one is a visible, reviewable change to this file, not a
+// silent runtime decision.
+
+export interface WorkProjectionUpsertInput {
+
+  externalWorkId: string;
+
+  userId: string;
+
+  title: string | null;
+
+  status: string;
+
+  conversationReference: string | null;
+
+}
+
+export interface WorkProjectionWriter {
+
+  // Upsert is the only write primitive — there is no separate "create" vs
+  // "update": a projection row either reflects the Work's current
+  // identity/title/status/conversation reference, or it does not exist
+  // yet (handled as "unknown" by every reader, never fabricated — see
+  // WorkProjectionRepository's own header comment).
+  upsertWork(input: WorkProjectionUpsertInput): Promise<void>;
+
+}
+
+export interface ConversationLinkProjectionUpsertInput {
+
+  userId: string;
+
+  channel: "slack";
+
+  externalWorkspaceId?: string;
+
+  externalConversationId: string;
+
+  externalThreadId?: string;
+
+  conversationReference: string;
+
+}
+
+export interface ConversationLinkProjectionWriter {
+
+  upsertConversationLink(input: ConversationLinkProjectionUpsertInput): Promise<void>;
+
+}
