@@ -260,7 +260,7 @@ Analystの`insights[]`に`counterArguments?: string[]`という**1フィール�
 
 `getTeam()`のcategory別チーム構成変更（Analystを`writing`/defaultにも含めるかどうか）は、
 今回は提案に含めません。これは「①Plannerが認識する主張の構造」に関わる設計判断であり、
-CLAUDE.mdが定める「Agent責務・Plannerの選択ロジックの変更」に該当するため、
+AGENTS.mdが定める「material product or architecture direction change」に該当するため、
 別途ユーザーへの確認を要すると判断しました。
 
 ### ⑥ 理想構成（将来形）

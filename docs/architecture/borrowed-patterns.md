@@ -78,7 +78,8 @@ Append-only execution evidence: actor, Work/Task/Run, capability/provider, crede
 **ARCH-P5 — Durable Execution Foundation**
 Claim, lease, worker ownership, resume, crash recovery, HTTP-lifecycle separation. Correctly last: it needs Run semantics already settled (they are — retry = new Run, already implemented) and needs the pause/resume vocabulary from ARCH-P3 to know what it's persisting through a crash. This is also the largest architectural lift in the matrix (claim/lease + a scheduled sweeper + an infra decision for where that sweeper runs) and should not be started before the smaller, more self-contained phases above land.
 
-No implementation of any ARCH-P phase is authorized by this document. Each requires its own explicit Phase instruction per CLAUDE.md §13.
+No implementation of any ARCH-P phase is authorized by this document. Each
+requires its own explicitly scoped Linear issue or Human Owner instruction.
 
 ## Remaining Prior Art Review
 

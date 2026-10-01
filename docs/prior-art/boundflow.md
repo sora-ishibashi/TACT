@@ -193,4 +193,4 @@ BoundFlowは、TACTが目指す方向性（durable execution・approval-gated pr
 
 ## Suggested TACT Phase
 
-`docs/architecture.md`のRoadmapにおける、Task/Run永続化・claim/lease schema設計・Approval gate実行semanticsを扱う将来のdurable execution関連Phase（現時点でPhase番号は未採番。CLAUDE.md「14. 現在地点」に記載のPhase94/95系列とは別系統であり、それらの完了後、TACT自身がRun/attempt永続化とcrash recoveryの実装に着手するタイミングで本ドキュメントを参照することを推奨する）。今回のセッションでコード変更は行っていない（doc-onlyのPrior Art調査）。
+`docs/architecture.md`のRoadmapにおける、Task/Run永続化・claim/lease schema設計・Approval gate実行semanticsを扱う将来のdurable execution関連の明示スコープIssueで、本ドキュメントを参照することを推奨する。現在の優先順位や着手時期はLinearを確認する。今回のセッションでコード変更は行っていない（doc-onlyのPrior Art調査）。
