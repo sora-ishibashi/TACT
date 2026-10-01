@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tact.local/schemas/sor143-ground-truth-ledger-v1.json",
+  "title": "SOR-143 independent ground-truth ledger event",
+  "description": "Metadata-only ground truth for Reality Test scoring. Provider payloads and sensitive content are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "scenarioId",
+    "sourceOperationId",
+    "eventId",
+    "occurredAt",
+    "recordedAt",
+    "timezone",
+    "actorType",
+    "actorId",
+    "responsibleHuman",
+    "tool",
+    "provider",
+    "targetType",
+    "targetId",
+    "actionCategory",
+    "actionSummary",
+    "actualResult",
+    "expectedWorkId",
+    "expectedWorkTitle",
+    "workAssignmentBasis",
+    "intentionalTest",
+    "naturalWork",
+    "retryGroupId",
+    "attemptNumber",
+    "expectedObservationStatus",
+    "captureGapExpectation",
+    "comparisonTimingWindowSeconds",
+    "expectedPermissionStatus",
+    "expectedOutcomeStatus",
+    "evidenceType",
+    "evidenceRef",
+    "evidenceConfidence",
+    "delegationParentEventId",
+    "attributionRevisionOfEventId",
+    "notes"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "scenarioId": { "$ref": "#/$defs/nonEmptyString" },
+    "sourceOperationId": { "$ref": "#/$defs/nonEmptyString" },
+    "eventId": { "$ref": "#/$defs/nonEmptyString" },
+    "occurredAt": { "$ref": "#/$defs/utcTimestamp" },
+    "recordedAt": { "$ref": "#/$defs/utcTimestamp" },
+    "timezone": { "const": "UTC" },
+    "sourceLocalTime": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional original local timestamp; must be paired with sourceTimezone."
+    },
+    "sourceTimezone": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional IANA timezone or fixed-offset label; must be paired with sourceLocalTime."
+    },
+    "actorType": { "enum": ["HUMAN", "AI", "SYSTEM"] },
+    "actorId": { "$ref": "#/$defs/nonEmptyString" },
+    "responsibleHuman": { "$ref": "#/$defs/nullableString" },
+    "tool": { "$ref": "#/$defs/nonEmptyString" },
+    "provider": { "$ref": "#/$defs/nonEmptyString" },
+    "targetType": { "$ref": "#/$defs/nonEmptyString" },
+    "targetId": { "$ref": "#/$defs/nonEmptyString" },
+    "actionCategory": {
+      "enum": ["READ", "CREATE", "UPDATE", "SEND", "DELETE", "SHARE", "EXECUTE", "APPROVE", "UNKNOWN"]
+    },
+    "actionSummary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "description": "Metadata-only summary; never raw provider content."
+    },
+    "actualResult": { "enum": ["SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"] },
+    "expectedWorkId": { "$ref": "#/$defs/nullableString" },
+    "expectedWorkTitle": { "$ref": "#/$defs/nullableString" },
+    "workAssignmentBasis": { "enum": ["EXPLICIT", "DETERMINISTIC", "HUMAN_CONFIRMED", "UNKNOWN"] },
+    "intentionalTest": { "type": "boolean" },
+    "naturalWork": { "type": "boolean" },
+    "retryGroupId": { "$ref": "#/$defs/nullableString" },
+    "attemptNumber": { "type": "integer", "minimum": 1 },
+    "expectedObservationStatus": { "enum": ["SUPPORTED", "PARTIAL", "UNSUPPORTED", "UNKNOWN"] },
+    "captureGapExpectation": {
+      "enum": ["EXPECTED_VISIBLE", "PARTIALLY_VISIBLE", "UNSUPPORTED", "SUSPECTED_OUTAGE"]
+    },
+    "comparisonTimingWindowSeconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+    "expectedPermissionStatus": { "enum": ["ALLOWED", "DENIED", "APPROVAL_REQUIRED", "UNKNOWN", "NOT_EVALUATED"] },
+    "expectedOutcomeStatus": { "enum": ["ASSERTED", "UNKNOWN"] },
+    "evidenceType": {
+      "enum": ["API_HISTORY", "GIT_HISTORY", "CLI_HISTORY", "DETERMINISTIC_FIXTURE", "HUMAN_IMMEDIATE", "HUMAN_RETROSPECTIVE", "OTHER"]
+    },
+    "evidenceRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "Opaque or local reference; do not embed provider content or credentials."
+    },
+    "evidenceConfidence": { "enum": ["HIGH", "MEDIUM", "LOW"] },
+    "delegationParentEventId": { "$ref": "#/$defs/nullableString" },
+    "attributionRevisionOfEventId": { "$ref": "#/$defs/nullableString" },
+    "notes": { "type": "string", "maxLength": 500 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "workAssignmentBasis": { "const": "UNKNOWN" } }, "required": ["workAssignmentBasis"] },
+      "then": {
+        "properties": {
+          "expectedWorkId": { "type": "null" },
+          "expectedWorkTitle": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": { "required": ["sourceLocalTime"] },
+      "then": { "required": ["sourceTimezone"] }
+    },
+    {
+      "if": { "required": ["sourceTimezone"] },
+      "then": { "required": ["sourceLocalTime"] }
+    }
+  ],
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "nullableString": { "type": ["string", "null"], "minLength": 1 },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    }
+  }
+}
