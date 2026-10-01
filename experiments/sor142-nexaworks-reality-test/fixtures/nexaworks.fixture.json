@@ -1,0 +1,75 @@
+{
+  "fixture_version": "sor142-nexaworks-v1",
+  "fixture_kind": "expected_reality_test_data",
+  "observed_execution_count": 0,
+  "company": {
+    "id": "14200000-0000-4000-8000-000000000001",
+    "name": "NexaWorks",
+    "slug": "nexaworks-synthetic"
+  },
+  "departments": [
+    { "id": "14200000-0000-4000-8000-000000000101", "name": "Sales" },
+    { "id": "14200000-0000-4000-8000-000000000102", "name": "Product" },
+    { "id": "14200000-0000-4000-8000-000000000103", "name": "Operations" }
+  ],
+  "employees": [
+    { "id": "14200000-0000-4000-8000-000000000201", "department_id": "14200000-0000-4000-8000-000000000101", "display_name": "Nexa Sales Lead 01", "email": "sales-lead@nexaworks.test", "role": "sales_lead" },
+    { "id": "14200000-0000-4000-8000-000000000202", "department_id": "14200000-0000-4000-8000-000000000101", "display_name": "Nexa Sales Member 01", "email": "sales-member@nexaworks.test", "role": "sales_member" },
+    { "id": "14200000-0000-4000-8000-000000000203", "department_id": "14200000-0000-4000-8000-000000000102", "display_name": "Nexa Product Manager 01", "email": "product-manager@nexaworks.test", "role": "product_manager" },
+    { "id": "14200000-0000-4000-8000-000000000204", "department_id": "14200000-0000-4000-8000-000000000102", "display_name": "Nexa Engineer 01", "email": "engineer@nexaworks.test", "role": "engineer" },
+    { "id": "14200000-0000-4000-8000-000000000205", "department_id": "14200000-0000-4000-8000-000000000103", "display_name": "Nexa Operations Member 01", "email": "operations@nexaworks.test", "role": "operations_member" },
+    { "id": "14200000-0000-4000-8000-000000000206", "department_id": "14200000-0000-4000-8000-000000000103", "display_name": "Nexa Admin 01", "email": "admin@nexaworks.test", "role": "admin" }
+  ],
+  "customers": [
+    { "id": "14200000-0000-4000-8000-000000000301", "name": "Synthetic Customer Alpha", "contact_email": "contact@alpha-customer.test", "status": "active" },
+    { "id": "14200000-0000-4000-8000-000000000302", "name": "Synthetic Customer Beta", "contact_email": "contact@beta-customer.test", "status": "active" },
+    { "id": "14200000-0000-4000-8000-000000000303", "name": "Synthetic Customer Gamma", "contact_email": "contact@gamma-customer.test", "status": "prospect" }
+  ],
+  "works": [
+    { "id": "14200000-0000-4000-8000-000000000401", "scenario": "sales", "title": "Prepare Alpha renewal proposal", "objective": "Research the synthetic customer, prepare a proposal, confirm assumptions, and update the document.", "status": "running", "owner_employee_id": "14200000-0000-4000-8000-000000000201", "customer_id": "14200000-0000-4000-8000-000000000301" },
+    { "id": "14200000-0000-4000-8000-000000000402", "scenario": "product", "title": "Add synthetic export validation", "objective": "Trace a synthetic issue through code change, test, failure, retry, and commit reference.", "status": "running", "owner_employee_id": "14200000-0000-4000-8000-000000000203", "customer_id": null },
+    { "id": "14200000-0000-4000-8000-000000000403", "scenario": "operations", "title": "Resolve Beta onboarding inquiry", "objective": "Review a synthetic inquiry, consult a document, and update status.", "status": "waiting_for_input", "owner_employee_id": "14200000-0000-4000-8000-000000000205", "customer_id": "14200000-0000-4000-8000-000000000302" },
+    { "id": "14200000-0000-4000-8000-000000000404", "scenario": "sales", "title": "Qualify Gamma expansion lead", "objective": "Run a concurrent synthetic sales follow-up without mixing Work identifiers.", "status": "planning", "owner_employee_id": "14200000-0000-4000-8000-000000000202", "customer_id": "14200000-0000-4000-8000-000000000303" }
+  ],
+  "documents": [
+    { "id": "14200000-0000-4000-8000-000000000501", "work_id": "14200000-0000-4000-8000-000000000401", "kind": "proposal", "title": "Alpha Renewal Proposal — Synthetic Draft", "body": "Synthetic proposal draft with fictional pricing assumptions." },
+    { "id": "14200000-0000-4000-8000-000000000502", "work_id": "14200000-0000-4000-8000-000000000402", "kind": "issue", "title": "NW-SYN-42 Export Validation", "body": "Synthetic issue description for local test execution only." },
+    { "id": "14200000-0000-4000-8000-000000000503", "work_id": "14200000-0000-4000-8000-000000000403", "kind": "runbook", "title": "Beta Onboarding Runbook — Synthetic", "body": "Synthetic onboarding steps; no real customer procedure." },
+    { "id": "14200000-0000-4000-8000-000000000504", "work_id": "14200000-0000-4000-8000-000000000404", "kind": "research_note", "title": "Gamma Expansion Notes — Synthetic", "body": "Synthetic qualification notes for the concurrent sales scenario." }
+  ],
+  "tasks": [
+    { "id": "14200000-0000-4000-8000-000000000601", "work_id": "14200000-0000-4000-8000-000000000401", "description": "Research Synthetic Customer Alpha", "status": "completed", "sequence": 1 },
+    { "id": "14200000-0000-4000-8000-000000000602", "work_id": "14200000-0000-4000-8000-000000000401", "description": "Prepare renewal proposal", "status": "completed", "sequence": 2 },
+    { "id": "14200000-0000-4000-8000-000000000603", "work_id": "14200000-0000-4000-8000-000000000401", "description": "Confirm assumptions in synthetic Slack-like channel", "status": "running", "sequence": 3 },
+    { "id": "14200000-0000-4000-8000-000000000604", "work_id": "14200000-0000-4000-8000-000000000401", "description": "Update proposal document", "status": "pending", "sequence": 4 },
+    { "id": "14200000-0000-4000-8000-000000000605", "work_id": "14200000-0000-4000-8000-000000000402", "description": "Review synthetic Linear-like issue NW-SYN-42", "status": "completed", "sequence": 1 },
+    { "id": "14200000-0000-4000-8000-000000000606", "work_id": "14200000-0000-4000-8000-000000000402", "description": "Apply local code change", "status": "completed", "sequence": 2 },
+    { "id": "14200000-0000-4000-8000-000000000607", "work_id": "14200000-0000-4000-8000-000000000402", "description": "Run validation tests", "status": "running", "sequence": 3 },
+    { "id": "14200000-0000-4000-8000-000000000608", "work_id": "14200000-0000-4000-8000-000000000402", "description": "Record synthetic Git-like commit reference", "status": "pending", "sequence": 4 },
+    { "id": "14200000-0000-4000-8000-000000000609", "work_id": "14200000-0000-4000-8000-000000000403", "description": "Review synthetic onboarding inquiry", "status": "completed", "sequence": 1 },
+    { "id": "14200000-0000-4000-8000-000000000610", "work_id": "14200000-0000-4000-8000-000000000403", "description": "Consult synthetic onboarding runbook", "status": "completed", "sequence": 2 },
+    { "id": "14200000-0000-4000-8000-000000000611", "work_id": "14200000-0000-4000-8000-000000000403", "description": "Update inquiry status", "status": "pending", "sequence": 3 },
+    { "id": "14200000-0000-4000-8000-000000000612", "work_id": "14200000-0000-4000-8000-000000000404", "description": "Qualify synthetic expansion lead", "status": "pending", "sequence": 1 }
+  ],
+  "conversation_fragments": [
+    { "id": "14200000-0000-4000-8000-000000000701", "work_id": "14200000-0000-4000-8000-000000000401", "channel_kind": "synthetic_slack_like", "speaker_employee_id": "14200000-0000-4000-8000-000000000201", "body": "Synthetic note: confirm the fictional renewal assumption before updating the draft.", "ordinal": 1 },
+    { "id": "14200000-0000-4000-8000-000000000702", "work_id": "14200000-0000-4000-8000-000000000401", "channel_kind": "synthetic_slack_like", "speaker_employee_id": "14200000-0000-4000-8000-000000000202", "body": "Synthetic reply: the fictional assumption is ready for review.", "ordinal": 2 },
+    { "id": "14200000-0000-4000-8000-000000000703", "work_id": "14200000-0000-4000-8000-000000000402", "channel_kind": "synthetic_issue_comment", "speaker_employee_id": "14200000-0000-4000-8000-000000000204", "body": "Synthetic note: first validation attempt failed on the local fixture.", "ordinal": 1 },
+    { "id": "14200000-0000-4000-8000-000000000704", "work_id": "14200000-0000-4000-8000-000000000402", "channel_kind": "synthetic_issue_comment", "speaker_employee_id": "14200000-0000-4000-8000-000000000203", "body": "Synthetic reply: retry after correcting the fixture expectation.", "ordinal": 2 },
+    { "id": "14200000-0000-4000-8000-000000000705", "work_id": "14200000-0000-4000-8000-000000000403", "channel_kind": "synthetic_support_note", "speaker_employee_id": "14200000-0000-4000-8000-000000000205", "body": "Synthetic inquiry: onboarding status needs a document check.", "ordinal": 1 },
+    { "id": "14200000-0000-4000-8000-000000000706", "work_id": "14200000-0000-4000-8000-000000000404", "channel_kind": "synthetic_sales_note", "speaker_employee_id": "14200000-0000-4000-8000-000000000202", "body": "Synthetic note: keep this expansion lead separate from the renewal Work.", "ordinal": 1 }
+  ],
+  "meetings": [
+    { "id": "14200000-0000-4000-8000-000000000801", "work_id": "14200000-0000-4000-8000-000000000401", "title": "Synthetic Alpha proposal review", "held_at": "2026-09-15T01:00:00.000Z", "summary": "Fictional review of proposal assumptions." },
+    { "id": "14200000-0000-4000-8000-000000000802", "work_id": "14200000-0000-4000-8000-000000000402", "title": "Synthetic export validation sync", "held_at": "2026-09-15T02:00:00.000Z", "summary": "Fictional engineering sync covering failure and retry." },
+    { "id": "14200000-0000-4000-8000-000000000803", "work_id": "14200000-0000-4000-8000-000000000403", "title": "Synthetic Beta operations review", "held_at": "2026-09-15T03:00:00.000Z", "summary": "Fictional operations review of an onboarding inquiry." }
+  ],
+  "expected_executions": [
+    { "id": "14200000-0000-4000-8000-000000000901", "work_id": "14200000-0000-4000-8000-000000000401", "task_id": "14200000-0000-4000-8000-000000000601", "fixture_type": "fixture_expectation", "source_kind": "synthetic_research", "correlation_mode": "explicit_work_id", "expected_outcome": "success", "attempt": 1, "retry_of": null, "observed": false },
+    { "id": "14200000-0000-4000-8000-000000000902", "work_id": null, "task_id": null, "fixture_type": "fixture_expectation", "source_kind": "synthetic_slack_like", "correlation_mode": "missing_work_id", "expected_outcome": "success", "attempt": 1, "retry_of": null, "observed": false },
+    { "id": "14200000-0000-4000-8000-000000000903", "work_id": "14200000-0000-4000-8000-000000000402", "task_id": "14200000-0000-4000-8000-000000000607", "fixture_type": "fixture_expectation", "source_kind": "synthetic_test_runner", "correlation_mode": "explicit_work_id", "expected_outcome": "failure", "attempt": 1, "retry_of": null, "observed": false },
+    { "id": "14200000-0000-4000-8000-000000000904", "work_id": "14200000-0000-4000-8000-000000000402", "task_id": "14200000-0000-4000-8000-000000000607", "fixture_type": "fixture_expectation", "source_kind": "synthetic_test_runner", "correlation_mode": "explicit_work_id", "expected_outcome": "retry_success", "attempt": 2, "retry_of": "14200000-0000-4000-8000-000000000903", "observed": false },
+    { "id": "14200000-0000-4000-8000-000000000905", "work_id": "14200000-0000-4000-8000-000000000403", "task_id": "14200000-0000-4000-8000-000000000610", "fixture_type": "fixture_expectation", "source_kind": "synthetic_document_lookup", "correlation_mode": "explicit_work_id", "expected_outcome": "success", "attempt": 1, "retry_of": null, "observed": false },
+    { "id": "14200000-0000-4000-8000-000000000906", "work_id": null, "task_id": null, "fixture_type": "fixture_expectation", "source_kind": "synthetic_status_update", "correlation_mode": "missing_work_id", "expected_outcome": "failure", "attempt": 1, "retry_of": null, "observed": false }
+  ]
+}
