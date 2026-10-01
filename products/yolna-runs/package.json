@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "Yolna Runs — standalone observation/audit application (SOR-135 Phase 2). Installable and buildable with zero Yolna application source tree present.",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "verify:env": "tsx scripts/verifyEnvAllowlist.ts",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",
