@@ -28,7 +28,7 @@ import {
 } from "../../../../core/tact-execution/correlation/confidencePolicy";
 import { toCanonicalCorrelationResult } from "../../../../core/tact-execution/correlation/canonicalResult";
 import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { Work } from "../../../../core/tact-work/types";
+import type { WorkReference } from "../../../../core/execution-contract";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
@@ -75,15 +75,14 @@ function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalEx
   };
 }
 
-function makeWork(overrides: Partial<Work> = {}): Work {
+// SOR-135 Phase 1 (Runs isolation): WorkReference projection, not Yolna's
+// full Work entity.
+function makeWork(overrides: Partial<WorkReference> = {}): WorkReference {
   return {
     id: "work-1",
-    userId: "user-1",
-    createdByActorKind: "user",
-    createdByActorId: "user-1",
+    title: null,
     status: "running",
-    createdAt: "2026-09-20T00:00:00.000Z",
-    updatedAt: "2026-09-20T00:00:00.000Z",
+    conversationId: null,
     ...overrides,
   };
 }
@@ -119,7 +118,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ---- Structural stage: single candidate (AUTO_ASSIGNED tier) ----
   {
     const deps: StructuralCorrelationDeps = {
-      findConversationLink: async () => "conv-1",
+      findConversationLink: async () => ({ conversationId: "conv-1" }),
       listWorksForConversation: async () => [makeWork({ id: "work-structural-1" })],
       listWorksForNotionResource: async () => [],
       getServiceRoleKey: () => "service-role-key",
@@ -137,7 +136,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // evidence does not auto-assign) ----
   {
     const deps: StructuralCorrelationDeps = {
-      findConversationLink: async () => "conv-multi-1",
+      findConversationLink: async () => ({ conversationId: "conv-multi-1" }),
       listWorksForConversation: async () => [makeWork({ id: "work-a" }), makeWork({ id: "work-b" })],
       listWorksForNotionResource: async () => [],
       getServiceRoleKey: () => "service-role-key",

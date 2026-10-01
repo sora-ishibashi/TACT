@@ -12,12 +12,16 @@
 // する——「試したが対象外だった」ではなく、そもそも候補集合に
 // 入れない(Tests要件「inactive/invalid Work」)。
 
-import { listRecentWorksForUser as defaultListRecentWorksForUser } from "../../../tact-work/store";
+// SOR-135 Phase 1 (Runs isolation): no static import of core/tact-work
+// here — Work data is reached only through the product-neutral
+// WorkProjectionRepository contract (core/execution-contract), resolved
+// lazily through the registry (../../projection/registry).
 import { getServiceRoleKey as defaultGetServiceRoleKey } from "../../../database/supabaseServiceRole";
-import type { Work, WorkStatus } from "../../../tact-work/types";
+import { getWorkProjectionRepository } from "../../projection/registry";
+import type { WorkReference, WorkProjectionRepository } from "../../../execution-contract";
 import type { CorrelationContext } from "../types";
 
-const ACTIVE_WORK_STATUSES: readonly WorkStatus[] = [
+const ACTIVE_WORK_STATUSES: readonly string[] = [
   "created",
   "planning",
   "running",
@@ -27,21 +31,23 @@ const ACTIVE_WORK_STATUSES: readonly WorkStatus[] = [
 
 export interface TemporalParticipantCandidateDeps {
 
-  listRecentWorksForUser: typeof defaultListRecentWorksForUser;
+  listRecentWorksForUser: WorkProjectionRepository["listRecentWorksForUser"];
 
   getServiceRoleKey: typeof defaultGetServiceRoleKey;
 
 }
 
+// 遅延解決(絶対条件、SOR-135): structural.ts/store.tsと同じ設計。
 export const defaultTemporalParticipantCandidateDeps: TemporalParticipantCandidateDeps = {
-  listRecentWorksForUser: defaultListRecentWorksForUser,
+  listRecentWorksForUser: (userId, accessToken, options) =>
+    getWorkProjectionRepository().listRecentWorksForUser(userId, accessToken, options),
   getServiceRoleKey: defaultGetServiceRoleKey,
 };
 
 export async function resolveTemporalParticipantCandidates(
   context: CorrelationContext,
   deps: TemporalParticipantCandidateDeps = defaultTemporalParticipantCandidateDeps
-): Promise<Work[]> {
+): Promise<WorkReference[]> {
 
   const accessToken = deps.getServiceRoleKey();
 

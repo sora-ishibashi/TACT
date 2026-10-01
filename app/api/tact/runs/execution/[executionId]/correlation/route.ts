@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getExecutionCorrelationView, getExecutionCorrectionContext, resolveTargetWorkForCorrelation } from "@/core/tact-execution";
-import { listWorkTitlesByIds } from "@/core/tact-work";
+// SOR-135 Phase 1 (Runs isolation): go through the Yolna compatibility
+// adapter, not "@/core/tact-work" directly, so this Runs API route no
+// longer has a direct import-graph edge into Yolna's own Work store.
+import { listWorkTitlesByIds } from "@/core/tact-execution-yolna-adapter";
 import { toCorrelationReviewView, type WorkActionabilityEntry } from "@/core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";

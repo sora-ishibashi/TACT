@@ -27,13 +27,17 @@
 // 相関することも、異なるworkspaceのchannel ID衝突で誤相関することも
 // 構造的に無くなった。
 
-import { findConversationLink as defaultFindConversationLink } from "../../../tact-bot/conversationLink/supabaseConversationLinkStore";
-import {
-  listWorksForConversation as defaultListWorksForConversation,
-  listWorksForNotionResource as defaultListWorksForNotionResource,
-} from "../../../tact-work/store";
+// SOR-135 Phase 1 (Runs isolation): no static import of core/tact-bot or
+// core/tact-work here. The Structural Correlator depends only on the
+// product-neutral WorkProjectionRepository/ConversationLinkRepository
+// contracts (core/execution-contract), resolved lazily through the
+// registry (../../projection/registry) — never a direct import of Yolna's
+// conversationLink/Work stores. getServiceRoleKey stays a direct import:
+// it is shared DB-access infra (core/database/supabaseServiceRole), not
+// Yolna application/business logic.
 import { getServiceRoleKey as defaultGetServiceRoleKey } from "../../../database/supabaseServiceRole";
-import type { Work } from "../../../tact-work/types";
+import { getWorkProjectionRepository, getConversationLinkRepository } from "../../projection/registry";
+import type { WorkReference, WorkProjectionRepository, ConversationLinkRepository } from "../../../execution-contract";
 import type { CanonicalExecution } from "../../types";
 import type { CorrelationContext, WorkCorrelationDecision } from "../types";
 import { CORRELATOR_VERSION } from "../version";
@@ -41,29 +45,34 @@ import { STRUCTURAL_SINGLE_CANDIDATE_CONFIDENCE, STRUCTURAL_AMBIGUOUS_CONFIDENCE
 
 export interface StructuralCorrelationDeps {
 
-  findConversationLink: typeof defaultFindConversationLink;
+  findConversationLink: ConversationLinkRepository["findConversationLink"];
 
-  listWorksForConversation: typeof defaultListWorksForConversation;
+  listWorksForConversation: WorkProjectionRepository["listWorksForConversation"];
 
   // SOR-53(Notion Structural Correlator)。listWorksForConversation()と
   // 対になる、Notion resource ref向けの読み取り専用query
-  // (core/tact-work/store.ts、既存evidenceRefsをそのまま照会するだけ)。
-  listWorksForNotionResource: typeof defaultListWorksForNotionResource;
+  // (WorkProjectionRepository、既存evidenceRefsをそのまま照会するだけ)。
+  listWorksForNotionResource: WorkProjectionRepository["listWorksForNotionResource"];
 
   getServiceRoleKey: typeof defaultGetServiceRoleKey;
 
 }
 
+// 遅延解決(絶対条件、SOR-135): registryのgetterは実際に呼ばれるまで
+// 評価されない(store.tsのdefaultResolveTargetWorkForCorrelationDepsと
+// 同じ設計)。
 export const defaultStructuralCorrelationDeps: StructuralCorrelationDeps = {
-  findConversationLink: defaultFindConversationLink,
-  listWorksForConversation: defaultListWorksForConversation,
-  listWorksForNotionResource: defaultListWorksForNotionResource,
+  findConversationLink: (input) => getConversationLinkRepository().findConversationLink(input),
+  listWorksForConversation: (conversationId, userId, accessToken) =>
+    getWorkProjectionRepository().listWorksForConversation(conversationId, userId, accessToken),
+  listWorksForNotionResource: (resourceRef, userId, accessToken) =>
+    getWorkProjectionRepository().listWorksForNotionResource(resourceRef, userId, accessToken),
   getServiceRoleKey: defaultGetServiceRoleKey,
 };
 
 function buildDecisionFromCandidateWorks(
   execution: CanonicalExecution,
-  works: Work[],
+  works: WorkReference[],
   matchedReasonCode: string
 ): WorkCorrelationDecision | null {
 
@@ -115,16 +124,16 @@ async function runSlackStructuralCorrelation(
 
   if (slack.threadTs) {
 
-    const threadConversationId = await deps.findConversationLink({
+    const threadLink = await deps.findConversationLink({
       channel: "slack",
       externalWorkspaceId: slack.teamId,
       externalConversationId: slack.channel,
       externalThreadId: slack.threadTs,
     });
 
-    if (threadConversationId) {
+    if (threadLink) {
 
-      const works = await deps.listWorksForConversation(threadConversationId, userId, accessToken);
+      const works = await deps.listWorksForConversation(threadLink.conversationId, userId, accessToken);
       const decision = buildDecisionFromCandidateWorks(execution, works, "slack_thread_match");
 
       if (decision) {
@@ -138,17 +147,17 @@ async function runSlackStructuralCorrelation(
   // thread単位のconversation linkが無い(またはWorkが無い)場合、
   // channel単位のconversation link(thread指定なし)でも試す
   // ——thread単位より弱いが、依然として構造的な証拠である。
-  const channelConversationId = await deps.findConversationLink({
+  const channelLink = await deps.findConversationLink({
     channel: "slack",
     externalWorkspaceId: slack.teamId,
     externalConversationId: slack.channel,
   });
 
-  if (!channelConversationId) {
+  if (!channelLink) {
     return null;
   }
 
-  const works = await deps.listWorksForConversation(channelConversationId, userId, accessToken);
+  const works = await deps.listWorksForConversation(channelLink.conversationId, userId, accessToken);
 
   return buildDecisionFromCandidateWorks(execution, works, "slack_channel_match");
 

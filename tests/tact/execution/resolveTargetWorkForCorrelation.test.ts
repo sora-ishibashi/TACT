@@ -12,18 +12,18 @@ import {
   WORK_TERMINAL_STATUSES,
   type ResolveTargetWorkForCorrelationDeps,
 } from "../../../core/tact-execution/store";
-import type { Work } from "../../../core/tact-work/types";
+import type { WorkReference } from "../../../core/execution-contract";
 import { check, summarize, type CheckResult } from "../lib/check";
 
-function makeWork(overrides: Partial<Work> = {}): Work {
+// SOR-135 Phase 1 (Runs isolation): resolveTargetWorkForCorrelation() now
+// depends on the product-neutral WorkReference projection, not Yolna's
+// full Work entity — this fixture mirrors that narrower shape.
+function makeWork(overrides: Partial<WorkReference> = {}): WorkReference {
   return {
     id: "work-1",
-    userId: "user-1",
-    createdByActorKind: "user",
-    createdByActorId: "user-1",
+    title: null,
     status: "running",
-    createdAt: "2026-09-20T00:00:00.000Z",
-    updatedAt: "2026-09-20T00:00:00.000Z",
+    conversationId: null,
     ...overrides,
   };
 }

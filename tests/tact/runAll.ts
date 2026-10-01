@@ -240,6 +240,8 @@ import { run as runExecutionAdaptersSlackWebApiAdapter } from "./execution/adapt
 import { run as runExecutionRegistryStore } from "./execution/registry/store.test";
 import { run as runExecutionRegistryMigrationContract } from "./execution/registry/migrationContract.test";
 import { run as runExecutionRegistryObservationPriority } from "./execution/registry/observationPriority.test";
+import { run as runExecutionRunsCoreForbiddenDependency } from "./execution/runsCoreForbiddenDependency.test";
+import { run as runExecutionRunsCoreImportIsolation } from "./execution/runsCoreImportIsolation.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -455,6 +457,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/registry/store", run: runExecutionRegistryStore },
   { name: "execution/registry/migrationContract", run: runExecutionRegistryMigrationContract },
   { name: "execution/registry/observationPriority", run: runExecutionRegistryObservationPriority },
+  { name: "execution/runsCoreForbiddenDependency", run: runExecutionRunsCoreForbiddenDependency },
+  { name: "execution/runsCoreImportIsolation", run: runExecutionRunsCoreImportIsolation },
 ];
 
 async function main() {

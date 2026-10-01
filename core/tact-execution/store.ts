@@ -22,8 +22,18 @@
 // `.eq("user_id", userId)`を伴うクエリを組み立てる。
 
 import { getServiceRoleClient, getServiceRoleKey } from "../database/supabaseServiceRole";
-import { getWork } from "../tact-work/store";
-import type { Work, WorkStatus } from "../tact-work/types";
+// SOR-135 Phase 1 (Runs isolation): this file no longer imports
+// core/tact-work/store or core/tact-work/types at the module level. Work
+// data is reached only through the product-neutral WorkProjectionRepository
+// contract (core/execution-contract) via the runtime-registered registry
+// (./projection/registry) — never a static import of Yolna's Work store.
+// Importing core/tact-execution must succeed with zero Yolna secrets
+// present; a static `getWork` import here previously pulled in
+// core/tact-work/store.ts's own import chain (via core/tact-orchestrator)
+// down to core/llm/providers/openai.ts, which throws at module scope when
+// OPENAI_API_KEY is missing.
+import { getWorkProjectionRepository } from "./projection/registry";
+import type { WorkReference, WorkProjectionRepository } from "../execution-contract";
 import type { JsonValue } from "../tact-work/approvalIntegrity";
 import { validateCaptureExecutionInput } from "./validation";
 import type {
@@ -56,23 +66,28 @@ const POSTGRES_UNIQUE_VIOLATION_CODE = "23505";
 // Executionを自動で紐付けるべきではない(絶対条件)。manual
 // reclassification(reclassifyExecutionWork())はこのguardの対象外
 // ——人間が明示的に意図して行う操作であるため。
-export const WORK_TERMINAL_STATUSES: readonly WorkStatus[] = ["completed", "failed", "cancelled"];
+export const WORK_TERMINAL_STATUSES: readonly string[] = ["completed", "failed", "cancelled"];
 
 export type ResolveTargetWorkForCorrelationResult =
-  | { ok: true; work: Work }
+  | { ok: true; work: WorkReference }
   | { ok: false; reason: "not_found" }
   | { ok: false; reason: "not_correlatable" };
 
 export interface ResolveTargetWorkForCorrelationDeps {
 
-  getWork: typeof getWork;
+  getWork: WorkProjectionRepository["getWork"];
 
   getServiceRoleKey: typeof getServiceRoleKey;
 
 }
 
+// 遅延解決(絶対条件、SOR-135): registryは呼び出された時点でのみ参照する
+// ——このobject自体はmodule読み込み時に評価されるが、registryのgetter
+// (getWorkProjectionRepository())はこのarrow functionが実際に呼ばれる
+// (=本物のWork Correlationが実行される)まで一切評価されない。未登録の
+// まま呼ばれた場合はregistry.tsのfail-closed例外がそのまま伝播する。
 export const defaultResolveTargetWorkForCorrelationDeps: ResolveTargetWorkForCorrelationDeps = {
-  getWork,
+  getWork: (workId, userId, accessToken) => getWorkProjectionRepository().getWork(workId, userId, accessToken),
   getServiceRoleKey,
 };
 

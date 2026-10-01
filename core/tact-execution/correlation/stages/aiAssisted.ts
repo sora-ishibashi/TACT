@@ -21,7 +21,10 @@
 // WorkCorrelationDecision | null)は変えずに内部実装だけを差し替え
 // られる形を維持する。
 
-import type { Work } from "../../../tact-work/types";
+// SOR-135 Phase 1 (Runs isolation): WorkReference (core/execution-contract)
+// replaces the Yolna-shaped Work type here — this stage only ever reads
+// `.id`, so the narrower, product-neutral projection is sufficient.
+import type { WorkReference } from "../../../execution-contract";
 import type { CanonicalExecution } from "../../types";
 import type { WorkCorrelationDecision } from "../types";
 import { CORRELATOR_VERSION } from "../version";
@@ -33,7 +36,7 @@ import { AI_ASSISTED_AMBIGUOUS_CONFIDENCE as MULTIPLE_CANDIDATES_CONFIDENCE } fr
 // candidatesはstages/temporalParticipant.tsが既に「活動中のWorkのみ」
 // へ絞り込んだ後の集合(絶対条件: このstage単体では候補を広げない)。
 export function runAiAssistedCorrelation(
-  candidates: readonly Work[],
+  candidates: readonly WorkReference[],
   execution: CanonicalExecution
 ): WorkCorrelationDecision | null {
 
