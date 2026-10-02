@@ -20,6 +20,10 @@ The expected execution rows are labelled `fixture_expectation` and
 `observed = 0`. They are comparison data for later Reality Tests; they are not
 fabricated provider or Runs logs.
 
+`export-ground-truth.mjs` is the explicit SOR-142 to SOR-143 mapping boundary:
+it derives an independent JSONL ledger from stable employee, Work, scenario, and
+expected-operation IDs. It does not read, write, or seed a Runs datastore.
+
 ## Reused repository assets and boundaries
 
 The design reuses the SOR-130 reality-test principles:
@@ -78,6 +82,19 @@ Run focused tests:
 
 ```powershell
 node --test experiments/sor142-nexaworks-reality-test/test.mjs
+```
+
+Export and validate the independent ledger without touching Runs:
+
+```powershell
+node experiments/sor142-nexaworks-reality-test/export-ground-truth.mjs --out $env:TEMP\\sor142-ground-truth.jsonl
+npx tsx experiments/sor143-ground-truth/validate-ledger.ts $env:TEMP\\sor142-ground-truth.jsonl
+```
+
+Report external test availability without contacting providers:
+
+```powershell
+node experiments/sor142-nexaworks-reality-test/external-paths.mjs
 ```
 
 ## Local runtime and database architecture

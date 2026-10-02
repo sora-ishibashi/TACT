@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { createSeededDatabase, loadFixture, verifyDatabase } from "./lib/database.mjs";
 import { assertParentEnvironmentSafe, assertRuntimeEnvironmentIsIsolated, buildIsolatedRuntimeEnvironment, parsePort } from "./lib/guards.mjs";
+import { buildGroundTruthLedger } from "./ground-truth.mjs";
 
 test("fixture seeds deterministic, internally consistent local data", () => {
   const directory = mkdtempSync(join(tmpdir(), "sor142-nexaworks-"));
@@ -37,6 +38,16 @@ test("fixture provides stable expected cases without claiming observation", () =
   assert.ok(data.expected_executions.some((item) => item.expected_outcome === "failure"));
   assert.ok(data.expected_executions.some((item) => item.expected_outcome === "retry_success" && item.retry_of));
   assert.deepEqual(new Set(data.works.map((work) => work.scenario)), new Set(["sales", "product", "operations"]));
+});
+
+test("fixture maps to a valid independent SOR-143 ledger without claiming Runs observation", () => {
+  const { data } = loadFixture();
+  const records = buildGroundTruthLedger(data);
+  assert.equal(records.length, data.expected_executions.length);
+  assert.ok(records.every((record) => record.expectedObservationStatus === "UNSUPPORTED"));
+  assert.ok(records.every((record) => record.captureGapExpectation === "UNSUPPORTED"));
+  assert.ok(records.some((record) => record.workAssignmentBasis === "UNKNOWN" && record.expectedWorkId === null));
+  assert.ok(records.some((record) => record.attemptNumber === 2 && record.retryGroupId !== null));
 });
 
 test("cloud and staging targets fail closed", () => {
