@@ -2,10 +2,10 @@
 // Yolna Runs Standalone — Production Env / Secret Contract (SOR-135 Phase 4A)
 // =========================
 //
-// Single source of truth for which environment variables the Standalone
-// Runs runtime may hold, and which Yolna-owned secrets it must never hold.
-// Both scripts/verifyEnvAllowlist.ts (CLI/CI entrypoint) and any future
-// boot-time check import this module rather than duplicating the lists.
+// Single source of truth for which product-owned environment variables the
+// Standalone Runs runtime may hold. OS, npm, CI, and Vercel also provide
+// non-product metadata; those names are classified separately so an unknown
+// credential cannot hide among otherwise harmless ambient variables.
 //
 // RUNS_ENV_CONTRACT was built by auditing actual `process.env.*` reads
 // across products/yolna-runs, packages/runs-core, and packages/
@@ -68,6 +68,55 @@ export const RUNS_ENV_CONTRACT: readonly EnvContractEntry[] = [
       "SOR-8's responsibility, not implemented by this token.",
   },
 
+];
+
+export const RUNS_ALLOWED_ENV: readonly string[] = RUNS_ENV_CONTRACT.map((entry) => entry.name);
+
+// Exact names only. Do not replace this with broad prefixes such as VERCEL_
+// or npm_config_: both namespaces can also contain credentials (for example
+// an OIDC token or registry auth token). These entries are runtime/build
+// metadata observed or documented for the supported local, npm, CI, and
+// Vercel execution paths.
+export const TRUSTED_AMBIENT_ENV: readonly string[] = [
+  "PATH",
+  "HOME",
+  "USERPROFILE",
+  "NODE_ENV",
+  "NODE_OPTIONS",
+  "CI",
+  "INIT_CWD",
+  "npm_command",
+  "npm_config_cache",
+  "npm_config_prefix",
+  "npm_config_user_agent",
+  "npm_execpath",
+  "npm_lifecycle_event",
+  "npm_lifecycle_script",
+  "npm_node_execpath",
+  "npm_package_json",
+  "npm_package_name",
+  "npm_package_version",
+  "VERCEL",
+  "VERCEL_ENV",
+  "VERCEL_TARGET_ENV",
+  "VERCEL_URL",
+  "VERCEL_BRANCH_URL",
+  "VERCEL_PROJECT_PRODUCTION_URL",
+  "VERCEL_PROJECT_ID",
+  "VERCEL_ORG_ID",
+  "VERCEL_REGION",
+  "VERCEL_DEPLOYMENT_ID",
+  "VERCEL_SKEW_PROTECTION_ENABLED",
+  "VERCEL_GIT_PROVIDER",
+  "VERCEL_GIT_REPO_SLUG",
+  "VERCEL_GIT_REPO_OWNER",
+  "VERCEL_GIT_REPO_ID",
+  "VERCEL_GIT_COMMIT_REF",
+  "VERCEL_GIT_COMMIT_SHA",
+  "VERCEL_GIT_COMMIT_MESSAGE",
+  "VERCEL_GIT_COMMIT_AUTHOR_LOGIN",
+  "VERCEL_GIT_COMMIT_AUTHOR_NAME",
+  "VERCEL_GIT_PULL_REQUEST_ID",
 ];
 
 // =========================
@@ -144,15 +193,73 @@ export const FORBIDDEN_SECRET_PREFIXES: readonly string[] = [
   "BRAVE_",
   "SLACK_",
   "TRIGGER_",
-  "CODEX_",
   "NOTION_",
   "SOR130_",
 ];
 
+// Credential/capability vocabulary for providers that do not exist yet.
+// Normalize punctuation before matching so FOO-ACCESS-TOKEN and
+// FOO_ACCESS_TOKEN receive the same classification. Exact trusted ambient
+// names are checked first; arbitrary VERCEL_*/npm_* variables do not bypass
+// this detector.
+const SENSITIVE_ENV_NAME =
+  /(^|_)(TOKEN|SECRET|API_KEY|KEY|PASSWORD|CREDENTIAL|CREDENTIALS|SERVICE_ROLE|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SIGNING|WEBHOOK_SECRET|DATABASE_URL|DB_PASSWORD)($|_)/;
+
+export type EnvClassification =
+  | "RUNS_ALLOWED_ENV"
+  | "TRUSTED_AMBIENT_ENV"
+  | "UNKNOWN_SENSITIVE_ENV"
+  | "OTHER_NON_SENSITIVE_ENV";
+
+export function classifyEnvName(name: string): EnvClassification {
+  if (RUNS_ALLOWED_ENV.includes(name)) {
+    return "RUNS_ALLOWED_ENV";
+  }
+
+  if (TRUSTED_AMBIENT_ENV.includes(name)) {
+    return "TRUSTED_AMBIENT_ENV";
+  }
+
+  if (
+    FORBIDDEN_SECRET_NAMES.includes(name) ||
+    FORBIDDEN_SECRET_PREFIXES.some((prefix) => name.startsWith(prefix))
+  ) {
+    return "UNKNOWN_SENSITIVE_ENV";
+  }
+
+  const normalized = name.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  return SENSITIVE_ENV_NAME.test(normalized)
+    ? "UNKNOWN_SENSITIVE_ENV"
+    : "OTHER_NON_SENSITIVE_ENV";
+}
+
+const TRUSTED_VERCEL_BUILD_CREDENTIAL_ENV: readonly string[] = [
+  "TURBO_CI_VENDOR_ENV_KEY",
+  "VERCEL_ARTIFACTS_TOKEN",
+  "VERCEL_AUTOMATION_BYPASS_SECRET",
+  "VERCEL_DEPLOYMENT_KEY",
+  "VERCEL_ENV_ENC_KEY",
+  "VERCEL_OIDC_TOKEN",
+];
+
+function isTrustedVercelBuildCredential(name: string, env: NodeJS.ProcessEnv): boolean {
+  // Vercel injects these exact platform credentials into its build worker.
+  // Runs does not read them. Permit them only inside an identifiable
+  // non-Production Vercel environment; a locally pulled value (or a
+  // Production deployment) still fails. Keep this list exact: a broad
+  // VERCEL_ or TURBO_ exception would let unrelated credentials bypass the
+  // product boundary.
+  return (
+    TRUSTED_VERCEL_BUILD_CREDENTIAL_ENV.includes(name) &&
+    env.VERCEL === "1" &&
+    (env.VERCEL_ENV === "preview" || env.VERCEL_ENV === "development")
+  );
+}
+
 export interface EnvAuditResult {
   pass: boolean;
   missingRequired: string[];
-  forbiddenPresent: string[];
+  unknownSensitivePresent: string[];
 }
 
 // Fail-closed by construction: a var counts as "present" the moment
@@ -165,24 +272,23 @@ export function auditEnv(env: NodeJS.ProcessEnv): EnvAuditResult {
     .filter((entry) => entry.required && !env[entry.name])
     .map((entry) => entry.name);
 
-  const forbiddenPresent = Object.keys(env).filter((name) => {
+  const unknownSensitivePresent = Object.keys(env).filter((name) => {
 
     if (!env[name]) {
       return false;
     }
 
-    if (FORBIDDEN_SECRET_NAMES.includes(name)) {
-      return true;
-    }
-
-    return FORBIDDEN_SECRET_PREFIXES.some((prefix) => name.startsWith(prefix));
+    return (
+      classifyEnvName(name) === "UNKNOWN_SENSITIVE_ENV" &&
+      !isTrustedVercelBuildCredential(name, env)
+    );
 
   });
 
   return {
-    pass: missingRequired.length === 0 && forbiddenPresent.length === 0,
+    pass: missingRequired.length === 0 && unknownSensitivePresent.length === 0,
     missingRequired,
-    forbiddenPresent,
+    unknownSensitivePresent,
   };
 
 }

@@ -16,11 +16,13 @@
     "runs:verify:forbidden-routes": "tsx scripts/verify/standaloneForbiddenRoutes.ts",
     "runs:verify:dependency-audit": "tsx scripts/verify/standaloneDependencyAudit.ts",
     "runs:verify:clean-install": "bash scripts/verify/standaloneCleanInstall.sh",
-    "runs:verify:env": "npm --prefix products/yolna-runs run verify:env",
+    "runs:verify:env": "npm --prefix products/yolna-runs run verify:env -- --mode=production",
     "runs:verify:client-server-boundary": "tsx scripts/verify/runsClientServerBoundary.ts",
     "runs:verify:no-reverse-import": "tsx scripts/verify/rootForbiddenStandaloneImport.ts",
     "runs:verify:deployment-artifact": "tsx scripts/verify/standaloneDeploymentArtifactAudit.ts",
-    "runs:verify:all": "npm run runs:verify:forbidden-packages && npm run runs:verify:forbidden-imports && npm run runs:verify:forbidden-routes && npm run runs:verify:client-server-boundary && npm run runs:verify:no-reverse-import && npm run runs:verify:clean-install"
+    "runs:verify:source-boundaries": "npm --prefix products/yolna-runs run verify:boundaries && npm run runs:verify:no-reverse-import",
+    "runs:verify:all": "npm --prefix products/yolna-runs run verify && npm run runs:verify:no-reverse-import && npm run runs:verify:clean-install",
+    "runs:security": "npm --prefix products/yolna-runs run security"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
