@@ -30,7 +30,9 @@
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",
     "db:independence-check": "bash scripts/dbIndependenceCheck.sh",
-    "db:reality-test": "tsx scripts/dbRealityTest.ts"
+    "db:reality-test": "tsx scripts/dbRealityTest.ts",
+    "db:rpc-acl-test": "tsx scripts/rpcExecuteSecurityTest.ts",
+    "db:rpc-acl-privileges": "tsx scripts/rpcExecutePrivilegeMatrix.ts"
   },
   "dependencies": {
     "@next/env": "16.3.8",
