@@ -44,6 +44,7 @@ const ALLOWED_ROUTES = new Set([
   "/api/tact/runs/work/[workId]",
   "/api/tact/runs/ingest/work",
   "/api/tact/runs/ingest/conversation-link",
+  "/api/tact/runs/ingest/execution",
   "/api/tact/runs/coverage",
 ]);
 
