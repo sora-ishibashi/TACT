@@ -67,6 +67,7 @@ export {
 export * from "./permission";
 export * from "./correlation";
 export * from "./telemetry";
+export * from "./governance";
 export * from "./outcome";
 export * from "./gateway";
 export * from "./registry";

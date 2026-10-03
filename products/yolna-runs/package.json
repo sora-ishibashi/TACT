@@ -18,6 +18,8 @@
     "verify:env": "tsx scripts/verifyEnvAllowlist.ts",
     "test:env": "tsx scripts/testEnvBoundary.ts",
     "test:sor8a-security": "tsx scripts/sor8aTelemetrySecurityTest.ts",
+    "test:sor8b-governance": "tsx scripts/sor8bGovernanceTest.ts",
+    "test:sor8b-governance-db": "tsx scripts/sor8bGovernanceDbAcceptance.ts",
     "verify:forbidden-packages": "tsx ../../scripts/verify/standaloneForbiddenPackages.ts",
     "verify:forbidden-imports": "tsx ../../scripts/verify/standaloneForbiddenImports.ts",
     "verify:forbidden-routes": "tsx ../../scripts/verify/standaloneForbiddenRoutes.ts",

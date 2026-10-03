@@ -25,6 +25,15 @@ export const PERMISSION_REGISTRY_EVALUATOR_VERSION = "permission-evaluator-regis
 const NO_MATCHING_RULE_REASON_CODE = "no_matching_registry_rule";
 const AMBIGUOUS_RULES_REASON_CODE = "ambiguous_registry_rules";
 
+export interface PermissionRegistryMatchContext {
+  provider: CanonicalExecution["provider"] | null;
+  targetProvider: CanonicalExecution["targetProvider"];
+  resourceType: CanonicalExecution["resourceType"];
+  actionCategory: CanonicalExecution["actionCategory"];
+  agentId: CanonicalExecution["agentId"];
+  connectionId: CanonicalExecution["connectionId"];
+}
+
 // Human Owner指示(SOR-47 revised design section1「Principal/Agent
 // scope」): 静的allowlist(policy.tsのmatchesRule())と同じ判定に加え、
 // actorId/agentIdの厳格一致checkを追加する。ruleのnullは常に
@@ -32,7 +41,7 @@ const AMBIGUOUS_RULES_REASON_CODE = "ambiguous_registry_rules";
 export function matchesRegistryRule(
   rule: PermissionRegistryRule,
   subject: PermissionSubject,
-  execution: CanonicalExecution
+  execution: PermissionRegistryMatchContext
 ): boolean {
 
   if (rule.subjectKind !== null && rule.subjectKind !== subject.kind) {
