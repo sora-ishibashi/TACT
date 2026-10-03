@@ -20,6 +20,7 @@
 //   /api/tact/runs/work/[workId]                        (route)
 //   /api/tact/runs/ingest/work                          (route, SOR-135 Phase 4A)
 //   /api/tact/runs/ingest/conversation-link              (route, SOR-135 Phase 4A)
+//   /api/tact/runs/coverage                              (route, SOR-136)
 //
 // 禁止route prefix(section8指示、明示的に列挙): chat, research,
 // orchestrate, code, runtime, bot, artifacts, attachments, connections,
@@ -43,6 +44,7 @@ const ALLOWED_ROUTES = new Set([
   "/api/tact/runs/work/[workId]",
   "/api/tact/runs/ingest/work",
   "/api/tact/runs/ingest/conversation-link",
+  "/api/tact/runs/coverage",
 ]);
 
 function findRoutes(dir: string, routePath: string, out: string[]): void {

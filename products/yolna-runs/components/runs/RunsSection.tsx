@@ -20,6 +20,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import ActivityTable from "./ActivityTable";
 import ActivityFilters from "./ActivityFilters";
 import AttentionList from "./AttentionList";
+import ObservationCoverage from "./ObservationCoverage";
 import WorkDetailView from "./WorkDetailView";
 import CorrelationReviewModal from "./CorrelationReviewModal";
 import {
@@ -31,6 +32,7 @@ import {
   type WorkHeaderView,
   type WorkTimelineItemView,
 } from "@tact/runs-core/tact-runs-view";
+import type { CaptureGap, ObservationSurface } from "@tact/runs-core/tact-execution";
 
 type RunsView = "activity" | "attention";
 
@@ -77,6 +79,7 @@ export default function RunsSection() {
   const [attentionItems, setAttentionItems] = useState<AttentionCardView[]>([]);
   const [attentionLoading, setAttentionLoading] = useState(true);
   const [attentionError, setAttentionError] = useState<string | null>(null);
+  const [coverage, setCoverage] = useState<{ surfaces: ObservationSurface[]; gaps: CaptureGap[] }>({ surfaces: [], gaps: [] });
 
   const [workHeader, setWorkHeader] = useState<WorkHeaderView | null>(null);
   const [workItems, setWorkItems] = useState<WorkTimelineItemView[]>([]);
@@ -122,6 +125,16 @@ export default function RunsSection() {
 
     }
 
+  }, [getAccessToken]);
+
+  const loadCoverage = useCallback(async () => {
+    const accessToken = getAccessToken();
+    if (!accessToken) { setCoverage({ surfaces: [], gaps: [] }); return; }
+    try {
+      const response = await fetch("/api/tact/runs/coverage", { headers: { Authorization: `Bearer ${accessToken}` } });
+      const body = await response.json().catch(() => null);
+      if (response.ok && body?.success) setCoverage({ surfaces: Array.isArray(body.surfaces) ? body.surfaces : [], gaps: Array.isArray(body.gaps) ? body.gaps : [] });
+    } catch { setCoverage({ surfaces: [], gaps: [] }); }
   }, [getAccessToken]);
 
   const loadAttention = useCallback(async () => {
@@ -216,6 +229,11 @@ export default function RunsSection() {
     queueMicrotask(() => {
       void loadActivity();
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  useEffect(() => {
+    queueMicrotask(() => { void loadCoverage(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
@@ -436,6 +454,8 @@ export default function RunsSection() {
         )}
 
       </div>
+
+      <ObservationCoverage surfaces={coverage.surfaces} gaps={coverage.gaps} />
 
       {reviewingExecutionId && getAccessToken() && (
         <CorrelationReviewModal

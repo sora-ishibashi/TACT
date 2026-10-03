@@ -70,3 +70,4 @@ export * from "./telemetry";
 export * from "./outcome";
 export * from "./gateway";
 export * from "./registry";
+export * from "./coverage";
