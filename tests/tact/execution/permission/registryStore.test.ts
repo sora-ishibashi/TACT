@@ -23,8 +23,8 @@ import {
   validatePermissionRuleInput,
   RegistryUnavailableError,
   type PermissionRegistryStoreDeps,
-} from "../../../../core/tact-execution/permission/registryStore";
-import type { PermissionRegistryRuleInput } from "../../../../core/tact-execution/permission/types";
+} from "@tact/runs-core/tact-execution/permission/registryStore";
+import type { PermissionRegistryRuleInput } from "@tact/runs-core/tact-execution/permission/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 // =========================

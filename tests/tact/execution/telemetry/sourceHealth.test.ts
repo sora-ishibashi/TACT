@@ -2,8 +2,8 @@
 // TACT Canonical Execution — Source Health Aggregation (SOR-46)
 // =========================
 
-import { computeSourceHealthSummaries } from "../../../../core/tact-execution/telemetry/sourceHealth";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+import { computeSourceHealthSummaries } from "@tact/runs-core/tact-execution/telemetry/sourceHealth";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function execution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

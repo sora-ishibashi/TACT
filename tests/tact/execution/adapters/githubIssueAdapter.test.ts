@@ -7,7 +7,7 @@
 // なし)。SOR-130のReality Testが実際に使うadapterの、決定論的な
 // mock-based regression。
 
-import { normalizeGithubIssueInvocationToExecution } from "../../../../core/tact-execution/adapters/github/normalizeGithubIssueExecution";
+import { normalizeGithubIssueInvocationToExecution } from "@tact/runs-core/tact-execution/adapters/github/normalizeGithubIssueExecution";
 
 import { check, summarize, type CheckResult } from "../../lib/check";
 

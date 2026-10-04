@@ -8,10 +8,10 @@
 // core/tact-execution/correlation/correlate.ts)をDI経由の偽depsで
 // end-to-endに検証する——evaluator/correlator自体は一切再実装しない。
 
-import { correlateExecution, type CorrelateExecutionDeps } from "../../../../core/tact-execution/correlation/correlate";
-import { toCanonicalCorrelationResult } from "../../../../core/tact-execution/correlation/canonicalResult";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { Work } from "../../../../core/tact-work/types";
+import { correlateExecution, type CorrelateExecutionDeps } from "@tact/runs-core/tact-execution/correlation/correlate";
+import { toCanonicalCorrelationResult } from "@tact/runs-core/tact-execution/correlation/canonicalResult";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 // M-0専用test Work識別子(fixtureのみ、production codeへは一切書かない)。
@@ -61,16 +61,18 @@ function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): Canon
   };
 }
 
-function makeWork(overrides: Partial<Work> = {}): Work {
+// SOR-135 Phase 1 (Runs isolation): WorkReference projection, not Yolna's
+// full Work entity. `createdByActorId` is accepted and ignored for
+// backward-compatible test call sites (Required test 8) — no stage ever
+// reads it from a candidate (aiAssisted.ts only reads `.id`).
+function makeWork(overrides: Partial<WorkReference> & { createdByActorId?: string } = {}): WorkReference {
+  const workOverrides: Partial<WorkReference> = overrides;
   return {
     id: W_001,
-    userId: "user-1",
-    createdByActorKind: "user",
-    createdByActorId: "user-1",
+    title: null,
     status: "running",
-    createdAt: "2026-09-20T00:00:00.000Z",
-    updatedAt: "2026-09-22T00:00:00.000Z",
-    ...overrides,
+    conversationId: null,
+    ...workOverrides,
   };
 }
 

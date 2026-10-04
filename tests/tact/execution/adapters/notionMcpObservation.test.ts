@@ -2,12 +2,12 @@ import {
   executeWithNotionMcpObservation,
   observeNotionMcpExecution,
   type ObserveNotionMcpExecutionDeps,
-} from "../../../../core/tact-execution/adapters/notion/observeNotionMcpExecution";
+} from "@tact/runs-core/tact-execution/adapters/notion/observeNotionMcpExecution";
 import {
   normalizeNotionMcpInvocationToExecution,
   type NotionMcpInvocationObservation,
-} from "../../../../core/tact-execution/adapters/notion/normalizeNotionMcpExecution";
-import type { CanonicalExecution, CaptureExecutionInput } from "../../../../core/tact-execution/types";
+} from "@tact/runs-core/tact-execution/adapters/notion/normalizeNotionMcpExecution";
+import type { CanonicalExecution, CaptureExecutionInput } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function baseObservation(

@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { listExecutionsForWork, listExecutionAttentions, listLatestCorrelationDecisionsForExecutions } from "@/core/tact-execution";
-import { getWork } from "@/core/tact-work";
-import { toWorkHeaderView, toWorkTimelineItemView } from "@/core/tact-runs-view";
+import { listExecutionsForWork, listExecutionAttentions, listLatestCorrelationDecisionsForExecutions } from "@tact/runs-core/tact-execution";
+import { getWorkViaRegistry } from "@tact/runs-core/tact-execution/projection/registry";
+import { toWorkHeaderView, toWorkTimelineItemView } from "@tact/runs-core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
+// SOR-135 Phase 2 (Runs isolation): side-effect-only import — see
+// app/api/tact/runs/activity/route.ts's identical note. Registers the
+// real Yolna-backed WorkProjectionRepository so getWorkViaRegistry()
+// below actually resolves data in the root Yolna application.
+import "@/core/tact-execution-yolna-adapter";
 
 // =========================
 // GET /api/tact/runs/work/[workId] (SOR-54 Screen 3: Work Detail)
@@ -36,10 +41,20 @@ export async function GET(
 
     const { workId } = await context.params;
 
-    // getWork()はrequest-scoped client(既存user access token)で
-    // tenant/所有権を検証する既存契約(core/tact-work/store.ts)——
-    // このRoute自身は所有権判定ロジックを持たない。
-    const work = await getWork(workId, userId, accessToken);
+    // getWorkViaRegistry()はrequest-scoped accessTokenでtenant/所有権を
+    // 検証する既存契約(WorkProjectionRepository実装側、root Yolna
+    // applicationではcore/tact-work/store.ts)——このRoute自身は所有権
+    // 判定ロジックを持たない。Fail closed, not fail silent: no
+    // WorkProjectionRepository registered (standalone Runs before SOR-135
+    // Phase 3) must not be mistaken for "this Work does not exist".
+    let work;
+
+    try {
+      work = await getWorkViaRegistry(workId, userId, accessToken);
+    } catch (error) {
+      console.error("[api/tact/runs/work/[workId]] Work projection unavailable", error);
+      return NextResponse.json({ success: false, error: "work projection unavailable" }, { status: 503 });
+    }
 
     if (!work) {
       return NextResponse.json({ success: false, error: "work not found" }, { status: 404 });

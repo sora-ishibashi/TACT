@@ -11,7 +11,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
-const PERMISSION_DIR = join(__dirname, "..", "..", "..", "..", "core", "tact-execution", "permission");
+const PERMISSION_DIR = join(__dirname, "..", "..", "..", "..", "packages", "runs-core", "tact-execution", "permission");
 
 function listTsFiles(dir: string): string[] {
   const out: string[] = [];

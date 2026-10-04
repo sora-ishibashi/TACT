@@ -1,0 +1,9 @@
+{
+  "name": "@tact/execution-contract",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Product-neutral Yolna <-> Yolna Runs execution/work contract (schema/type only, no runtime implementation).",
+  "main": "index.ts",
+  "types": "index.ts",
+  "dependencies": {}
+}

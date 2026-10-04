@@ -30,5 +30,13 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    // SOR-135 Phase 2: products/yolna-runs is a fully independent Next.js
+    // application with its own tsconfig.json (its own "@/*" alias rooted
+    // at its own directory, not this one). Root tsc must not try to
+    // typecheck it as part of this project — run `npx tsc --noEmit`
+    // inside products/yolna-runs for that.
+    "products"
+  ]
 }

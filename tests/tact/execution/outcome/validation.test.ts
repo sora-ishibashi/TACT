@@ -5,8 +5,8 @@
 // 対象: core/tact-execution/outcome/validation.tsのvalidateAssertExecutionOutcomeInput()
 // (純粋関数、DBアクセスなし)。
 
-import { validateAssertExecutionOutcomeInput } from "../../../../core/tact-execution/outcome/validation";
-import type { AssertExecutionOutcomeInput } from "../../../../core/tact-execution/outcome/types";
+import { validateAssertExecutionOutcomeInput } from "@tact/runs-core/tact-execution/outcome/validation";
+import type { AssertExecutionOutcomeInput } from "@tact/runs-core/tact-execution/outcome/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function baseInput(overrides: Partial<AssertExecutionOutcomeInput> = {}): AssertExecutionOutcomeInput {

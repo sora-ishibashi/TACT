@@ -8,12 +8,12 @@
 // (evaluatePermission()自体はpure、persistPermissionDecision()/
 // persistExecutionAttention()はfake実装を注入する)。
 
-import { observeExecutionPermission, type ObserveExecutionPermissionDeps } from "../../../../core/tact-execution/permission/observe";
-import { deriveExecutionAttentionCandidate } from "../../../../core/tact-execution/permission/attention";
-import type { PersistPermissionDecisionOutcome } from "../../../../core/tact-execution/permission/store";
-import type { PersistExecutionAttentionOutcome } from "../../../../core/tact-execution/permission/attentionStore";
-import type { PermissionDecision } from "../../../../core/tact-execution/permission/types";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+import { observeExecutionPermission, type ObserveExecutionPermissionDeps } from "@tact/runs-core/tact-execution/permission/observe";
+import { deriveExecutionAttentionCandidate } from "@tact/runs-core/tact-execution/permission/attention";
+import type { PersistPermissionDecisionOutcome } from "@tact/runs-core/tact-execution/permission/store";
+import type { PersistExecutionAttentionOutcome } from "@tact/runs-core/tact-execution/permission/attentionStore";
+import type { PermissionDecision } from "@tact/runs-core/tact-execution/permission/types";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

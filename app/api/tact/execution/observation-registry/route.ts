@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { listObservationCapabilities } from "@/core/tact-execution";
-import type { ExecutionActionCategory, ExecutionProvider } from "@/core/tact-execution";
+import { listObservationCapabilities } from "@tact/runs-core/tact-execution";
+import type { ExecutionActionCategory, ExecutionProvider } from "@tact/runs-core/tact-execution";
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
 // =========================

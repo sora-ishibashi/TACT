@@ -24,14 +24,14 @@ import {
   toWorkHeaderView,
   ACTIVITY_ITEM_VIEW_KEYS,
   WORK_TIMELINE_ITEM_VIEW_KEYS,
-} from "../../../core/tact-runs-view";
+} from "@tact/runs-core/tact-runs-view";
 import type {
   CanonicalExecution,
   ExecutionPermissionStatus,
   ExecutionCorrelationStatus,
-} from "../../../core/tact-execution/types";
-import type { AttentionItemView } from "../../../core/tact-execution/permission/attentionStore";
-import type { Work } from "../../../core/tact-work/types";
+} from "@tact/runs-core/tact-execution/types";
+import type { AttentionItemView } from "@tact/runs-core/tact-execution/permission/attentionStore";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 // =========================
@@ -118,7 +118,7 @@ function baseAttentionItem(overrides: Partial<AttentionItemView> = {}): Attentio
   };
 }
 
-function baseWork(overrides: Partial<Pick<Work, "id" | "title" | "status">> = {}): Pick<Work, "id" | "title" | "status"> {
+function baseWork(overrides: Partial<Pick<WorkReference, "id" | "title" | "status">> = {}): Pick<WorkReference, "id" | "title" | "status"> {
   return {
     id: "W-001",
     title: "Example Work",

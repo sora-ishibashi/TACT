@@ -11,10 +11,10 @@
 // (handleSlackWebhookRequest.ts)への配線はこのfileの対象外
 // (observeSlackAppMentionExecution.tsの既存コメント参照)。
 
-import { observeSlackAppMentionExecution } from "../../../../core/tact-execution/adapters/slack/observeSlackAppMentionExecution";
-import type { ObserveCanonicalExecutionDeps } from "../../../../core/tact-execution/gateway/types";
-import type { CanonicalExecution, CaptureExecutionInput } from "../../../../core/tact-execution/types";
-import type { ExecutionAdapterContext } from "../../../../core/tact-execution/adapters/types";
+import { observeSlackAppMentionExecution } from "@tact/runs-core/tact-execution/adapters/slack/observeSlackAppMentionExecution";
+import type { ObserveCanonicalExecutionDeps } from "@tact/runs-core/tact-execution/gateway/types";
+import type { CanonicalExecution, CaptureExecutionInput } from "@tact/runs-core/tact-execution/types";
+import type { ExecutionAdapterContext } from "@tact/runs-core/tact-execution/adapters/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 const context: ExecutionAdapterContext = {

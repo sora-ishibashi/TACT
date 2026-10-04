@@ -6,16 +6,16 @@
 // (explicit/structural/temporalParticipant/aiAssisted)。実Supabase
 // 接続は一切行わない(偽deps注入)。
 
-import { runExplicitCorrelation } from "../../../../core/tact-execution/correlation/stages/explicit";
-import { runStructuralCorrelation, type StructuralCorrelationDeps } from "../../../../core/tact-execution/correlation/stages/structural";
+import { runExplicitCorrelation } from "@tact/runs-core/tact-execution/correlation/stages/explicit";
+import { runStructuralCorrelation, type StructuralCorrelationDeps } from "@tact/runs-core/tact-execution/correlation/stages/structural";
 import {
   resolveTemporalParticipantCandidates,
   type TemporalParticipantCandidateDeps,
-} from "../../../../core/tact-execution/correlation/stages/temporalParticipant";
-import { runAiAssistedCorrelation } from "../../../../core/tact-execution/correlation/stages/aiAssisted";
-import { resolveCorrelationContext } from "../../../../core/tact-execution/correlation/context";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { Work } from "../../../../core/tact-work/types";
+} from "@tact/runs-core/tact-execution/correlation/stages/temporalParticipant";
+import { runAiAssistedCorrelation } from "@tact/runs-core/tact-execution/correlation/stages/aiAssisted";
+import { resolveCorrelationContext } from "@tact/runs-core/tact-execution/correlation/context";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
@@ -62,16 +62,21 @@ function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalEx
   };
 }
 
-function makeWork(overrides: Partial<Work> = {}): Work {
+// SOR-135 Phase 1 (Runs isolation): the Structural/Temporal/AI-assisted
+// stages now depend on the product-neutral WorkReference projection, not
+// Yolna's full Work entity — this fixture mirrors that narrower shape.
+// `updatedAt` is accepted as an override for backward-compatible test call
+// sites (AI-assisted's recency tests) even though WorkReference itself does
+// not carry it; it is simply ignored (runAiAssistedCorrelation() never
+// reads timestamps from its candidates — Part5's point exactly).
+function makeWork(overrides: Partial<WorkReference> & { updatedAt?: string } = {}): WorkReference {
+  const workOverrides: Partial<WorkReference> = overrides;
   return {
     id: "work-1",
-    userId: "user-1",
-    createdByActorKind: "user",
-    createdByActorId: "user-1",
+    title: null,
     status: "running",
-    createdAt: "2026-09-20T00:00:00.000Z",
-    updatedAt: "2026-09-20T00:00:00.000Z",
-    ...overrides,
+    conversationId: null,
+    ...workOverrides,
   };
 }
 
@@ -109,7 +114,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     const deps: StructuralCorrelationDeps = {
       findConversationLink: async (params) =>
-        params.externalThreadId === "100.001" ? "conv-thread-1" : null,
+        params.externalThreadId === "100.001" ? { conversationId: "conv-thread-1" } : null,
       listWorksForConversation: async (conversationId) =>
         conversationId === "conv-thread-1" ? [makeWork({ id: "work-thread-1" })] : [],
       listWorksForNotionResource: async () => [],
@@ -132,7 +137,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     const deps: StructuralCorrelationDeps = {
       findConversationLink: async (params) =>
-        params.externalThreadId === undefined && params.externalConversationId === "C1" ? "conv-channel-1" : null,
+        params.externalThreadId === undefined && params.externalConversationId === "C1" ? { conversationId: "conv-channel-1" } : null,
       listWorksForConversation: async (conversationId) =>
         conversationId === "conv-channel-1" ? [makeWork({ id: "work-channel-1" })] : [],
       listWorksForNotionResource: async () => [],
@@ -156,7 +161,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const works = [makeWork({ id: "work-a" }), makeWork({ id: "work-b" })];
 
     const deps: StructuralCorrelationDeps = {
-      findConversationLink: async () => "conv-multi-1",
+      findConversationLink: async () => ({ conversationId: "conv-multi-1" }),
       listWorksForConversation: async () => works,
       listWorksForNotionResource: async () => [],
       getServiceRoleKey: () => "service-role-key",
@@ -202,10 +207,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     let capturedUserId: string | undefined;
 
     const deps: StructuralCorrelationDeps = {
-      findConversationLink: async () => "conv-tenant-1",
+      findConversationLink: async () => ({ conversationId: "conv-tenant-1" }),
       listWorksForConversation: async (_conversationId, userId) => {
         capturedUserId = userId;
-        return [makeWork({ id: "work-tenant-1", userId })];
+        return [makeWork({ id: "work-tenant-1" })];
       },
       listWorksForNotionResource: async () => [],
       getServiceRoleKey: () => "service-role-key",
@@ -221,7 +226,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // ---- service role未設定 -> null(fail safe、次のstageへ) ----
   {
     const deps: StructuralCorrelationDeps = {
-      findConversationLink: async () => "conv-1",
+      findConversationLink: async () => ({ conversationId: "conv-1" }),
       listWorksForConversation: async () => [makeWork()],
       listWorksForNotionResource: async () => [],
       getServiceRoleKey: () => null,
@@ -241,8 +246,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const deps: StructuralCorrelationDeps = {
       findConversationLink: async (params) => {
         seenWorkspaceIds.push(params.externalWorkspaceId ?? "");
-        if (params.externalWorkspaceId === "T-alpha" && params.externalThreadId === "100.001") return "conv-alpha";
-        if (params.externalWorkspaceId === "T-beta" && params.externalThreadId === "100.001") return "conv-beta";
+        if (params.externalWorkspaceId === "T-alpha" && params.externalThreadId === "100.001") return { conversationId: "conv-alpha" };
+        if (params.externalWorkspaceId === "T-beta" && params.externalThreadId === "100.001") return { conversationId: "conv-beta" };
         return null;
       },
       listWorksForConversation: async (conversationId) =>

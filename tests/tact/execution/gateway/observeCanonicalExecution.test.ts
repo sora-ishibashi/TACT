@@ -11,10 +11,10 @@
 // regression(tests/tact/execution/adapters/notionMcpObservation.test.ts)
 // が「Notionを通しても同じ結果になる」ことを別途保証する。
 
-import { observeCanonicalExecution } from "../../../../core/tact-execution/gateway/observeCanonicalExecution";
-import type { ObservationSource, ObserveCanonicalExecutionDeps } from "../../../../core/tact-execution/gateway/types";
-import type { ExecutionAdapterNormalizeResult } from "../../../../core/tact-execution/adapters/types";
-import type { CanonicalExecution, CaptureExecutionInput } from "../../../../core/tact-execution/types";
+import { observeCanonicalExecution } from "@tact/runs-core/tact-execution/gateway/observeCanonicalExecution";
+import type { ObservationSource, ObserveCanonicalExecutionDeps } from "@tact/runs-core/tact-execution/gateway/types";
+import type { ExecutionAdapterNormalizeResult } from "@tact/runs-core/tact-execution/adapters/types";
+import type { CanonicalExecution, CaptureExecutionInput } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 const source: ObservationSource = {

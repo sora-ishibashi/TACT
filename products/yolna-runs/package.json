@@ -1,0 +1,55 @@
+{
+  "name": "@tact/yolna-runs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Yolna Runs — standalone observation/audit application (SOR-135 Phase 2). Installable and buildable with zero Yolna application source tree present.",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "predev": "npm run verify:env -- --mode=development",
+    "dev": "next dev",
+    "prebuild": "npm run verify:env -- --mode=production",
+    "build": "next build",
+    "prestart": "npm run verify:env -- --mode=production",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "verify:env": "tsx scripts/verifyEnvAllowlist.ts",
+    "test:env": "tsx scripts/testEnvBoundary.ts",
+    "verify:forbidden-packages": "tsx ../../scripts/verify/standaloneForbiddenPackages.ts",
+    "verify:forbidden-imports": "tsx ../../scripts/verify/standaloneForbiddenImports.ts",
+    "verify:forbidden-routes": "tsx ../../scripts/verify/standaloneForbiddenRoutes.ts",
+    "verify:client-server-boundary": "tsx ../../scripts/verify/runsClientServerBoundary.ts",
+    "verify:dependency-audit": "tsx ../../scripts/verify/standaloneDependencyAudit.ts",
+    "verify:deployment-artifact": "tsx ../../scripts/verify/standaloneDeploymentArtifactAudit.ts",
+    "verify:boundaries": "npm run verify:forbidden-packages && npm run verify:forbidden-imports && npm run verify:forbidden-routes && npm run verify:client-server-boundary && npm run verify:dependency-audit",
+    "verify": "npm run test:env && npm run verify:env -- --mode=production && npm run lint && npm run typecheck && npm run verify:boundaries && npm run build && npm run verify:deployment-artifact",
+    "security": "npm run test:env && npm run verify:env -- --mode=production && npm run verify:forbidden-packages && npm run verify:dependency-audit && npm audit --omit=dev --audit-level=high && npm audit --audit-level=high && npm --prefix ../../packages/runs-core audit --omit=dev --audit-level=high && npm --prefix ../../packages/runs-core audit --audit-level=high",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:independence-check": "bash scripts/dbIndependenceCheck.sh",
+    "db:reality-test": "tsx scripts/dbRealityTest.ts"
+  },
+  "dependencies": {
+    "@next/env": "16.3.8",
+    "@supabase/supabase-js": "^2.110.7",
+    "@tact/execution-contract": "file:../../packages/execution-contract",
+    "@tact/runs-core": "file:../../packages/runs-core",
+    "next": "16.3.8",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.8",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.12",
+    "typescript": "^5"
+  }
+}

@@ -13,8 +13,8 @@ import {
   toExecutionOutcome,
   type AssertExecutionOutcomeDeps,
   type ExecutionOutcomeRow,
-} from "../../../../core/tact-execution/outcome/store";
-import type { AssertExecutionOutcomeInput } from "../../../../core/tact-execution/outcome/types";
+} from "@tact/runs-core/tact-execution/outcome/store";
+import type { AssertExecutionOutcomeInput } from "@tact/runs-core/tact-execution/outcome/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function baseInput(overrides: Partial<AssertExecutionOutcomeInput> = {}): AssertExecutionOutcomeInput {

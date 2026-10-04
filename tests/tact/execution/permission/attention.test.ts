@@ -7,9 +7,9 @@
 // (permission_mismatch/approval_required)へ変わり、unknownはM-0で
 // Attention対象外になった。
 
-import { deriveExecutionAttentionCandidate } from "../../../../core/tact-execution/permission/attention";
-import type { PermissionDecision } from "../../../../core/tact-execution/permission/types";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+import { deriveExecutionAttentionCandidate } from "@tact/runs-core/tact-execution/permission/attention";
+import type { PermissionDecision } from "@tact/runs-core/tact-execution/permission/types";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

@@ -14,14 +14,14 @@
 // (correlate.test.ts/store.test.tsと同じDI-only方針)。実Provider経由の
 // 検証はSOR-74の完了報告に記載するreal Staging手順で別途行う。
 
-import { correlateExecution, type CorrelateExecutionDeps } from "../../../../core/tact-execution/correlation/correlate";
+import { correlateExecution, type CorrelateExecutionDeps } from "@tact/runs-core/tact-execution/correlation/correlate";
 import {
   captureExecution,
   type CaptureExecutionDeps,
   type ExecutionRow,
   type ResolveTargetWorkForCorrelationResult,
-} from "../../../../core/tact-execution/store";
-import type { CanonicalExecution, CaptureExecutionInput } from "../../../../core/tact-execution/types";
+} from "@tact/runs-core/tact-execution/store";
+import type { CanonicalExecution, CaptureExecutionInput } from "@tact/runs-core/tact-execution/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { check, summarize, type CheckResult } from "../../lib/check";
 

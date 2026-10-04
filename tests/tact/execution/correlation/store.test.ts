@@ -5,9 +5,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   persistWorkCorrelationDecision,
   type PersistWorkCorrelationDecisionDeps,
-} from "../../../../core/tact-execution/correlation/store";
-import { computeWorkCorrelationDecisionFingerprint } from "../../../../core/tact-execution/correlation/fingerprint";
-import type { WorkCorrelationDecision } from "../../../../core/tact-execution/correlation/types";
+} from "@tact/runs-core/tact-execution/correlation/store";
+import { computeWorkCorrelationDecisionFingerprint } from "@tact/runs-core/tact-execution/correlation/fingerprint";
+import type { WorkCorrelationDecision } from "@tact/runs-core/tact-execution/correlation/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function decision(overrides: Partial<WorkCorrelationDecision> = {}): WorkCorrelationDecision {

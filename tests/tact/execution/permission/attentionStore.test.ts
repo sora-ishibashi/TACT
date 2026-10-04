@@ -15,10 +15,10 @@ import {
   type AttentionRow,
   type PersistExecutionAttentionDeps,
   type ReadExecutionAttentionsDeps,
-} from "../../../../core/tact-execution/permission/attentionStore";
-import type { ExecutionAttentionCandidate } from "../../../../core/tact-execution/permission/attention";
-import type { ExecutionRow } from "../../../../core/tact-execution/store";
-import type { PermissionDecisionRow } from "../../../../core/tact-execution/permission/store";
+} from "@tact/runs-core/tact-execution/permission/attentionStore";
+import type { ExecutionAttentionCandidate } from "@tact/runs-core/tact-execution/permission/attention";
+import type { ExecutionRow } from "@tact/runs-core/tact-execution/store";
+import type { PermissionDecisionRow } from "@tact/runs-core/tact-execution/permission/store";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function baseCandidate(overrides: Partial<ExecutionAttentionCandidate> = {}): ExecutionAttentionCandidate {

@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...except templates: these are meant to be committed (no real secret
+# values), at the repo root and in every nested package/app (e.g.
+# products/yolna-runs/.env.example, SOR-135 Phase 4A).
+!.env.example
 
 # vercel
 .vercel
@@ -50,3 +54,13 @@ next-env.d.ts
 /supabase/.temp/
 /supabase/.branches/
 /supabase/config.toml
+
+# SOR-135 Phase 2: packages/* and products/* (e.g. products/yolna-runs)
+# are each independently `npm install`-able and have their own
+# node_modules/.next/build output. The rooted patterns above (/node_modules,
+# /.next/, /out/, /build) only match the repo root, so each is repeated
+# here unrooted to also cover every nested package/app.
+node_modules/
+.next/
+out/
+build/

@@ -7,13 +7,13 @@
 // runNotionStructuralCorrelation()(runStructuralCorrelation()経由)。
 // stages.test.tsの既存Slack testsと同じ方針(偽deps注入、実DB接続なし)。
 
-import { resolveCorrelationContext } from "../../../../core/tact-execution/correlation/context";
+import { resolveCorrelationContext } from "@tact/runs-core/tact-execution/correlation/context";
 import {
   runStructuralCorrelation,
   type StructuralCorrelationDeps,
-} from "../../../../core/tact-execution/correlation/stages/structural";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { Work } from "../../../../core/tact-work/types";
+} from "@tact/runs-core/tact-execution/correlation/stages/structural";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { WorkReference } from "@tact/execution-contract";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
@@ -60,15 +60,14 @@ function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): Canon
   };
 }
 
-function makeWork(overrides: Partial<Work> = {}): Work {
+// SOR-135 Phase 1 (Runs isolation): WorkReference projection, not Yolna's
+// full Work entity.
+function makeWork(overrides: Partial<WorkReference> = {}): WorkReference {
   return {
     id: "work-1",
-    userId: "user-1",
-    createdByActorKind: "user",
-    createdByActorId: "user-1",
+    title: null,
     status: "running",
-    createdAt: "2026-09-20T00:00:00.000Z",
-    updatedAt: "2026-09-22T00:00:00.000Z",
+    conversationId: null,
     ...overrides,
   };
 }
@@ -186,7 +185,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       listWorksForConversation: async () => { throw new Error("should not be called"); },
       listWorksForNotionResource: async (_resourceRef, userId) => {
         capturedUserId = userId;
-        return [makeWork({ id: "work-tenant-1", userId })];
+        return [makeWork({ id: "work-tenant-1" })];
       },
       getServiceRoleKey: () => "service-role-key",
     };

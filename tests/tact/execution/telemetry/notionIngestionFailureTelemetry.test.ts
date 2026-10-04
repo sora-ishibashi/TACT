@@ -7,10 +7,10 @@
 import {
   observeNotionMcpExecution,
   type ObserveNotionMcpExecutionDeps,
-} from "../../../../core/tact-execution/adapters/notion/observeNotionMcpExecution";
-import type { NotionMcpInvocationObservation } from "../../../../core/tact-execution/adapters/notion/normalizeNotionMcpExecution";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
-import type { RecordIngestionFailureInput } from "../../../../core/tact-execution/telemetry/ingestionFailureStore";
+} from "@tact/runs-core/tact-execution/adapters/notion/observeNotionMcpExecution";
+import type { NotionMcpInvocationObservation } from "@tact/runs-core/tact-execution/adapters/notion/normalizeNotionMcpExecution";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { RecordIngestionFailureInput } from "@tact/runs-core/tact-execution/telemetry/ingestionFailureStore";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function baseObservation(overrides: Partial<NotionMcpInvocationObservation> = {}): NotionMcpInvocationObservation {

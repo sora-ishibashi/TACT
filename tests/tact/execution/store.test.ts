@@ -28,8 +28,8 @@ import {
   type CaptureExecutionDeps,
   type ExecutionRow,
   type ResolveTargetWorkForCorrelationResult,
-} from "../../../core/tact-execution/store";
-import type { CaptureExecutionInput } from "../../../core/tact-execution/types";
+} from "@tact/runs-core/tact-execution/store";
+import type { CaptureExecutionInput } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../lib/check";
 
 // SOR-52 Closeout Hardening Part1: captureExecution()がworkId指定時に

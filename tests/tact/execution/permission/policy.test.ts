@@ -8,9 +8,9 @@
 // 「no policy → unknown(=undefined)」「wrong actor/provider/action/
 // resource → unknown(=undefined)」を検証する。
 
-import { resolvePermissionPolicy, listPermissionPolicyRules, matchesRule } from "../../../../core/tact-execution/permission/policy";
-import type { PermissionPolicyRule, PermissionSubject } from "../../../../core/tact-execution/permission/types";
-import type { CanonicalExecution } from "../../../../core/tact-execution/types";
+import { resolvePermissionPolicy, listPermissionPolicyRules, matchesRule } from "@tact/runs-core/tact-execution/permission/policy";
+import type { PermissionPolicyRule, PermissionSubject } from "@tact/runs-core/tact-execution/permission/types";
+import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {

@@ -11,7 +11,7 @@ import {
   listObservationCapabilities,
   getObservationCapability,
   type ObservationRegistryStoreDeps,
-} from "../../../../core/tact-execution/registry/store";
+} from "@tact/runs-core/tact-execution/registry/store";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 interface FakeCapabilityRow {
