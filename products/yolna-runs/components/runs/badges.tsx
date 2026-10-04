@@ -160,7 +160,7 @@ export function WorkReference({
           onClick={onReview}
           className="text-[12px] text-[#626161] underline-offset-2 transition duration-150 ease-out hover:text-[#112278] hover:underline"
         >
-          History
+          履歴
         </button>
       </span>
     );
@@ -181,7 +181,7 @@ export function WorkReference({
         onClick={onReview}
         className="text-[13px] font-medium text-[#172E95] underline-offset-2 transition duration-150 ease-out hover:underline"
       >
-        Review
+        確認
       </button>
     </span>
   );

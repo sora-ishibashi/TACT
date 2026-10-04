@@ -33,7 +33,7 @@ export default function RunsHomePage() {
               onClick={() => signOut()}
               className="text-[12px] text-[#626161] transition duration-150 ease-out hover:text-[#112278]"
             >
-              Sign out
+              ログアウト
             </button>
           </div>
         )}

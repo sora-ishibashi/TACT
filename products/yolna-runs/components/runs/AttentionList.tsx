@@ -138,7 +138,7 @@ export default function AttentionList({
                 className="text-[10px] text-[#8A8A8A]"
                 title={item.executionId}
               >
-                Execution {formatExecutionId(item.executionId)}
+                実行 {formatExecutionId(item.executionId)}
               </span>
             </div>
 

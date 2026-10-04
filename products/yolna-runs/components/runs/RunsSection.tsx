@@ -399,13 +399,11 @@ export default function RunsSection() {
   return (
 
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-      <SecondarySidebar title={section === "attention" ? "要確認" : section === "coverage" ? "接続・観測" : section === "activity" ? "実行記録のフィルタ" : unavailableTitle ?? "ホーム"}>
+      {(section === "activity" || section === "attention" || section === "coverage") && <SecondarySidebar title={section === "attention" ? "要確認" : section === "coverage" ? "接続・観測" : "実行記録のフィルタ"}>
         {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
         {section === "attention" ? <div className="flex flex-col gap-1"><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">すべて ({attentionItems.length})</button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">{category.label} ({category.count})</button>)}</div> : null}
-        {section === "coverage" ? <div className="flex flex-col gap-2"><input aria-label="接続・観測を検索" value={coverageSearch} onChange={(event) => setCoverageSearch(event.target.value)} placeholder="検索" className="h-9 rounded border border-[#D9D9D9] px-2 text-[12px]" />{filteredSurfaces.map((surface) => <button key={surface.surfaceId} type="button" aria-pressed={selectedSurfaceId === surface.surfaceId} onClick={() => setSelectedSurfaceId(surface.surfaceId)} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">{surface.source} · {surface.health}</button>)}{filteredSurfaces.length === 0 && <PresentationState kind="empty" />}</div> : null}
-        {unavailableTitle ? <PresentationState kind="unavailable" /> : null}
-        {section === "home" ? <PresentationState kind="unknown">ホームに表示するread modelはまだ選択されていません。</PresentationState> : null}
-      </SecondarySidebar>
+        {section === "coverage" ? <div className="flex flex-col gap-2"><input aria-label="接続・観測を検索" value={coverageSearch} onChange={(event) => setCoverageSearch(event.target.value)} placeholder="検索" className="h-9 rounded border border-[#D9D9D9] px-2 text-[12px]" />{filteredSurfaces.map((surface) => <button key={surface.surfaceId} type="button" aria-pressed={selectedSurfaceId === surface.surfaceId} onClick={() => setSelectedSurfaceId(surface.surfaceId)} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">{surface.source} · {japaneseProjection(surface.health)}</button>)}{filteredSurfaces.length === 0 && <PresentationState kind="empty" />}</div> : null}
+      </SecondarySidebar>}
       <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 lg:px-6">
       <h1 className="text-[24px] font-medium leading-[32px] text-[#112278]">{unavailableTitle ?? (section === "home" ? "ホーム" : section === "attention" ? "要確認" : section === "activity" ? "実行記録" : "接続・観測")}</h1>
 
@@ -416,7 +414,7 @@ export default function RunsSection() {
           than the viewport, even after fixing TactShell alone. */}
       <div className="mt-4 min-w-0">
 
-        {section === "home" ? <PresentationState kind="unknown">ホームに表示するread modelはまだ選択されていません。</PresentationState> : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "coverage" ? <ObservationCoverage surfaces={coverage.surfaces.filter((surface) => !selectedSurfaceId || surface.surfaceId === selectedSurfaceId)} gaps={coverage.gaps} /> : section === "activity" ? (
+        {section === "home" ? <PresentationState kind="unknown" /> : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "coverage" ? <ObservationCoverage surfaces={coverage.surfaces.filter((surface) => !selectedSurfaceId || surface.surfaceId === selectedSurfaceId)} gaps={coverage.gaps} /> : section === "activity" ? (
 
           activityLoading ? (
             <p className="text-[13px] leading-[18px] text-[#626161]">読み込んでいます...</p>
