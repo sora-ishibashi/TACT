@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { InspectorPanel } from "@/components/shell/ShellContainers";
 import { PresentationState, presentationStateForHttp, type PresentationStateKind } from "@/components/shell/PresentationState";
 import type { CorrelationReviewView } from "@tact/runs-core/tact-runs-view";
@@ -26,15 +26,21 @@ const correlationMethodLabel: Record<string, string> = {
 
 /** Shared Execution Inspector contract. Mount it from any screen and call its onSelectExecution boundary with an execution id. */
 export function ExecutionInspector({ executionId, accessToken, onClose }: ExecutionInspectorProps) {
-  const [model, setModel] = useState<ExecutionInspectorViewModel | null>(null);
-  const [correlation, setCorrelation] = useState<CorrelationReviewView | null>(null);
-  const [state, setState] = useState<PresentationStateKind | null>(null);
+  // Opaque identity that changes whenever accessToken changes; the raw token is never stored.
+  const authIdentity = useMemo(() => (accessToken ? {} : null), [accessToken]);
+
+  const [response, setResponse] = useState<{
+    executionId: string;
+    authIdentity: object;
+    model: ExecutionInspectorViewModel | null;
+    correlation: CorrelationReviewView | null;
+    state: PresentationStateKind | null;
+  } | null>(null);
 
   useEffect(() => {
-    if (!executionId) return;
-    if (!accessToken) { setState("unavailable"); return; }
+    if (!executionId || !accessToken || !authIdentity) return;
+    const requestAuthIdentity = authIdentity;
     let cancelled = false;
-    setModel(null); setCorrelation(null); setState("loading");
     void Promise.all([
       fetch(`/api/tact/runs/execution/${encodeURIComponent(executionId)}`, { headers: { Authorization: `Bearer ${accessToken}` } }),
       fetch(`/api/tact/runs/execution/${encodeURIComponent(executionId)}/correlation`, { headers: { Authorization: `Bearer ${accessToken}` } }),
@@ -42,15 +48,26 @@ export function ExecutionInspector({ executionId, accessToken, onClose }: Execut
       const detailBody = await detail.json().catch(() => null);
       const correlationBody = await correlationResponse.json().catch(() => null);
       if (cancelled) return;
-      if (!detail.ok || !detailBody?.success) { setState(presentationStateForHttp(detail.status)); return; }
-      setModel(detailBody.inspector as ExecutionInspectorViewModel);
-      if (correlationResponse.ok && correlationBody?.success) setCorrelation(correlationBody.correlation as CorrelationReviewView);
-      setState(null);
-    }).catch(() => { if (!cancelled) setState("error"); });
+      if (!detail.ok || !detailBody?.success) {
+        setResponse({ executionId, authIdentity: requestAuthIdentity, model: null, correlation: null, state: presentationStateForHttp(detail.status) });
+        return;
+      }
+      setResponse({
+        executionId,
+        authIdentity: requestAuthIdentity,
+        model: detailBody.inspector as ExecutionInspectorViewModel,
+        correlation: correlationResponse.ok && correlationBody?.success ? correlationBody.correlation as CorrelationReviewView : null,
+        state: null,
+      });
+    }).catch(() => { if (!cancelled) setResponse({ executionId, authIdentity: requestAuthIdentity, model: null, correlation: null, state: "error" }); });
     return () => { cancelled = true; };
-  }, [executionId, accessToken]);
+  }, [executionId, accessToken, authIdentity]);
 
   if (!executionId) return null;
+  const currentResponse = response?.executionId === executionId && response.authIdentity === authIdentity ? response : null;
+  const model = currentResponse?.model ?? null;
+  const correlation = currentResponse?.correlation ?? null;
+  const state = !accessToken ? "unavailable" : currentResponse ? currentResponse.state : "loading";
   const jp = {
     title: "\u5b9f\u884c\u306e\u8a73\u7d30", close: "\u9589\u3058\u308b", overview: "\u6982\u8981", actor: "\u5b9f\u884c\u4e3b\u4f53", principal: "\u4f9d\u983c\u5143", service: "\u30b5\u30fc\u30d3\u30b9", action: "\u64cd\u4f5c", target: "\u5bfe\u8c61", result: "\u7d50\u679c", outcome: "\u7d50\u679c\u306e\u72b6\u614b", occurred: "\u767a\u751f\u6642\u523b", observed: "\u89b3\u6e2c\u6642\u523b", work: "\u4ed5\u4e8b", correlation: "\u4ed5\u4e8b\u3078\u306e\u7d10\u3065\u3051", permission: "\u6a29\u9650", evidence: "\u5224\u5b9a\u6839\u62e0", technical: "\u6280\u8853\u60c5\u5831",
   };
