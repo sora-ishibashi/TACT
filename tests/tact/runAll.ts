@@ -242,6 +242,9 @@ import { run as runExecutionRegistryMigrationContract } from "./execution/regist
 import { run as runExecutionRegistryObservationPriority } from "./execution/registry/observationPriority.test";
 import { run as runExecutionRunsCoreForbiddenDependency } from "./execution/runsCoreForbiddenDependency.test";
 import { run as runExecutionRunsCoreImportIsolation } from "./execution/runsCoreImportIsolation.test";
+import { run as runExecutionGovernanceContract } from "./execution/governance/contract.test";
+import { run as runExecutionGovernanceTwoPathContract } from "./execution/governance/twoPathContract.test";
+import { run as runExecutionGovernanceConcurrency } from "./execution/governance/concurrency.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -459,6 +462,9 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/registry/observationPriority", run: runExecutionRegistryObservationPriority },
   { name: "execution/runsCoreForbiddenDependency", run: runExecutionRunsCoreForbiddenDependency },
   { name: "execution/runsCoreImportIsolation", run: runExecutionRunsCoreImportIsolation },
+  { name: "execution/governance/contract", run: runExecutionGovernanceContract },
+  { name: "execution/governance/twoPathContract", run: runExecutionGovernanceTwoPathContract },
+  { name: "execution/governance/concurrency", run: runExecutionGovernanceConcurrency },
 ];
 
 async function main() {
