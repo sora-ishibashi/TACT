@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import ActivityTable from "./ActivityTable";
 import ActivityFilters from "./ActivityFilters";
-import AttentionList from "./AttentionList";
+import AttentionInbox from "./AttentionInbox";
 import WorkDetailView from "./WorkDetailView";
 import CorrelationReviewModal from "./CorrelationReviewModal";
 import {
@@ -430,7 +430,7 @@ export default function RunsSection() {
           ) : attentionError ? (
             <p className="text-[13px] leading-[18px] text-[#C53F4B]">{attentionError}</p>
           ) : (
-            <AttentionList items={attentionItems} onSelectWork={handleSelectWork} onTransition={handleAttentionTransition} />
+            <AttentionInbox items={attentionItems} onSelectWork={handleSelectWork} onTransition={handleAttentionTransition} />
           )
 
         )}

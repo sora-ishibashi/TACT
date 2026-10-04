@@ -224,6 +224,7 @@ import { run as runExecutionCorrelationConfidencePolicy } from "./execution/corr
 import { run as runExecutionCorrelationCorrectionContext } from "./execution/correlation/correctionContext.test";
 import { run as runRunsViewCorrelationReviewProjection } from "./runsView/correlationReviewProjection.test";
 import { run as runRunsViewProjections } from "./runsView/projections.test";
+import { run as runRunsViewAttentionInboxProjection } from "./runsView/attentionInboxProjection.test";
 import { run as runExecutionCorrelationNotionEvidence } from "./execution/correlation/notionEvidence.test";
 import { run as runExecutionCorrelationStore } from "./execution/correlation/store.test";
 import { run as runExecutionStore } from "./execution/store.test";
@@ -449,6 +450,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/correlation/correctionContext", run: runExecutionCorrelationCorrectionContext },
   { name: "runsView/correlationReviewProjection", run: runRunsViewCorrelationReviewProjection },
   { name: "runsView/projections", run: runRunsViewProjections },
+  { name: "runsView/attentionInboxProjection", run: runRunsViewAttentionInboxProjection },
   { name: "execution/correlation/notionEvidence", run: runExecutionCorrelationNotionEvidence },
   { name: "execution/correlation/store", run: runExecutionCorrelationStore },
   { name: "execution/store", run: runExecutionStore },
