@@ -11,7 +11,7 @@
 // 指示section「Accessibility」)。
 
 import type { CanonicalPermissionResult, CanonicalCorrelationResult } from "@tact/runs-core/tact-runs-view";
-import { permissionResultLabel, executionResultLabel, attentionReasonLabel } from "@tact/runs-core/tact-runs-view";
+import { permissionResultLabel, attentionReasonLabel } from "@tact/runs-core/tact-runs-view";
 // core/tact-execution/index.ts(barrel)を経由せず、軽量なleaf file
 // から直接型を取る(core/tact-runs-view/index.tsと同じ理由、barrelは
 // 重いserver-only dependency chainを引き込むため)。
@@ -56,8 +56,17 @@ const RESULT_TONE: Partial<Record<ExecutionStatus, BadgeTone>> = {
   failed: "error",
 };
 
+const RESULT_LABELS: Record<ExecutionStatus, string> = {
+  observed: "\u89b3\u6e2c\u6e08\u307f",
+  running: "\u5b9f\u884c\u4e2d",
+  succeeded: "\u5b8c\u4e86",
+  failed: "\u5931\u6557",
+  cancelled: "\u53d6\u308a\u6d88\u3057",
+  unknown: "\u5224\u5b9a\u3067\u304d\u307e\u305b\u3093",
+};
+
 export function ResultBadge({ status }: { status: ExecutionStatus }) {
-  return <Badge label={executionResultLabel(status)} tone={RESULT_TONE[status] ?? "muted"} />;
+  return <Badge label={RESULT_LABELS[status]} tone={RESULT_TONE[status] ?? "muted"} />;
 }
 
 // SOR-178 / SEC-8D: permission_unknown/downstream_permission_conflict
@@ -139,7 +148,10 @@ export function WorkReference({
     const workLink = onSelectWork ? (
       <button
         type="button"
-        onClick={() => onSelectWork(workId)}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelectWork(workId);
+        }}
         className="text-[13px] font-medium text-[#172E95] underline-offset-2 transition duration-150 ease-out hover:underline"
       >
         {displayLabel}
@@ -157,7 +169,10 @@ export function WorkReference({
         {workLink}
         <button
           type="button"
-          onClick={onReview}
+          onClick={(event) => {
+            event.stopPropagation();
+            onReview();
+          }}
           className="text-[12px] text-[#626161] underline-offset-2 transition duration-150 ease-out hover:text-[#112278] hover:underline"
         >
           履歴
@@ -178,7 +193,10 @@ export function WorkReference({
       <Badge label={unresolvedLabel} tone="muted" />
       <button
         type="button"
-        onClick={onReview}
+        onClick={(event) => {
+          event.stopPropagation();
+          onReview();
+        }}
         className="text-[13px] font-medium text-[#172E95] underline-offset-2 transition duration-150 ease-out hover:underline"
       >
         確認
