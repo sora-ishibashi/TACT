@@ -17,6 +17,7 @@
 import type { ActivityFilterOptions, ActivityItemFilters } from "@tact/runs-core/tact-runs-view";
 import type { CanonicalPermissionResult, CanonicalCorrelationResult } from "@tact/runs-core/tact-runs-view";
 import type { ExecutionStatus } from "@tact/runs-core/tact-execution/types";
+import { japaneseProjection } from "@/lib/japaneseProjection";
 
 const SELECT_CLASS =
   "h-9 rounded-xl border border-[#D9D9D9] bg-white px-2 text-[13px] text-[#112278] outline-none focus:border-[#18B5A6]";
@@ -30,9 +31,7 @@ function labelForExecutionStatus(status: ExecutionStatus): string {
 }
 
 function labelForCorrelationStatus(status: CanonicalCorrelationResult): string {
-  if (status === "CORRELATED") return "Assigned";
-  if (status === "AMBIGUOUS") return "Ambiguous";
-  return "Unassigned";
+  return japaneseProjection(status);
 }
 
 export default function ActivityFilters({
@@ -67,7 +66,7 @@ export default function ActivityFilters({
         value={filters.correlationStatus ?? ""}
         onChange={(event) => set("correlationStatus", event.target.value)}
       >
-        <option value="">All Work status</option>
+        <option value="">すべての仕事への紐づけ</option>
         {CORRELATION_STATUS_OPTIONS.map((status) => (
           <option key={status} value={status}>{labelForCorrelationStatus(status)}</option>
         ))}
@@ -79,7 +78,7 @@ export default function ActivityFilters({
         value={filters.agentLabel ?? ""}
         onChange={(event) => set("agentLabel", event.target.value)}
       >
-        <option value="">All Agents</option>
+        <option value="">すべてのAI</option>
         {options.agentLabels.map((label) => (
           <option key={label} value={label}>{label}</option>
         ))}
@@ -91,7 +90,7 @@ export default function ActivityFilters({
         value={filters.principalLabel ?? ""}
         onChange={(event) => set("principalLabel", event.target.value)}
       >
-        <option value="">All Principals</option>
+        <option value="">すべての依頼元</option>
         {options.principalLabels.map((label) => (
           <option key={label} value={label}>{label}</option>
         ))}
@@ -103,7 +102,7 @@ export default function ActivityFilters({
         value={filters.providerLabel ?? ""}
         onChange={(event) => set("providerLabel", event.target.value)}
       >
-        <option value="">All SaaS</option>
+        <option value="">すべてのSaaS</option>
         {options.providerLabels.map((label) => (
           <option key={label} value={label}>{label}</option>
         ))}
@@ -115,9 +114,9 @@ export default function ActivityFilters({
         value={filters.permissionEvaluation ?? ""}
         onChange={(event) => set("permissionEvaluation", event.target.value)}
       >
-        <option value="">All Permission</option>
+        <option value="">すべての権限</option>
         {PERMISSION_OPTIONS.map((status) => (
-          <option key={status} value={status}>{status}</option>
+          <option key={status} value={status}>{japaneseProjection(status)}</option>
         ))}
       </select>
 
@@ -127,7 +126,7 @@ export default function ActivityFilters({
         value={filters.executionStatus ?? ""}
         onChange={(event) => set("executionStatus", event.target.value)}
       >
-        <option value="">All Results</option>
+        <option value="">すべての結果</option>
         {EXECUTION_STATUS_OPTIONS.map((status) => (
           <option key={status} value={status}>{labelForExecutionStatus(status)}</option>
         ))}
@@ -157,7 +156,7 @@ export default function ActivityFilters({
           onClick={() => onChange({})}
           className="h-9 rounded-xl px-2 text-[12px] text-[#626161] transition duration-150 ease-out hover:text-[#112278]"
         >
-          Clear filters
+          フィルタをクリア
         </button>
       )}
 

@@ -18,6 +18,7 @@ import { permissionResultLabel, executionResultLabel, attentionReasonLabel } fro
 import type { ExecutionStatus } from "@tact/runs-core/tact-execution/types";
 import type { AttentionReason } from "@tact/runs-core/tact-execution/permission/attention";
 import type { AttentionStatus } from "@tact/runs-core/tact-execution/permission/attentionStore";
+import { japaneseProjection } from "@/lib/japaneseProjection";
 
 type BadgeTone = "success" | "error" | "warning" | "neutral" | "muted";
 
@@ -47,7 +48,7 @@ const PERMISSION_TONE: Record<CanonicalPermissionResult, BadgeTone> = {
 };
 
 export function PermissionBadge({ result }: { result: CanonicalPermissionResult }) {
-  return <Badge label={permissionResultLabel(result)} tone={PERMISSION_TONE[result]} />;
+  return <Badge label={japaneseProjection(result) === result ? permissionResultLabel(result) : japaneseProjection(result)} tone={PERMISSION_TONE[result]} />;
 }
 
 const RESULT_TONE: Partial<Record<ExecutionStatus, BadgeTone>> = {
@@ -159,14 +160,14 @@ export function WorkReference({
           onClick={onReview}
           className="text-[12px] text-[#626161] underline-offset-2 transition duration-150 ease-out hover:text-[#112278] hover:underline"
         >
-          History
+          履歴
         </button>
       </span>
     );
 
   }
 
-  const unresolvedLabel = correlationStatus === "AMBIGUOUS" ? "Ambiguous" : "Unassigned";
+  const unresolvedLabel = japaneseProjection(correlationStatus);
 
   if (!onReview) {
     return <Badge label={unresolvedLabel} tone="muted" />;
@@ -180,7 +181,7 @@ export function WorkReference({
         onClick={onReview}
         className="text-[13px] font-medium text-[#172E95] underline-offset-2 transition duration-150 ease-out hover:underline"
       >
-        Review
+        確認
       </button>
     </span>
   );

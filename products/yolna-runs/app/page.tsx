@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useAuth } from "@/components/auth/AuthProvider";
 import RunsSection from "@/components/runs/RunsSection";
+import RunsAppShell from "@/components/shell/AppShell";
 
 // =========================
 // Yolna Runs — standalone root page (SOR-135 Phase 2)
@@ -32,14 +33,14 @@ export default function RunsHomePage() {
               onClick={() => signOut()}
               className="text-[12px] text-[#626161] transition duration-150 ease-out hover:text-[#112278]"
             >
-              Sign out
+              ログアウト
             </button>
           </div>
         )}
       </header>
 
       {user ? (
-        <RunsSection />
+        <RunsAppShell><RunsSection /></RunsAppShell>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-5">
           <p className="text-[13px] leading-[18px] text-[#626161]">ログイン後にRunsを確認できます。</p>
