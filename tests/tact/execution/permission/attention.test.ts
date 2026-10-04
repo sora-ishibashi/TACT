@@ -79,7 +79,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     results.push(check("[Required test 1] MATCH(allowed)はAttention Candidateを生成しない(null)", candidate === null));
   }
 
-  // ---- Required test 2 / 8: MISMATCH(denied) -> reason='permission_mismatch' ----
+  // ---- SOR-178 / SEC-8D cutover: MISMATCH(denied)はこのfunction経由では
+  // もうAttention Candidateを生成しない——SecurityFinding導出
+  // (core/tact-execution/securityFinding/derive.ts)→ensure_security_finding_attention_link()
+  // RPC経由の新しい経路に完全移行した(Human Owner Decision C)。 ----
   {
     const candidate = deriveExecutionAttentionCandidate(
       makeExecution(),
@@ -88,10 +91,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
-        "[Required test 2] MISMATCH(denied)はreason='permission_mismatch'のAttention Candidateを生成する",
-        candidate !== null &&
-          candidate.reason === "permission_mismatch" &&
-          candidate.reasonCode === "ai_agent_slack_message_send_denied"
+        "[SOR-178 cutover] MISMATCH(denied)はこのfunction経由ではAttention Candidateを生成しない(SecurityFinding経路へ移行済み)",
+        candidate === null
       )
     );
   }
@@ -132,10 +133,12 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
-  // ---- 必要なfieldが揃っている(executionId/userId/provider/operation/occurredAt) ----
+  // ---- 必要なfieldが揃っている(executionId/userId/provider/operation/occurredAt)
+  // ---- SOR-178後: このfunctionが今も生成するのはapproval_requiredのみ
+  // (deniedはSecurityFinding経路へ移行済み、上記テスト参照)。 ----
   {
     const execution = makeExecution({ id: "exec-99", userId: "user-99", provider: "gmail", operation: "search_messages" });
-    const candidate = deriveExecutionAttentionCandidate(execution, makeDecision({ executionId: "exec-99", status: "denied" }));
+    const candidate = deriveExecutionAttentionCandidate(execution, makeDecision({ executionId: "exec-99", status: "approval_required" }));
 
     results.push(
       check(

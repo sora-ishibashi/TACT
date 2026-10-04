@@ -73,3 +73,4 @@ export * from "./gateway";
 export * from "./registry";
 export * from "./coverage";
 export * from "./downstreamPermission";
+export * from "./securityFinding";

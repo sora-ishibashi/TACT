@@ -31,6 +31,7 @@ export {
   getExecutionAttention,
   transitionExecutionAttention,
   toExecutionAttention,
+  ensureSecurityFindingAttentionLink,
   ATTENTION_STATUSES,
   type ExecutionAttention,
   type AttentionRow,
@@ -44,6 +45,8 @@ export {
   type ReadExecutionAttentionsDeps,
   type TransitionExecutionAttentionOutcome,
   type TransitionExecutionAttentionDeps,
+  type EnsureSecurityFindingAttentionLinkOutcome,
+  type EnsureSecurityFindingAttentionLinkDeps,
 } from "./attentionStore";
 export {
   toCanonicalPermissionResult,

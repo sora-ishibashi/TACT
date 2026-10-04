@@ -1,5 +1,5 @@
 // =========================
-// TACT Canonical Execution — Permission Observation Orchestration (SOR-51 / SOR-52)
+// TACT Canonical Execution — Permission Observation Orchestration (SOR-51 / SOR-52 / SOR-178)
 // =========================
 //
 // captureExecution()が成功した直後に呼ぶ、Evaluate + Persistをまとめた
@@ -17,6 +17,17 @@
 // 呼び出し元(Slack/Notion adapter)へ例外を伝播しない——silent
 // failureにはせず、onFailureへ構造化して報告する。
 //
+// SOR-178 / SEC-8D cutover(重要): decision.statusによってAttention
+// episode生成の経路を分ける(Human Owner Decision B/C)。
+//   - approval_required: 既存のderiveExecutionAttentionCandidate()→
+//     persistExecutionAttention()経路(変更なし)。
+//   - denied/unknown: SecurityFinding導出→永続化→
+//     ensure_security_finding_attention_link() RPC経由でAttention
+//     episodeへensure/link(../securityFinding/observe.tsの
+//     observeRunsPermissionSecurityFinding())。deriveExecutionAttentionCandidate()
+//     はこの2つのstatusに対してもう呼ばれない(attention.ts参照)。
+//   - allowed: 何もしない。
+//
 // SOR-47 Phase2(Evaluator Cutover、Human Owner指示): deps.evaluatePermission
 // のdefaultを、静的allowlist評価器(evaluate.tsのevaluatePermission()、
 // sync)からDB-backed Permission Registry評価器
@@ -33,9 +44,9 @@
 // stage単位try/catch)へ伝播させる——「registryが読めなかった」ことを
 // 「matchするruleが無かった」(unknown/no_matching_registry_rule、
 // 正当なPermission Decision)へ静かに変換せず、誤ったPermission
-// Decision provenanceを一切作らない。Attention persistence(下記)と
-// 違い、この評価stage自体には意図的にtry/catchを設けない
-// ——「stage自体の失敗は、その行を一切作らずstage境界の外側で
+// Decision provenanceを一切作らない。Attention/SecurityFinding
+// persistence(下記)と違い、この評価stage自体には意図的にtry/catchを
+// 設けない——「stage自体の失敗は、その行を一切作らずstage境界の外側で
 // isolateする」という、captureExecution()等ここまでの全stageと
 // 共通のCapture Failure Policyをそのまま踏襲する。
 
@@ -43,10 +54,18 @@ import { evaluatePermissionForObservation } from "./registryEvaluate";
 import { persistPermissionDecision, type PersistPermissionDecisionOutcome } from "./store";
 import { deriveExecutionAttentionCandidate } from "./attention";
 import { persistExecutionAttention } from "./attentionStore";
+import {
+  observeRunsPermissionSecurityFinding,
+  DEFAULT_CONFIGURED_UNKNOWN_ALERT_RULES,
+  type ConfiguredUnknownAlertRule,
+} from "../securityFinding";
 import type { PermissionDecision } from "./types";
 import type { CanonicalExecution } from "../types";
 
-export type ObserveExecutionPermissionFailureStage = "attention_persistence";
+export type ObserveExecutionPermissionFailureStage =
+  | "attention_persistence"
+  | "security_finding_persistence"
+  | "security_finding_attention_link";
 
 export interface ObserveExecutionPermissionDeps {
 
@@ -62,6 +81,16 @@ export interface ObserveExecutionPermissionDeps {
 
   persistExecutionAttention: typeof persistExecutionAttention;
 
+  // SOR-178 / SEC-8D: denied/unknownのSecurityFinding導出+永続化+
+  // Attention ensure/link。approval_requiredにはこのdepsは使われない
+  // (上記コメントのDecision B/C参照)。
+  observeRunsPermissionSecurityFinding: typeof observeRunsPermissionSecurityFinding;
+
+  // section4 DECISION E: 既定は空配列。未配線の呼び出し元は常に
+  // HIGH_IMPACT_UNKNOWNのみを評価する(configured UNKNOWNは一切発生
+  // しない)——DB-backed policy engineをこのSliceで新設しない。
+  configuredUnknownAlertRules: readonly ConfiguredUnknownAlertRule[];
+
   onFailure: (stage: ObserveExecutionPermissionFailureStage, error: unknown) => void;
 
 }
@@ -74,6 +103,8 @@ const defaultDeps: ObserveExecutionPermissionDeps = {
   persistPermissionDecision,
   deriveExecutionAttentionCandidate,
   persistExecutionAttention,
+  observeRunsPermissionSecurityFinding,
+  configuredUnknownAlertRules: DEFAULT_CONFIGURED_UNKNOWN_ALERT_RULES,
 
   onFailure: (stage, error) => {
     // captureExecution()/observeNotionMcpExecution.tsと同じ規律:
@@ -112,28 +143,71 @@ export async function observeExecutionPermission(
 
   // 絶対条件(SOR-52指示section15、Failure isolation): このtry/catchの
   // 結果は戻り値(outcome、既に確定したPermission Decisionの永続化
-  // 結果)へ一切影響しない。
+  // 結果)へ一切影響しない。SOR-178後も同じ精神をdenied/unknown経路
+  // (SecurityFinding)へ拡張する。
   if (decisionId) {
 
-    try {
+    if (decision.status === "approval_required") {
 
-      const candidate = deps.deriveExecutionAttentionCandidate(execution, decision);
+      // Decision B(SOR-178): approval_requiredはgovernance workflowであり
+      // security violationではない。既存経路のまま——変更しない。
+      try {
 
-      // allowed/unknown(M-0原則)はcandidate=nullであり、Attentionを
-      // 一切作らない(推測しない、絶対条件)。
-      if (candidate) {
+        const candidate = deps.deriveExecutionAttentionCandidate(execution, decision);
 
-        const attentionOutcome = await deps.persistExecutionAttention(candidate, decisionId);
+        if (candidate) {
 
-        if (attentionOutcome.status !== "persisted" && attentionOutcome.status !== "already_exists") {
-          deps.onFailure("attention_persistence", new Error(`persistExecutionAttention returned ${attentionOutcome.status}`));
+          const attentionOutcome = await deps.persistExecutionAttention(candidate, decisionId);
+
+          if (attentionOutcome.status !== "persisted" && attentionOutcome.status !== "already_exists") {
+            deps.onFailure("attention_persistence", new Error(`persistExecutionAttention returned ${attentionOutcome.status}`));
+          }
+
         }
 
+      } catch (error) {
+        deps.onFailure("attention_persistence", error);
       }
 
-    } catch (error) {
-      deps.onFailure("attention_persistence", error);
+    } else if (decision.status === "denied" || decision.status === "unknown") {
+
+      // Decision C(SOR-178): denied/unknownはSecurityFinding導出→
+      // 永続化→ensure_security_finding_attention_link() RPC経由での
+      // Attention ensure/linkに完全移行した。deriveExecutionAttentionCandidate()
+      // はこの2つのstatusに対して呼ばない(attention.ts参照)。
+      try {
+
+        const findingOutcome = await deps.observeRunsPermissionSecurityFinding(
+          execution,
+          decision,
+          decisionId,
+          deps.configuredUnknownAlertRules
+        );
+
+        if (findingOutcome.status === "finding_persistence_failed") {
+          deps.onFailure(
+            "security_finding_persistence",
+            new Error(`observeRunsPermissionSecurityFinding: finding persistence failed (${findingOutcome.reason})`)
+          );
+        } else if (findingOutcome.status === "attention_link_failed") {
+          deps.onFailure(
+            "security_finding_attention_link",
+            new Error(`observeRunsPermissionSecurityFinding: attention link failed for finding ${findingOutcome.findingId} (${findingOutcome.reason})`)
+          );
+        }
+
+        // "not_eligible"/"linked": no failure to report (never guess a
+        // failure when the structured outcome says there is none).
+
+      } catch (error) {
+        deps.onFailure("security_finding_persistence", error);
+      }
+
     }
+
+    // allowed: nothing to do (not reached here when decisionId exists for
+    // reasons other than those three statuses — allowed never produces a
+    // candidate/Finding, by construction of both derive paths).
 
   }
 

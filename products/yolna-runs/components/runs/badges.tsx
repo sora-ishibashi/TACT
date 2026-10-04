@@ -59,9 +59,14 @@ export function ResultBadge({ status }: { status: ExecutionStatus }) {
   return <Badge label={executionResultLabel(status)} tone={RESULT_TONE[status] ?? "muted"} />;
 }
 
+// SOR-178 / SEC-8D: permission_unknown/downstream_permission_conflict
+// added additively — TypeScript's Record exhaustiveness check forces this
+// map to stay in sync with AttentionReason.
 const ATTENTION_REASON_TONE: Record<AttentionReason, BadgeTone> = {
   approval_required: "warning",
   permission_mismatch: "error",
+  permission_unknown: "warning",
+  downstream_permission_conflict: "error",
 };
 
 export function AttentionReasonBadge({ reason }: { reason: AttentionReason }) {

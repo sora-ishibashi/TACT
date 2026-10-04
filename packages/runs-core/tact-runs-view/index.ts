@@ -27,6 +27,10 @@ import { toCanonicalPermissionResult, type CanonicalPermissionResult } from "../
 import { toCanonicalExecutionCorrelationStatus, toCanonicalCorrelationResult, type CanonicalCorrelationResult } from "../tact-execution/correlation/canonicalResult";
 import type { AttentionReason } from "../tact-execution/permission/attention";
 import type { AttentionItemView } from "../tact-execution/permission/attentionStore";
+// SOR-178 / SEC-8D: type-only import from the leaf securityFinding/types
+// file (never the barrel), same bundling discipline as every other import
+// in this header comment.
+import type { SecurityFindingSummary } from "../tact-execution/securityFinding/types";
 import type { WorkCorrelationMethod, WorkCorrelationDecision } from "../tact-execution/correlation/types";
 import type { ExecutionCorrelationView, ExecutionCorrectionContext } from "../tact-execution/correlation/store";
 import type {
@@ -181,9 +185,14 @@ export function executionResultLabel(status: ExecutionStatus): string {
   return EXECUTION_STATUS_LABELS[status];
 }
 
+// SOR-178 / SEC-8D: permission_unknown/downstream_permission_conflict
+// added additively (migration 20270101000015's widened reason CHECK,
+// ../tact-execution/permission/attention.tsのAttentionReason参照)。
 const ATTENTION_REASON_LABELS: Record<AttentionReason, string> = {
   approval_required: "Approval required",
   permission_mismatch: "Permission mismatch",
+  permission_unknown: "Permission unknown",
+  downstream_permission_conflict: "Downstream permission conflict",
 };
 
 export function attentionReasonLabel(reason: AttentionReason): string {
@@ -195,9 +204,14 @@ export function attentionReasonLabel(reason: AttentionReason): string {
 // AttentionReasonは現時点で2値のみ(ATTENTION_REASONS参照)のため、
 // 網羅的な明示copyをそのまま持つ——将来値が増えた場合はこのmapへ
 // 1行足すだけでよい(reasonCodeの機械的な変換には頼らない)。
+// SOR-178 / SEC-8D: explanations must stay precise and never use
+// "unauthorized"/"illegal"/"provider denied execution" wording (section17
+// absolute condition).
 const ATTENTION_REASON_EXPLANATIONS: Record<AttentionReason, string> = {
   permission_mismatch: "This action was not permitted by the current Permission Registry rules.",
   approval_required: "This action requires human approval before it can proceed.",
+  permission_unknown: "Runs could not determine a registered permission for this high-impact or explicitly configured action.",
+  downstream_permission_conflict: "Authoritative downstream permission evidence conflicts with the selected Runs Registered Permission.",
 };
 
 export function attentionReasonExplanation(reason: AttentionReason): string {
@@ -442,6 +456,12 @@ export interface AttentionCardView {
 
   resolvedAt: string | null;
 
+  // SOR-178 / SEC-8D section16/17(加算的field): "the additive findings[]
+  // API/read model is the audit-preserving detail surface" — AttentionList
+  // may continue showing only the episode trigger reason; this field is
+  // additive and not required to be rendered by any existing UI.
+  findings: SecurityFindingSummary[];
+
 }
 
 export function toAttentionCardView(item: AttentionItemView): AttentionCardView {
@@ -464,6 +484,7 @@ export function toAttentionCardView(item: AttentionItemView): AttentionCardView 
     status: item.status,
     acknowledgedAt: item.acknowledgedAt,
     resolvedAt: item.resolvedAt,
+    findings: item.findings,
   };
 
 }
