@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     const [works, executions, attentions] = await Promise.all([
       listRecentWorksForUserViaRegistry(userId, accessToken, { limit: 100 }),
       listExecutionsForUser(userId),
-      listExecutionAttentions(userId, { status: "active" }),
+      listExecutionAttentions(userId, { statuses: ["open", "acknowledged"] }),
     ]);
     const executionSummary = new Map<string, { count: number; lastActivity: string | null }>();
     for (const execution of executions) {
