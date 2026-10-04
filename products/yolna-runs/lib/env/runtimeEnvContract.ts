@@ -67,6 +67,12 @@ export const RUNS_ENV_CONTRACT: readonly EnvContractEntry[] = [
       "that they accept unauthenticated writes. Request signing / nonce / replay prevention are " +
       "SOR-8's responsibility, not implemented by this token.",
   },
+  {
+    name: "RUNS_TELEMETRY_HMAC_KEYS_JSON",
+    visibility: "server-only",
+    required: false,
+    description: "Runs-owned HMAC verification keys for signed inbound execution telemetry; never a downstream capability credential.",
+  },
 
 ];
 

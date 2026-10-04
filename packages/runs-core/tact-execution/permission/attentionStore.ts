@@ -28,6 +28,12 @@ import type {
 import { toPermissionDecision, type PermissionDecisionRow } from "./store";
 import type { ExecutionAttentionCandidate, AttentionReason } from "./attention";
 import type { PermissionDecision, PermissionDecisionStatus } from "./types";
+// SOR-178 / SEC-8D: type-only import of the read-model summary shape —
+// never a value import from ../securityFinding/* here, to keep this file's
+// own direction of dependency (permission/ -> securityFinding/, never the
+// reverse) the same one ../securityFinding/observe.ts already relies on
+// when it imports ensureSecurityFindingAttentionLink (below) from this file.
+import type { SecurityFindingSummary } from "../securityFinding/types";
 
 const POSTGRES_UNIQUE_VIOLATION_CODE = "23505";
 
@@ -119,9 +125,14 @@ export function toExecutionAttention(row: AttentionRow): ExecutionAttention {
 
 export type PersistExecutionAttentionOutcome =
   | { status: "persisted"; attention: ExecutionAttention }
-  // 絶対条件(Idempotency、SOR-52指示section5): 同一execution_idへの
-  // 再挿入は、新しい行を作らず既存行をそのまま返す(1 Execution =
-  // 高々1 Attention)。
+  // SOR-178 cutover(section13): UNIQUE(execution_id)はもう存在しない
+  // (一度resolvedになったExecutionへ、後から新しいActive episodeを
+  // 作れる必要があるため——migration 20270101000015のpartial active
+  // uniqueness index参照)。この"already_exists"は今後2つの意味の
+  // どちらかを表す: (a) 同一permission_decision_idでの繰り返しretry、
+  // (b) このExecutionに既にACTIVE(open/acknowledged)なepisodeが存在し、
+  // insert自体がpartial unique indexの競合で失敗した場合の再読み込み結果。
+  // いずれの場合も新しい行は作らず、既存の(正しい)行をそのまま返す。
   | { status: "already_exists"; attention: ExecutionAttention }
   | { status: "invalid"; reason: string }
   | { status: "unavailable" }
@@ -138,9 +149,18 @@ const defaultPersistDeps: PersistExecutionAttentionDeps = {
 };
 
 // candidate(pure domain object、attention.ts参照) + このAttentionの
-// 根拠となったPermissionDecisionのidを受け取り、永続化する。
-// deriveExecutionAttentionCandidate()がnullを返した(allowed/unknown)
-// 場合、この関数は呼ばれない——呼び出し元(observe.ts)がその判定を行う。
+// 根拠となったPermissionDecisionのidを受け取り、永続化する。SOR-178後は
+// approval_required専用の経路(attention.tsのATTENTION_REASON_BY_DECISION_STATUS
+// 参照、deniedはこの関数を経由しない)。
+//
+// 絶対条件(section13、SOR-178): UNIQUE(execution_id)の削除後も、同一
+// permission_decision_idの繰り返しretryは新しいepisodeを作らない。
+// insert前に明示的にpermission_decision_id起点で既存行を確認する
+// (既にACTIVEかresolvedかを問わない、同一decisionからの重複を常に
+// 排除する)。insert自体がpartial active uniqueness indexの競合で
+// 失敗した場合(別のFinding/approvalが先にACTIVE episodeを作った)は、
+// そのACTIVE行を再読み込みして返す——決してreopenしない、決して
+// 2つ目のACTIVE episodeを作らない。
 export async function persistExecutionAttention(
   candidate: ExecutionAttentionCandidate,
   permissionDecisionId: string,
@@ -155,6 +175,17 @@ export async function persistExecutionAttention(
 
   if (!client) {
     return { status: "unavailable" };
+  }
+
+  const existingForDecision = await client
+    .from("tact_execution_attentions")
+    .select(ATTENTION_COLUMNS)
+    .eq("permission_decision_id", permissionDecisionId)
+    .eq("user_id", candidate.userId)
+    .maybeSingle();
+
+  if (existingForDecision.data) {
+    return { status: "already_exists", attention: toExecutionAttention(existingForDecision.data as AttentionRow) };
   }
 
   const { data, error } = await client
@@ -174,24 +205,108 @@ export async function persistExecutionAttention(
 
   if (error && (error as { code?: string }).code === POSTGRES_UNIQUE_VIOLATION_CODE) {
 
-    const existing = await client
+    // Lost the partial-active-uniqueness race (another concurrent Finding
+    // or approval decision created the ACTIVE episode for this Execution
+    // first) — re-read the current ACTIVE episode and return it. Never
+    // create a second ACTIVE episode, never reopen a resolved one.
+    const existingActive = await client
       .from("tact_execution_attentions")
       .select(ATTENTION_COLUMNS)
       .eq("execution_id", candidate.executionId)
+      .eq("user_id", candidate.userId)
+      .in("status", ["open", "acknowledged"])
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
-    if (existing.data) {
-      return { status: "already_exists", attention: toExecutionAttention(existing.data as AttentionRow) };
+    if (existingActive.data) {
+      return { status: "already_exists", attention: toExecutionAttention(existingActive.data as AttentionRow) };
     }
 
     return {
       status: "error",
-      message: existing.error?.message ?? "duplicate claim, but existing attention could not be read",
+      message: existingActive.error?.message ?? "duplicate claim, but existing active attention could not be read",
     };
 
   }
 
   return { status: "error", message: error?.message ?? "insert failed" };
+
+}
+
+// =========================
+// Atomic Finding -> Attention link (SOR-178 / SEC-8D section12)
+// =========================
+//
+// Thin TS wrapper around the ensure_security_finding_attention_link()
+// Postgres RPC (migration 20270101000015) — same shape of wrapper as
+// ../correlation/store.ts's persistWorkCorrelationDecision() around
+// apply_execution_work_correlation(). All tenant validation, reason
+// derivation, ACTIVE-episode resolution and the Finding<->Attention link
+// insert happen inside that single RPC transaction; this function only
+// calls it and classifies the result. service_role execution only (RPC
+// privileges revoked from PUBLIC/anon/authenticated at the DB level).
+interface EnsureSecurityFindingAttentionLinkRpcResult {
+  outcome: string;
+  attentionId?: string;
+  episodeCreated?: boolean;
+}
+
+export type EnsureSecurityFindingAttentionLinkOutcome =
+  | { status: "linked"; attentionId: string; episodeCreated: boolean }
+  | { status: "already_linked"; attentionId: string }
+  | { status: "finding_not_found" }
+  | { status: "unavailable" }
+  | { status: "error"; message: string };
+
+export interface EnsureSecurityFindingAttentionLinkDeps {
+
+  getClient: typeof getServiceRoleClient;
+
+}
+
+const defaultEnsureLinkDeps: EnsureSecurityFindingAttentionLinkDeps = {
+  getClient: getServiceRoleClient,
+};
+
+export async function ensureSecurityFindingAttentionLink(
+  findingId: string,
+  userId: string,
+  deps: EnsureSecurityFindingAttentionLinkDeps = defaultEnsureLinkDeps
+): Promise<EnsureSecurityFindingAttentionLinkOutcome> {
+
+  const client = deps.getClient();
+
+  if (!client) {
+    return { status: "unavailable" };
+  }
+
+  const { data, error } = await client.rpc("ensure_security_finding_attention_link", {
+    p_user_id: userId,
+    p_finding_id: findingId,
+  });
+
+  if (error) {
+    return { status: "error", message: error.message };
+  }
+
+  const result = data as EnsureSecurityFindingAttentionLinkRpcResult;
+
+  switch (result.outcome) {
+
+    case "linked":
+      return { status: "linked", attentionId: result.attentionId ?? "", episodeCreated: result.episodeCreated ?? false };
+
+    case "already_linked":
+      return { status: "already_linked", attentionId: result.attentionId ?? "" };
+
+    case "finding_not_found":
+      return { status: "finding_not_found" };
+
+    default:
+      return { status: "error", message: `ensure_security_finding_attention_link returned unexpected outcome: ${result.outcome}` };
+
+  }
 
 }
 
@@ -401,13 +516,22 @@ export interface AttentionItemView {
 
   resolvedAt: string | null;
 
+  // SOR-178 / SEC-8D section16(加算的field、audit-preserving detail
+  // surface): このAttention episodeに紐づくSecurityFinding一覧
+  // (ensure_security_finding_attention_link() RPCが作るlink経由)。
+  // reasonは episode発生時のtriggerのまま変えない(section10)——後から
+  // 同じACTIVE episodeへ追加attachされたFindingも、ここに追加されるだけ。
+  // レガシーなapproval_required専用行は常に空配列(Findingを一切持たない)。
+  findings: SecurityFindingSummary[];
+
 }
 
 function assembleAttentionItemView(
   row: AttentionRow,
   execution: CanonicalExecution,
   decision: PermissionDecision,
-  workTitle: string | null
+  workTitle: string | null,
+  findings: SecurityFindingSummary[]
 ): AttentionItemView {
 
   return {
@@ -440,6 +564,7 @@ function assembleAttentionItemView(
     workTitle,
     acknowledgedAt: row.acknowledged_at,
     resolvedAt: row.resolved_at,
+    findings,
   };
 
 }
@@ -458,6 +583,86 @@ function assembleAttentionItemView(
 // 破損データ/将来の想定外の参照が他tenantのWork titleを漏らさない
 // ようにする)。所有権が一致しないWorkはmapに現れず、呼び出し元は
 // workTitle=nullとして扱う(No-Fabrication、workId自体は変えない)。
+// SOR-178 section16: link table -> SecurityFinding join, scoped by
+// tenant(user_id)。他tenantのFindingを漏らさない既存規約をここでも維持
+// する(executions/workTitlesと同じ`.eq("user_id", userId)`)。
+async function fetchFindingsByAttentionId(
+  client: NonNullable<ReturnType<typeof getServiceRoleClient>>,
+  userId: string,
+  attentionIds: string[]
+): Promise<Map<string, SecurityFindingSummary[]>> {
+
+  const result = new Map<string, SecurityFindingSummary[]>();
+
+  if (attentionIds.length === 0) {
+    return result;
+  }
+
+  const { data: links } = await client
+    .from("tact_execution_attention_findings")
+    .select("finding_id, attention_id")
+    .eq("user_id", userId)
+    .in("attention_id", attentionIds);
+
+  const linkRows = (links ?? []) as Array<{ finding_id: string; attention_id: string }>;
+
+  if (linkRows.length === 0) {
+    return result;
+  }
+
+  const findingIds = [...new Set(linkRows.map((link) => link.finding_id))];
+
+  const { data: findings } = await client
+    .from("tact_execution_security_findings")
+    .select("id, finding_type, reason_code, eligibility_basis, detected_at, permission_decision_id, downstream_permission_evidence_id")
+    .eq("user_id", userId)
+    .in("id", findingIds);
+
+  const findingById = new Map<string, SecurityFindingSummary>();
+
+  for (const row of (findings ?? []) as Array<{
+    id: string;
+    finding_type: SecurityFindingSummary["findingType"];
+    reason_code: string;
+    eligibility_basis: SecurityFindingSummary["eligibilityBasis"];
+    detected_at: string;
+    permission_decision_id: string;
+    downstream_permission_evidence_id: string | null;
+  }>) {
+
+    findingById.set(row.id, {
+      findingId: row.id,
+      findingType: row.finding_type,
+      reasonCode: row.reason_code,
+      eligibilityBasis: row.eligibility_basis,
+      detectedAt: row.detected_at,
+      permissionDecisionId: row.permission_decision_id,
+      downstreamPermissionEvidenceId: row.downstream_permission_evidence_id,
+    });
+
+  }
+
+  for (const link of linkRows) {
+
+    const finding = findingById.get(link.finding_id);
+
+    // No-Fabrication: a link whose Finding cannot be read back (should not
+    // normally happen, tenant-scoped) is silently excluded, never
+    // fabricated.
+    if (!finding) {
+      continue;
+    }
+
+    const existing = result.get(link.attention_id) ?? [];
+    existing.push(finding);
+    result.set(link.attention_id, existing);
+
+  }
+
+  return result;
+
+}
+
 async function fetchRelatedRecords(
   client: NonNullable<ReturnType<typeof getServiceRoleClient>>,
   userId: string,
@@ -466,18 +671,21 @@ async function fetchRelatedRecords(
   executions: Map<string, CanonicalExecution>;
   decisions: Map<string, PermissionDecision>;
   workTitles: Map<string, string | null>;
+  findings: Map<string, SecurityFindingSummary[]>;
 }> {
 
   const executionIds = [...new Set(rows.map((r) => r.execution_id))];
   const decisionIds = [...new Set(rows.map((r) => r.permission_decision_id))];
+  const attentionIds = rows.map((r) => r.id);
 
-  const [executionsResult, decisionsResult] = await Promise.all([
+  const [executionsResult, decisionsResult, findings] = await Promise.all([
     executionIds.length > 0
       ? client.from("tact_canonical_executions").select("*").in("id", executionIds).eq("user_id", userId)
       : Promise.resolve({ data: [] as unknown[] }),
     decisionIds.length > 0
       ? client.from("tact_execution_permission_decisions").select("*").in("id", decisionIds)
       : Promise.resolve({ data: [] as unknown[] }),
+    fetchFindingsByAttentionId(client, userId, attentionIds),
   ]);
 
   const executions = new Map<string, CanonicalExecution>();
@@ -510,7 +718,7 @@ async function fetchRelatedRecords(
 
   }
 
-  return { executions, decisions, workTitles };
+  return { executions, decisions, workTitles, findings };
 
 }
 
@@ -582,7 +790,7 @@ export async function listExecutionAttentions(
     return [];
   }
 
-  const { executions, decisions, workTitles } = await fetchRelatedRecords(client, userId, rows);
+  const { executions, decisions, workTitles, findings } = await fetchRelatedRecords(client, userId, rows);
 
   const items: AttentionItemView[] = [];
 
@@ -599,7 +807,7 @@ export async function listExecutionAttentions(
 
     const workTitle = execution.workId ? workTitles.get(execution.workId) ?? null : null;
 
-    items.push(assembleAttentionItemView(row, execution, decision, workTitle));
+    items.push(assembleAttentionItemView(row, execution, decision, workTitle, findings.get(row.id) ?? []));
 
   }
 
@@ -632,7 +840,7 @@ export async function getExecutionAttention(
   }
 
   const row = data as AttentionRow;
-  const { executions, decisions, workTitles } = await fetchRelatedRecords(client, userId, [row]);
+  const { executions, decisions, workTitles, findings } = await fetchRelatedRecords(client, userId, [row]);
 
   const execution = executions.get(row.execution_id);
   const decision = decisions.get(row.permission_decision_id);
@@ -643,6 +851,6 @@ export async function getExecutionAttention(
 
   const workTitle = execution.workId ? workTitles.get(execution.workId) ?? null : null;
 
-  return assembleAttentionItemView(row, execution, decision, workTitle);
+  return assembleAttentionItemView(row, execution, decision, workTitle, findings.get(row.id) ?? []);
 
 }

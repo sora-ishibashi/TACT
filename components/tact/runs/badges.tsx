@@ -62,6 +62,8 @@ export function ResultBadge({ status }: { status: ExecutionStatus }) {
 const ATTENTION_REASON_TONE: Record<AttentionReason, BadgeTone> = {
   approval_required: "warning",
   permission_mismatch: "error",
+  permission_unknown: "warning",
+  downstream_permission_conflict: "error",
 };
 
 export function AttentionReasonBadge({ reason }: { reason: AttentionReason }) {

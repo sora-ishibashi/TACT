@@ -114,7 +114,8 @@ function makeDecisionRowFixture(overrides: Partial<PermissionDecisionRow> = {}):
 }
 
 // persistExecutionAttention向け: from().insert().select().single() /
-// from().select().eq().maybeSingle() のみ。
+// from().select().eq().maybeSingle() / (SOR-178後の既存ACTIVE episode
+// re-read) from().select().eq().eq().in().order().limit().maybeSingle()。
 function makeInsertFakeClient(
   singleResults: Array<{ data: unknown; error: unknown }>
 ) {
@@ -126,6 +127,9 @@ function makeInsertFakeClient(
     insert: () => builder,
     select: () => builder,
     eq: () => builder,
+    in: () => builder,
+    order: () => builder,
+    limit: () => builder,
     single: async () => singleResults[callIndex++],
     maybeSingle: async () => singleResults[callIndex++],
   };
@@ -176,9 +180,18 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   const results: CheckResult[] = [];
 
   // ---- 正常なpersist ----
+  // SOR-178後: insert前に明示的なpermission_decision_id起点のpre-check
+  // (select().maybeSingle())を1回行う(section13)。このテストでは
+  // 「まだ存在しない」(data:null)を1件目として与え、2件目をinsertの
+  // 結果として与える。
   {
     const rowFixture = makeAttentionRowFixture();
-    const deps: PersistExecutionAttentionDeps = { getClient: () => makeInsertFakeClient([{ data: rowFixture, error: null }]) };
+    const deps: PersistExecutionAttentionDeps = {
+      getClient: () => makeInsertFakeClient([
+        { data: null, error: null },
+        { data: rowFixture, error: null },
+      ]),
+    };
 
     const outcome = await persistExecutionAttention(baseCandidate(), "decision-1", deps);
 
@@ -188,20 +201,38 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
-  // ---- Required test 6/7: duplicate/retry -> already_exists(二重生成しない) ----
+  // ---- SOR-178 section13: 同一permission_decision_idでの繰り返しretryは
+  // pre-checkだけで既存行を返す(insertを試みない) ----
   {
-    const existingRow = makeAttentionRowFixture({ id: "attention-existing" });
+    const existingForDecision = makeAttentionRowFixture({ id: "attention-existing-by-decision" });
+    const deps: PersistExecutionAttentionDeps = {
+      getClient: () => makeInsertFakeClient([{ data: existingForDecision, error: null }]),
+    };
+
+    const outcome = await persistExecutionAttention(baseCandidate(), "decision-1", deps);
+
+    results.push(check(
+      "[SOR-178 section13] 同一permission_decision_idの繰り返しretryはpre-checkで既存行を返し、新規行を作らない",
+      outcome.status === "already_exists" && outcome.attention.id === "attention-existing-by-decision"
+    ));
+  }
+
+  // ---- Required test 6/7(SOR-178後): partial active uniqueness indexの
+  // 競合で既存のACTIVE episodeへfallbackする(二重生成しない) ----
+  {
+    const existingActiveRow = makeAttentionRowFixture({ id: "attention-existing" });
     const deps: PersistExecutionAttentionDeps = {
       getClient: () => makeInsertFakeClient([
-        { data: null, error: { code: "23505", message: "duplicate key" } },
-        { data: existingRow, error: null },
+        { data: null, error: null }, // pre-check by permission_decision_id: not found
+        { data: null, error: { code: "23505", message: "duplicate key" } }, // insert loses the partial-active race
+        { data: existingActiveRow, error: null }, // re-read the current ACTIVE episode
       ]),
     };
 
     const outcome = await persistExecutionAttention(baseCandidate(), "decision-1", deps);
 
     results.push(check(
-      "[Required test 6/7] 同一executionIdの再挿入はstatus=already_existsとして既存行をそのまま返す(新規行を作らない)",
+      "[Required test 6/7] partial active uniqueness indexの競合時は既存のACTIVE episodeをstatus=already_existsとして返す(新規episodeを作らない)",
       outcome.status === "already_exists" && outcome.attention.id === "attention-existing"
     ));
   }

@@ -115,6 +115,7 @@ function baseAttentionItem(overrides: Partial<AttentionItemView> = {}): Attentio
     acknowledgedAt: null,
     resolvedAt: null,
     ...overrides,
+    findings: overrides.findings ?? [],
   };
 }
 

@@ -1,12 +1,20 @@
 // =========================
-// TACT Canonical Execution — Permission + Attention Pipeline Regression (SOR-52)
+// TACT Canonical Execution — Permission + Attention Pipeline Regression (SOR-52 / SOR-178)
 // =========================
 //
 // 対象: core/tact-execution/permission/observe.tsのobserveExecutionPermission()。
-// evaluate→persist decision→derive Attention candidate→persist Attention
-// という1本のpipeline全体を、DI seamで実Supabase接続なしに検証する
-// (evaluatePermission()自体はpure、persistPermissionDecision()/
-// persistExecutionAttention()はfake実装を注入する)。
+// evaluate→persist decision→(approval_required: derive Attention
+// candidate→persist Attention / denied・unknown: SecurityFinding導出→
+// 永続化→Attention ensure/link)という1本のpipeline全体を、DI seamで実
+// Supabase接続なしに検証する(evaluatePermission()自体はpure、
+// persistPermissionDecision()/persistExecutionAttention()/
+// observeRunsPermissionSecurityFinding()はfake実装を注入する)。
+//
+// SOR-178 cutover: denied/unknownはもうpersistExecutionAttention()を
+// 呼ばない(attentionCallsは常に0のまま)。その代わりに
+// observeRunsPermissionSecurityFinding()(新しいdeps)が呼ばれる
+// ——findingCallsで追跡する。approval_requiredのみ既存のpersistExecutionAttention()
+// 経路が変わらず使われる。
 
 import { observeExecutionPermission, type ObserveExecutionPermissionDeps } from "@tact/runs-core/tact-execution/permission/observe";
 import { deriveExecutionAttentionCandidate } from "@tact/runs-core/tact-execution/permission/attention";
@@ -14,6 +22,7 @@ import type { PersistPermissionDecisionOutcome } from "@tact/runs-core/tact-exec
 import type { PersistExecutionAttentionOutcome } from "@tact/runs-core/tact-execution/permission/attentionStore";
 import type { PermissionDecision } from "@tact/runs-core/tact-execution/permission/types";
 import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
+import type { ObserveSecurityFindingOutcome } from "@tact/runs-core/tact-execution/securityFinding/observe";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
 function makeNotionExecution(overrides: Partial<CanonicalExecution> = {}): CanonicalExecution {
@@ -79,10 +88,12 @@ function persistedDecisionOutcome(decision: PermissionDecision, decisionId = "de
 function buildDeps(overrides: Partial<ObserveExecutionPermissionDeps> = {}): {
   deps: ObserveExecutionPermissionDeps;
   attentionCalls: Array<{ candidate: unknown; decisionId: string }>;
+  findingCalls: Array<{ execution: CanonicalExecution; decision: PermissionDecision; permissionDecisionId: string }>;
   failures: Array<{ stage: string; error: unknown }>;
 } {
 
   const attentionCalls: Array<{ candidate: unknown; decisionId: string }> = [];
+  const findingCalls: Array<{ execution: CanonicalExecution; decision: PermissionDecision; permissionDecisionId: string }> = [];
   const failures: Array<{ stage: string; error: unknown }> = [];
 
   const deps: ObserveExecutionPermissionDeps = {
@@ -93,11 +104,16 @@ function buildDeps(overrides: Partial<ObserveExecutionPermissionDeps> = {}): {
       attentionCalls.push({ candidate, decisionId });
       return { status: "persisted", attention: { id: "attention-1" } as never } as PersistExecutionAttentionOutcome;
     },
+    observeRunsPermissionSecurityFinding: async (execution, decision, permissionDecisionId) => {
+      findingCalls.push({ execution, decision, permissionDecisionId });
+      return { status: "linked", findingId: "finding-1", attentionId: "attention-1", episodeCreated: true } as ObserveSecurityFindingOutcome;
+    },
+    configuredUnknownAlertRules: [],
     onFailure: (stage, error) => { failures.push({ stage, error }); },
     ...overrides,
   };
 
-  return { deps, attentionCalls, failures };
+  return { deps, attentionCalls, findingCalls, failures };
 
 }
 
@@ -105,91 +121,85 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   const results: CheckResult[] = [];
 
-  // ---- Required test 1: MATCH(allowed) -> Attentionなし ----
+  // ---- Required test 1: MATCH(allowed) -> Attentionなし・SecurityFindingなし ----
   {
-    const { deps, attentionCalls, failures } = buildDeps({
+    const { deps, attentionCalls, findingCalls, failures } = buildDeps({
       evaluatePermission: async (execution) => makeDecision("allowed", { executionId: execution.id }),
     });
 
     const outcome = await observeExecutionPermission(makeNotionExecution(), deps);
 
     results.push(check(
-      "[Required test 1] MATCH(allowed)はPermission Decisionを永続化するがAttentionは一切persistしない",
-      outcome.status === "persisted" && attentionCalls.length === 0 && failures.length === 0
+      "[Required test 1] MATCH(allowed)はPermission Decisionを永続化するがAttention/SecurityFindingは一切persistしない",
+      outcome.status === "persisted" && attentionCalls.length === 0 && findingCalls.length === 0 && failures.length === 0
     ));
   }
 
-  // ---- Required test 2/8: MISMATCH(denied) -> permission_mismatch Attention ----
+  // ---- SOR-178 cutover: MISMATCH(denied) -> SecurityFinding経路へ(persistExecutionAttentionは呼ばれない) ----
   {
-    const { deps, attentionCalls } = buildDeps({
+    const { deps, attentionCalls, findingCalls } = buildDeps({
       evaluatePermission: async (execution) => makeDecision("denied", { executionId: execution.id }),
     });
 
     await observeExecutionPermission(makeNotionExecution({ actionCategory: "delete", operation: "notion_delete_page" }), deps);
 
     results.push(check(
-      "[Required test 2/8] MISMATCH(denied)はreason='permission_mismatch'のAttentionをpersistする",
-      attentionCalls.length === 1 &&
-        (attentionCalls[0].candidate as { reason: string }).reason === "permission_mismatch" &&
-        attentionCalls[0].decisionId === "decision-1"
+      "[SOR-178 cutover] MISMATCH(denied)はobserveRunsPermissionSecurityFinding()経由になり、persistExecutionAttention()は一切呼ばれない",
+      findingCalls.length === 1 &&
+        findingCalls[0].decision.status === "denied" &&
+        findingCalls[0].permissionDecisionId === "decision-1" &&
+        attentionCalls.length === 0
     ));
   }
 
-  // ---- Required test 3/8: APPROVAL_REQUIRED -> approval_required Attention(mismatchと区別) ----
+  // ---- Required test 3/8: APPROVAL_REQUIRED -> approval_required Attention(既存経路、変更なし) ----
   {
-    const { deps, attentionCalls } = buildDeps({
+    const { deps, attentionCalls, findingCalls } = buildDeps({
       evaluatePermission: async (execution) => makeDecision("approval_required", { executionId: execution.id }),
     });
 
     await observeExecutionPermission(makeNotionExecution({ actionCategory: "update", operation: "notion_update_page" }), deps);
 
     results.push(check(
-      "[Required test 3/8] APPROVAL_REQUIREDはreason='approval_required'のAttentionをpersistする(permission_mismatchとは別)",
-      attentionCalls.length === 1 && (attentionCalls[0].candidate as { reason: string }).reason === "approval_required"
+      "[Required test 3/8] APPROVAL_REQUIREDはreason='approval_required'のAttentionをpersistする(既存経路、SecurityFindingは呼ばれない)",
+      attentionCalls.length === 1 &&
+        (attentionCalls[0].candidate as { reason: string }).reason === "approval_required" &&
+        findingCalls.length === 0
     ));
   }
 
-  // ---- Required test 4: UNKNOWN -> Attentionなし(M-0原則) ----
+  // ---- SOR-178 cutover: UNKNOWN -> SecurityFinding経路を試みる(eligibility自体はderive.ts側の責務、observe.tsは常に呼ぶ) ----
   {
-    const { deps, attentionCalls } = buildDeps({
+    const { deps, attentionCalls, findingCalls } = buildDeps({
       evaluatePermission: async (execution) => makeDecision("unknown", { executionId: execution.id, policyId: null }),
     });
 
     await observeExecutionPermission(makeNotionExecution({ actionCategory: "share", operation: "notion_share" }), deps);
 
     results.push(check(
-      "[Required test 4] UNKNOWNはM-0原則によりAttentionをpersistしない",
-      attentionCalls.length === 0
+      "[SOR-178 cutover] UNKNOWNはobserveRunsPermissionSecurityFinding()を呼ぶ(eligibility自体の判定はderive.ts側の責務)",
+      findingCalls.length === 1 && findingCalls[0].decision.status === "unknown" && attentionCalls.length === 0
     ));
   }
 
-  // ---- Required test 5: workId=nullでもAttention生成 ----
+  // ---- workId=nullでもSecurityFinding観測を試みる ----
   {
-    const { deps, attentionCalls } = buildDeps({
+    const { deps, findingCalls } = buildDeps({
       evaluatePermission: async (execution) => makeDecision("denied", { executionId: execution.id }),
     });
 
     await observeExecutionPermission(makeNotionExecution({ workId: null, actionCategory: "delete", operation: "notion_delete_page" }), deps);
 
     results.push(check(
-      "[Required test 5] workId=nullのExecutionでもAttentionが生成される(Work correlationを待たない)",
-      attentionCalls.length === 1
+      "[SOR-178] workId=nullのExecutionでもSecurityFinding観測が試みられる(Work correlationを待たない)",
+      findingCalls.length === 1
     ));
   }
 
-  // ---- Required test 6/7: duplicate evaluation -> Attention二重生成しない(persistExecutionAttention側の冪等性に委ねる) ----
+  // ---- duplicate evaluation -> observeRunsPermissionSecurityFinding()を毎回呼ぶ(その冪等性に委ねる) ----
   {
-    const { deps, attentionCalls } = buildDeps({
+    const { deps, findingCalls } = buildDeps({
       evaluatePermission: async (execution) => makeDecision("denied", { executionId: execution.id }),
-      persistExecutionAttention: async (candidate, decisionId) => {
-        attentionCalls.push({ candidate, decisionId });
-        // 2回目以降は「既に存在する」を模す(persistExecutionAttention()
-        // 自体のunique_violationハンドリングが実際に担う契約を、この
-        // pipeline層のtestでも踏襲する)。
-        return attentionCalls.length === 1
-          ? { status: "persisted", attention: { id: "attention-1" } as never }
-          : { status: "already_exists", attention: { id: "attention-1" } as never };
-      },
     });
 
     const execution = makeNotionExecution({ actionCategory: "delete", operation: "notion_delete_page" });
@@ -197,15 +207,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     await observeExecutionPermission(execution, deps);
 
     results.push(check(
-      "[Required test 6/7] 同一Executionの再評価(duplicate capture retry等)はpersistExecutionAttention()を毎回呼ぶが、" +
-        "その冪等性(execution_id unique)により2件目以降はalready_existsとして扱われ、呼び出し元(observeExecutionPermission)もエラー扱いしない",
-      attentionCalls.length === 2
+      "[Required test 6/7 相当] 同一Executionの再評価はobserveRunsPermissionSecurityFinding()を毎回呼ぶ" +
+        "(その冪等性—recordSecurityFinding/ensure_security_finding_attention_linkの既存契約—により2件目以降も安全)",
+      findingCalls.length === 2
     ));
   }
 
-  // ---- Required test 9: failed Execution + mismatch でもAttention生成される(API failureをpermission incidentと誤分類しない) ----
+  // ---- failed Execution + mismatch でもSecurityFinding観測が試みられる(API failureをpermission incidentと誤分類しない) ----
   {
-    const { deps, attentionCalls } = buildDeps({
+    const { deps, findingCalls } = buildDeps({
       evaluatePermission: async (execution) => makeDecision("denied", { executionId: execution.id }),
     });
 
@@ -219,20 +229,19 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     await observeExecutionPermission(failedExecution, deps);
 
     results.push(check(
-      "[Required test 9] Execution自体がFAILEDでも、Permission DecisionがMISMATCHならAttentionが生成される" +
-        "(reasonはpermission由来のみ、API failure自体は別concern)",
-      attentionCalls.length === 1 && (attentionCalls[0].candidate as { reason: string }).reason === "permission_mismatch"
+      "[Required test 9 相当] Execution自体がFAILEDでも、Permission DecisionがMISMATCHならSecurityFinding観測が試みられる",
+      findingCalls.length === 1
     ));
   }
 
-  // ---- Required test 10 / Section15: Attention persistence失敗はPermission Decisionの結果を壊さない ----
+  // ---- Required test 10 / Section15: Attention persistence失敗はPermission Decisionの結果を壊さない(approval_required経路) ----
   {
     const { deps, failures } = buildDeps({
-      evaluatePermission: async (execution) => makeDecision("denied", { executionId: execution.id }),
+      evaluatePermission: async (execution) => makeDecision("approval_required", { executionId: execution.id }),
       persistExecutionAttention: async () => { throw new Error("attention table unavailable"); },
     });
 
-    const outcome = await observeExecutionPermission(makeNotionExecution({ actionCategory: "delete", operation: "notion_delete_page" }), deps);
+    const outcome = await observeExecutionPermission(makeNotionExecution({ actionCategory: "update", operation: "notion_update_page" }), deps);
 
     results.push(check(
       "[Required test 10 / Section15] Attention persistenceの失敗はPersistPermissionDecisionOutcomeを変えず、例外も外へ伝播しないが、" +
@@ -243,9 +252,56 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
-  // ---- decisionが実際に永続化されなかった場合(invalid/unavailable等)はAttentionを試みない ----
+  // ---- SOR-178: SecurityFinding持続化失敗はPermission Decisionの結果を壊さない ----
   {
-    const { deps, attentionCalls } = buildDeps({
+    const { deps, failures } = buildDeps({
+      evaluatePermission: async (execution) => makeDecision("denied", { executionId: execution.id }),
+      observeRunsPermissionSecurityFinding: async () => ({ status: "finding_persistence_failed", reason: "unavailable" }),
+    });
+
+    const outcome = await observeExecutionPermission(makeNotionExecution({ actionCategory: "delete", operation: "notion_delete_page" }), deps);
+
+    results.push(check(
+      "[SOR-178 Failure isolation] SecurityFinding永続化の失敗はPersistPermissionDecisionOutcomeを変えず、" +
+        "onFailure(stage='security_finding_persistence')として報告される",
+      outcome.status === "persisted" && failures.length === 1 && failures[0].stage === "security_finding_persistence"
+    ));
+  }
+
+  // ---- SOR-178: Attention ensure/link失敗はFindingの永続化結果(呼び出し元が見る限り)を壊さない ----
+  {
+    const { deps, failures } = buildDeps({
+      evaluatePermission: async (execution) => makeDecision("denied", { executionId: execution.id }),
+      observeRunsPermissionSecurityFinding: async () => ({ status: "attention_link_failed", findingId: "finding-1", reason: "error" }),
+    });
+
+    const outcome = await observeExecutionPermission(makeNotionExecution({ actionCategory: "delete", operation: "notion_delete_page" }), deps);
+
+    results.push(check(
+      "[SOR-178 Failure isolation] Attention ensure/link失敗はPersistPermissionDecisionOutcomeを変えず、" +
+        "onFailure(stage='security_finding_attention_link')として報告される(Findingは既に確定済み、取り消さない)",
+      outcome.status === "persisted" && failures.length === 1 && failures[0].stage === "security_finding_attention_link"
+    ));
+  }
+
+  // ---- not_eligible(derive.tsがnullを返した)場合はonFailureを呼ばない ----
+  {
+    const { deps, failures } = buildDeps({
+      evaluatePermission: async (execution) => makeDecision("unknown", { executionId: execution.id, policyId: null }),
+      observeRunsPermissionSecurityFinding: async () => ({ status: "not_eligible" }),
+    });
+
+    const outcome = await observeExecutionPermission(makeNotionExecution({ actionCategory: "read", operation: "notion_read" }), deps);
+
+    results.push(check(
+      "[SOR-178] not_eligible(低impact unknown等)はonFailureを呼ばず、正常なoutcomeをそのまま返す",
+      outcome.status === "persisted" && failures.length === 0
+    ));
+  }
+
+  // ---- decisionが実際に永続化されなかった場合(invalid/unavailable等)はAttention/SecurityFindingのどちらも試みない ----
+  {
+    const { deps, attentionCalls, findingCalls } = buildDeps({
       evaluatePermission: async (execution) => makeDecision("denied", { executionId: execution.id }),
       persistPermissionDecision: async () => ({ status: "unavailable" }),
     });
@@ -253,18 +309,19 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     await observeExecutionPermission(makeNotionExecution({ actionCategory: "delete", operation: "notion_delete_page" }), deps);
 
     results.push(check(
-      "[Contract] Permission Decision自体が永続化されなかった場合(status=unavailable等)、Attention persistenceは試みない" +
+      "[Contract] Permission Decision自体が永続化されなかった場合(status=unavailable等)、Attention/SecurityFindingのいずれも試みない" +
         "(存在しないdecisionIdを参照させない)",
-      attentionCalls.length === 0
+      attentionCalls.length === 0 && findingCalls.length === 0
     ));
   }
 
   // ---- SOR-47 Phase2(Evaluator Cutover、絶対条件): Registry読み込み失敗はobserveExecutionPermission内で握り潰されず、
-  // 呼び出し元へ伝播する。persistPermissionDecision/persistExecutionAttentionのいずれも一切呼ばれない
-  // (「読めなかった」ことを「matchしなかった」(正当なunknown decision)へ静かに変換しない、Human Owner指示) ----
+  // 呼び出し元へ伝播する。persistPermissionDecision/persistExecutionAttention/observeRunsPermissionSecurityFindingの
+  // いずれも一切呼ばれない(「読めなかった」ことを「matchしなかった」(正当なunknown decision)へ静かに変換しない、Human Owner指示) ----
   {
     let persistDecisionCalled = false;
     let persistAttentionCalled = false;
+    let observeFindingCalled = false;
 
     const { deps } = buildDeps({
       evaluatePermission: async () => {
@@ -278,6 +335,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         persistAttentionCalled = true;
         return { status: "persisted", attention: { id: "attention-1" } as never };
       },
+      observeRunsPermissionSecurityFinding: async () => {
+        observeFindingCalled = true;
+        return { status: "not_eligible" };
+      },
     });
 
     let threw = false;
@@ -289,9 +350,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(check(
       "[Phase2/cutover, 絶対条件] Registry読み込み失敗(evaluatePermissionの例外)はobserveExecutionPermission内でcatchされず、" +
-        "呼び出し元(各adapterの既存Capture Failure Policy)へそのまま伝播する。persistPermissionDecision/persistExecutionAttentionの" +
-        "いずれも一切呼ばれない(誤ったPermission Decision provenance/misleading Attentionを作らない)",
-      threw && !persistDecisionCalled && !persistAttentionCalled
+        "呼び出し元(各adapterの既存Capture Failure Policy)へそのまま伝播する。persistPermissionDecision/persistExecutionAttention/" +
+        "observeRunsPermissionSecurityFindingのいずれも一切呼ばれない(誤ったPermission Decision provenance/misleading Attention/Findingを作らない)",
+      threw && !persistDecisionCalled && !persistAttentionCalled && !observeFindingCalled
     ));
   }
 
