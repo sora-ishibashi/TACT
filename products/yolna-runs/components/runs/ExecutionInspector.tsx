@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { InspectorPanel } from "@/components/shell/ShellContainers";
 import { PresentationState, presentationStateForHttp, type PresentationStateKind } from "@/components/shell/PresentationState";
 import type { CorrelationReviewView } from "@tact/runs-core/tact-runs-view";
@@ -26,15 +26,20 @@ const correlationMethodLabel: Record<string, string> = {
 
 /** Shared Execution Inspector contract. Mount it from any screen and call its onSelectExecution boundary with an execution id. */
 export function ExecutionInspector({ executionId, accessToken, onClose }: ExecutionInspectorProps) {
+  // Opaque identity that changes whenever accessToken changes; the raw token is never stored.
+  const authIdentity = useMemo(() => (accessToken ? {} : null), [accessToken]);
+
   const [response, setResponse] = useState<{
     executionId: string;
+    authIdentity: object;
     model: ExecutionInspectorViewModel | null;
     correlation: CorrelationReviewView | null;
     state: PresentationStateKind | null;
   } | null>(null);
 
   useEffect(() => {
-    if (!executionId || !accessToken) return;
+    if (!executionId || !accessToken || !authIdentity) return;
+    const requestAuthIdentity = authIdentity;
     let cancelled = false;
     void Promise.all([
       fetch(`/api/tact/runs/execution/${encodeURIComponent(executionId)}`, { headers: { Authorization: `Bearer ${accessToken}` } }),
@@ -44,21 +49,22 @@ export function ExecutionInspector({ executionId, accessToken, onClose }: Execut
       const correlationBody = await correlationResponse.json().catch(() => null);
       if (cancelled) return;
       if (!detail.ok || !detailBody?.success) {
-        setResponse({ executionId, model: null, correlation: null, state: presentationStateForHttp(detail.status) });
+        setResponse({ executionId, authIdentity: requestAuthIdentity, model: null, correlation: null, state: presentationStateForHttp(detail.status) });
         return;
       }
       setResponse({
         executionId,
+        authIdentity: requestAuthIdentity,
         model: detailBody.inspector as ExecutionInspectorViewModel,
         correlation: correlationResponse.ok && correlationBody?.success ? correlationBody.correlation as CorrelationReviewView : null,
         state: null,
       });
-    }).catch(() => { if (!cancelled) setResponse({ executionId, model: null, correlation: null, state: "error" }); });
+    }).catch(() => { if (!cancelled) setResponse({ executionId, authIdentity: requestAuthIdentity, model: null, correlation: null, state: "error" }); });
     return () => { cancelled = true; };
-  }, [executionId, accessToken]);
+  }, [executionId, accessToken, authIdentity]);
 
   if (!executionId) return null;
-  const currentResponse = response?.executionId === executionId ? response : null;
+  const currentResponse = response?.executionId === executionId && response.authIdentity === authIdentity ? response : null;
   const model = currentResponse?.model ?? null;
   const correlation = currentResponse?.correlation ?? null;
   const state = !accessToken ? "unavailable" : currentResponse ? currentResponse.state : "loading";
