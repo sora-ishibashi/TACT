@@ -236,7 +236,52 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
-  // ---- SECURITY: trusted user A and trusted user B are fully isolated, even reusing the same invocationId ----
+  // ---- SECURITY A: cross-tenant collision on the SAME invocationId fails closed ----
+  //
+  // Repository reality (Human Owner correction): GovernanceInvocation.id
+  // is "id uuid primary key" on tact_governance_invocations — GLOBALLY
+  // unique, not scoped per tenant. unique(id, user_id) exists only for
+  // composite FK support. So the same invocationId can never belong to
+  // two tenants as two separate rows; a second tenant's attempt to reuse
+  // an id already owned by someone else must fail closed, never read,
+  // leak, or adopt the first tenant's invocation/decision.
+  {
+    const store = makeFakeGovernanceStore();
+    const ruleForA = makeFakeRule({ targetProvider: "slack", actionCategory: "send", decision: "allowed", reasonCode: "a_allows" });
+    const deps = makePreflightDeps(store, async () => [ruleForA]);
+
+    const collidingInvocationId = randomUUID();
+    const outcomeA = await preflight(makeRequest({ invocationId: collidingInvocationId }), TRUSTED_USER_A, deps);
+
+    results.push(check(
+      "[SECURITY-A setup] user A successfully preflights invocation X",
+      outcomeA.status === "decided" && outcomeA.response.verdict === "ALLOW"
+    ));
+
+    const outcomeB = await preflight(makeRequest({ invocationId: collidingInvocationId }), TRUSTED_USER_B, deps);
+
+    results.push(check(
+      "[SECURITY-A] user B's attempt to reuse user A's invocation id never resolves to \"decided\" — it fails closed instead of adopting A's verdict",
+      outcomeB.status !== "decided"
+    ));
+
+    results.push(check(
+      "[SECURITY-A] user B's failure is reported as unavailable (duplicate claim could not be read), not invocation_conflict — the id isn't B's to conflict over",
+      outcomeB.status === "unavailable"
+    ));
+
+    results.push(check(
+      "[SECURITY-A] still exactly one GovernanceInvocation row (A's) — B's attempt never created a second one",
+      store.invocations.size === 1 && Array.from(store.invocations.values())[0]?.userId === TRUSTED_USER_A
+    ));
+
+    results.push(check(
+      "[SECURITY-A] still exactly one GovernanceDecision row (A's) — B never caused, read, or adopted a decision",
+      store.decisions.size === 1
+    ));
+  }
+
+  // ---- SECURITY B: normal tenant isolation using two different invocation ids ----
   {
     const store = makeFakeGovernanceStore();
     const ruleForA = makeFakeRule({ userId: TRUSTED_USER_A, targetProvider: "slack", actionCategory: "send", decision: "allowed", reasonCode: "a_allows" });
@@ -249,43 +294,35 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     // exactly as it is in production.
     const deps = makePreflightDeps(store, async (userId) => allRules.filter((r) => r.userId === userId || r.userId === null));
 
-    const sharedInvocationId = randomUUID();
-    const requestA = makeRequest({ invocationId: sharedInvocationId });
-    const requestB = makeRequest({ invocationId: sharedInvocationId });
+    const requestA = makeRequest({ invocationId: randomUUID() });
+    const requestB = makeRequest({ invocationId: randomUUID() });
 
     const outcomeA = await preflight(requestA, TRUSTED_USER_A, deps);
     const outcomeB = await preflight(requestB, TRUSTED_USER_B, deps);
 
     results.push(check(
-      "[SECURITY] the identical request+invocationId executed under two different trusted users does not collide",
-      outcomeA.status === "decided" && outcomeB.status === "decided"
-    ));
-
-    results.push(check(
-      "[SECURITY] user A's tenant-scoped registry rule decides only user A's evaluation (ALLOW)",
+      "[SECURITY-B] user A's tenant-scoped registry rule decides only user A's evaluation (ALLOW)",
       outcomeA.status === "decided" && outcomeA.response.verdict === "ALLOW" && outcomeA.response.reasonCode === "a_allows"
     ));
 
     results.push(check(
-      "[SECURITY] user B's tenant-scoped registry rule decides only user B's evaluation (DENY) — same invocationId, same wire request",
+      "[SECURITY-B] user B's tenant-scoped registry rule decides only user B's evaluation (DENY)",
       outcomeB.status === "decided" && outcomeB.response.verdict === "DENY" && outcomeB.response.reasonCode === "b_denies"
     ));
 
     results.push(check(
-      "[SECURITY] two separate GovernanceInvocation rows exist (one per tenant), never merged into one",
+      "[SECURITY-B] two separate GovernanceInvocation rows exist, one per tenant's own invocation id",
       store.invocations.size === 2
     ));
 
     results.push(check(
-      "[SECURITY] two separate GovernanceDecision rows exist with different decisionIds (tenant is part of the deterministic claim)",
+      "[SECURITY-B] two separate GovernanceDecision rows exist with different decisionIds",
       outcomeA.status === "decided" && outcomeB.status === "decided" && outcomeA.response.decisionId !== outcomeB.response.decisionId
     ));
 
-    // A then retrieves only A's own decision on retry — never B's, even
-    // though the invocationId is identical.
     const retryA = await preflight(requestA, TRUSTED_USER_A, deps);
     results.push(check(
-      "[SECURITY] a retry under user A still returns user A's own decision, not user B's",
+      "[SECURITY-B] a retry stays inside the correct tenant: user A's retry returns user A's own decision",
       retryA.status === "decided" && outcomeA.status === "decided" && retryA.response.decisionId === outcomeA.response.decisionId
     ));
   }

@@ -58,7 +58,8 @@ function sameExcludingCreatedAt(a: unknown, b: unknown): boolean {
 export type FakeCreateInvocationOutcome =
   | { status: "created"; invocation: GovernanceInvocation }
   | { status: "already_exists"; invocation: GovernanceInvocation }
-  | { status: "idempotency_conflict" };
+  | { status: "idempotency_conflict" }
+  | { status: "error"; message: string };
 
 export type FakeAppendDecisionOutcome =
   | { status: "created"; decision: GovernanceDecision }
@@ -87,20 +88,21 @@ export function makeFakeGovernanceStore(options: FakeGovernanceStoreOptions = {}
 
   const { artificialRaceYield = false } = options;
 
-  // Mirrors the real schema's unique(id, user_id) on
-  // tact_governance_invocations (products/yolna-runs/supabase/migrations/
-  // 20270101000013...sql): the SAME invocationId string may legitimately
-  // belong to two different tenants as two separate rows. Keying this
-  // fake by id alone would wrongly make one tenant's invocation collide
-  // with another's.
+  // tact_governance_invocations.id is "id uuid primary key" — GLOBALLY
+  // unique, not scoped per tenant (products/yolna-runs/supabase/
+  // migrations/20270101000013...sql). The accompanying
+  // unique(id, user_id) exists only to let tact_governance_decisions /
+  // tact_governance_invocation_execution_links reference the composite
+  // (invocation_id, user_id) pair as a foreign key — it does not relax
+  // id's own global uniqueness, and it does NOT mean the same
+  // invocationId string can belong to two different tenants as two
+  // separate rows. Keyed here by id alone, exactly mirroring the real PK.
   const invocations = new Map<string, GovernanceInvocation>();
-  // tact_governance_decisions.id is a GLOBAL primary key — correctly
+  // tact_governance_decisions.id is also a GLOBAL primary key — likewise
   // keyed by id alone.
   const decisions = new Map<string, GovernanceDecision>();
   const linksByExecutionId = new Map<string, GovernanceExecutionLink>();
   let linkIdCounter = 0;
-
-  const invocationKey = (userId: string, id: string) => `${userId}\u001f${id}`;
 
   async function maybeYield(): Promise<void> {
     if (artificialRaceYield) {
@@ -112,13 +114,25 @@ export function makeFakeGovernanceStore(options: FakeGovernanceStoreOptions = {}
 
     await maybeYield();
 
-    const key = invocationKey(input.userId, input.id);
-    const existing = invocations.get(key);
+    const existing = invocations.get(input.id);
 
     if (!existing) {
       const invocation: GovernanceInvocation = { ...input, createdAt: new Date().toISOString() };
-      invocations.set(key, invocation);
+      invocations.set(input.id, invocation);
       return { status: "created", invocation };
+    }
+
+    // Mirrors governance/store.ts's own createGovernanceInvocation()
+    // duplicate-PK recovery exactly: the recovery read is scoped by BOTH
+    // id AND user_id (`.eq("id", input.id).eq("user_id", input.userId)`).
+    // When the PK collision is against a row owned by a DIFFERENT
+    // tenant, that scoped read finds nothing — it can never read, leak,
+    // or adopt another tenant's row. The real store then reports
+    // "duplicate claim could not be read" rather than already_exists or
+    // idempotency_conflict (those two statuses are reserved for a
+    // same-tenant row this caller is actually allowed to read back).
+    if (existing.userId !== input.userId) {
+      return { status: "error", message: "duplicate claim could not be read" };
     }
 
     return sameExcludingCreatedAt(existing, input)
@@ -146,7 +160,8 @@ export function makeFakeGovernanceStore(options: FakeGovernanceStoreOptions = {}
   }
 
   async function getGovernanceInvocation(id: string, userId: string): Promise<GovernanceInvocation | undefined> {
-    return invocations.get(invocationKey(userId, id));
+    const invocation = invocations.get(id);
+    return invocation && invocation.userId === userId ? invocation : undefined;
   }
 
   async function listGovernanceDecisionsForInvocation(id: string, userId: string): Promise<GovernanceDecision[]> {

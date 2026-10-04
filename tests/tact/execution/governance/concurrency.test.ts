@@ -144,7 +144,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
-  // ---- Cross-tenant race on the SAME invocationId: must never collide with each other ----
+  // ---- Cross-tenant race on the SAME invocationId: exactly one tenant wins, the other fails closed ----
+  //
+  // Repository reality (Human Owner correction): GovernanceInvocation.id
+  // is a GLOBAL primary key, not scoped per tenant — the same
+  // invocationId can never belong to two different tenants as two
+  // separate rows, raced or not. This is the race-condition version of
+  // contract.test.ts's own sequential "[SECURITY-A]" cross-tenant
+  // collision test: here both tenants arrive at the SAME invocation
+  // claim simultaneously instead of one after the other.
   {
     const store = makeFakeGovernanceStore({ artificialRaceYield: true });
     const ruleForA = makeFakeRule({ userId: "user-race-a", targetProvider: "slack", actionCategory: "send", decision: "allowed", reasonCode: "a_allow" });
@@ -167,16 +175,27 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       preflight(request, "user-race-b", deps),
     ]);
 
+    const decidedCount = [outcomeA, outcomeB].filter((o) => o.status === "decided").length;
+    const unavailableCount = [outcomeA, outcomeB].filter((o) => o.status === "unavailable").length;
+
     results.push(check(
-      "[race/cross-tenant] two different tenants racing on the identical invocationId each get their OWN decision, never each other's",
-      outcomeA.status === "decided" && outcomeB.status === "decided" &&
-      outcomeA.response.verdict === "ALLOW" && outcomeB.response.verdict === "DENY" &&
-      outcomeA.response.decisionId !== outcomeB.response.decisionId
+      "[race/cross-tenant] exactly one of the two racing tenants is decided — the identical invocationId can never belong to both",
+      decidedCount === 1
     ));
 
     results.push(check(
-      "[race/cross-tenant] two separate GovernanceDecision rows exist — one per tenant, the deterministic claim is tenant-scoped",
-      store.decisions.size === 2
+      "[race/cross-tenant] the losing tenant fails closed as unavailable, never adopting the winner's verdict as its own",
+      unavailableCount === 1
+    ));
+
+    results.push(check(
+      "[race/cross-tenant] still exactly one GovernanceInvocation row despite the race — owned by whichever tenant actually won",
+      store.invocations.size === 1
+    ));
+
+    results.push(check(
+      "[race/cross-tenant] still exactly one GovernanceDecision row — the loser never caused, read, or adopted a decision",
+      store.decisions.size === 1
     ));
   }
 

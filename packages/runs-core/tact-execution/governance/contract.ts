@@ -229,15 +229,24 @@ function pickEffectiveDecision(decisions: readonly GovernanceDecision[]): Govern
   return [...decisions].sort((a, b) => Date.parse(a.evaluatedAt) - Date.parse(b.evaluatedAt))[0];
 }
 
-// Deterministic, collision-safe across tenants (Human Owner correction:
-// GovernanceInvocation.id is only unique PER (user_id, id) — two
-// different users may legitimately reuse the same invocationId string —
-// so the FIRST decision's id cannot simply equal invocation.id itself,
-// which is a GLOBAL primary key on tact_governance_decisions.
-// SHA-256-derived, formatted as a syntactically valid uuid (version/
-// variant bits set so the "uuid" column type accepts it), including
-// userId in the hash input so no two different tenants' invocations can
-// ever target the same decision row.
+// Deterministic, SHA-256-derived, formatted as a syntactically valid uuid
+// (version/variant bits set so the "uuid" column type accepts it).
+//
+// Correction (repository-reality re-review): GovernanceInvocation.id is
+// "id uuid primary key" on tact_governance_invocations — GLOBALLY
+// unique, not scoped per tenant. The accompanying unique(id, user_id)
+// exists only to support composite FK references from
+// tact_governance_decisions / tact_governance_invocation_execution_links;
+// it does not relax id's own global uniqueness, and the same
+// invocationId string can never belong to two different tenants as two
+// separate rows (a second tenant's attempt to claim an already-existing
+// id fails closed — see createGovernanceInvocation()'s duplicate-PK
+// recovery in governance/store.ts, which cannot read back a row owned by
+// a different user_id). Including userId in this hash is therefore NOT
+// required for cross-tenant collision-safety (invocation.id alone
+// already guarantees that structurally) — it is deliberate, explicit
+// domain separation / tenant binding for the decision id namespace, kept
+// as defense-in-depth rather than as a correctness necessity.
 function deterministicFirstDecisionId(userId: string, invocationId: string): string {
 
   const digest = createHash("sha256").update(`${userId}\u001fgovernance-decision\u001f${invocationId}`, "utf8").digest();
@@ -418,17 +427,13 @@ export async function preflight(
   const rules = await deps.listActivePermissionRulesForMatching(invocation.userId);
 
   // Deterministic, not random (see header comment on "first-decision
-  // concurrency"): the FIRST decision attempt's id turns the
-  // already-existing PRIMARY KEY on tact_governance_decisions into the
-  // sole concurrency-safety mechanism this needs — no new UNIQUE
-  // constraint, no advisory lock, no migration. Two callers racing past
-  // the "no decision yet" check above will attempt to insert the exact
-  // same row id; at most one of those inserts can ever land. Derived from
-  // (userId, invocationId) rather than invocation.id alone, because
-  // invocation.id is only unique PER tenant (unique(id, user_id) on
-  // tact_governance_invocations) while tact_governance_decisions.id is a
-  // GLOBAL primary key — two different tenants legitimately reusing the
-  // same invocationId string must never target the same decision row.
+  // concurrency" and deterministicFirstDecisionId()'s own comment): the
+  // FIRST decision attempt's id turns the already-existing PRIMARY KEY on
+  // tact_governance_decisions into the sole concurrency-safety mechanism
+  // this needs — no new UNIQUE constraint, no advisory lock, no
+  // migration. Two callers racing past the "no decision yet" check above
+  // will attempt to insert the exact same row id; at most one of those
+  // inserts can ever land.
   const decisionId = deterministicFirstDecisionId(invocation.userId, invocation.id);
   const decisionInput = buildGovernanceDecisionFromRegistry(invocation, decisionId, rules, deps.now());
 
