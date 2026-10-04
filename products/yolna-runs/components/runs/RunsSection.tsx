@@ -383,6 +383,15 @@ export default function RunsSection() {
   const filteredSurfaces = useMemo(() => coverage.surfaces.filter((surface) => `${surface.source} ${surface.health} ${surface.coverageStatus}`.toLowerCase().includes(coverageSearch.toLowerCase())), [coverage.surfaces, coverageSearch]);
   const unavailableTitle = section === "work" ? "仕事" : section === "agent" ? "AI" : section === "permission" ? "権限" : null;
 
+  // One SOR-185 inspector instance is shared by Activity and Work Timeline.
+  const executionInspector = (
+    <ExecutionInspector
+      executionId={inspectedExecutionId}
+      accessToken={getAccessToken()}
+      onClose={() => setInspectedExecutionId(null)}
+    />
+  );
+
   function itemLabel(value: string) { return japaneseProjection(value) === value ? value.replaceAll("_", " ") : japaneseProjection(value); }
 
   if (!user) {
@@ -408,7 +417,7 @@ export default function RunsSection() {
         ) : workError ? (
           workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />
         ) : workHeader ? (
-          <WorkDetailView work={workHeader} items={workItems} onBack={handleBack} onReviewCorrelation={setReviewingExecutionId} />
+          <WorkDetailView work={workHeader} items={workItems} onBack={handleBack} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={setInspectedExecutionId} />
         ) : (
           <div className="flex flex-col gap-4">
             <button
@@ -430,6 +439,8 @@ export default function RunsSection() {
             onCorrected={(result) => handleExecutionCorrected(reviewingExecutionId, result)}
           />
         )}
+
+        {executionInspector}
 
       </div>
 
@@ -495,11 +506,7 @@ export default function RunsSection() {
         />
       )}
 
-      <ExecutionInspector
-        executionId={inspectedExecutionId}
-        accessToken={getAccessToken()}
-        onClose={() => setInspectedExecutionId(null)}
-      />
+      {executionInspector}
 
       </div>
     </div>
