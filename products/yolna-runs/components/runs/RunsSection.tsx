@@ -23,6 +23,9 @@ import AttentionList from "./AttentionList";
 import ObservationCoverage from "./ObservationCoverage";
 import WorkDetailView from "./WorkDetailView";
 import CorrelationReviewModal from "./CorrelationReviewModal";
+import { useRunsShell } from "@/components/shell/AppShell";
+import { SecondarySidebar } from "@/components/shell/SecondarySidebar";
+import { japaneseProjection } from "@/lib/japaneseProjection";
 import {
   filterActivityItems,
   distinctActivityFilterOptions,
@@ -58,6 +61,7 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
 export default function RunsSection() {
 
   const { user, getAccessToken } = useAuth();
+  const { section } = useRunsShell();
 
   const [view, setView] = useState<RunsView>("activity");
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
@@ -347,6 +351,8 @@ export default function RunsSection() {
     () => filterActivityItems(activityItems, activityFilters),
     [activityItems, activityFilters]
   );
+  const unavailableTitle = section === "work" ? "仕事" : section === "agent" ? "AI" : section === "permission" ? "権限" : null;
+  const displayedView: RunsView = section === "attention" ? "attention" : section === "activity" || section === "home" ? "activity" : view;
 
   if (!user) {
 
@@ -402,18 +408,33 @@ export default function RunsSection() {
 
   return (
 
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto px-6 py-5">
+    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <SecondarySidebar
+        title={section === "attention" ? japaneseProjection("Attention") : section === "coverage" ? "接続・観測" : unavailableTitle ?? japaneseProjection("Activity")}
+        summary={section === "attention" ? `${attentionItems.length}件` : section === "activity" || section === "home" ? `${activityItems.length}件` : undefined}
+      >
+        {unavailableTitle ? (
+          <p className="text-[12px] leading-[18px] text-[#626161]">この画面に対応するread modelは、まだ利用できません。</p>
+        ) : section === "attention" ? (
+          <p className="text-[12px] leading-[18px] text-[#626161]">要確認のカテゴリと件数は、現在のread modelから表示します。</p>
+        ) : section === "coverage" ? (
+          <p className="text-[12px] leading-[18px] text-[#626161]">観測の健全性と欠損は、接続・観測のread modelで確認できます。</p>
+        ) : (
+          <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} />
+        )}
+      </SecondarySidebar>
+      <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 lg:px-6">
 
-      <h1 className="text-[24px] font-medium leading-[32px] text-[#112278]">Runs</h1>
+      <h1 className="text-[24px] font-medium leading-[32px] text-[#112278]">{unavailableTitle ?? (section === "attention" ? "要確認" : section === "coverage" ? "接続・観測" : section === "home" ? "ホーム" : "実行記録")}</h1>
 
-      <div role="tablist" aria-label="Runs" className="mt-4 flex gap-1 border-b border-[#D9D9D9]">
-        <TabButton active={view === "activity"} onClick={() => setView("activity")} label="Activity" />
+      {!unavailableTitle && <div role="tablist" aria-label="Runs" className="mt-4 flex gap-1 border-b border-[#D9D9D9]">
+        <TabButton active={displayedView === "activity"} onClick={() => setView("activity")} label="実行記録" />
         <TabButton
-          active={view === "attention"}
+          active={displayedView === "attention"}
           onClick={() => setView("attention")}
           label={attentionItems.length > 0 ? `Needs Attention (${attentionItems.length})` : "Needs Attention"}
         />
-      </div>
+      </div>}
 
       {/* SOR-23 compact-width fix: this div is a flex item of the root
           (flex flex-col above) — same min-width:auto default as any other
@@ -422,7 +443,11 @@ export default function RunsSection() {
           than the viewport, even after fixing TactShell alone. */}
       <div className="mt-4 min-w-0">
 
-        {view === "activity" ? (
+        {unavailableTitle ? (
+          <section className="rounded-xl border border-[#D9D9D9] bg-[#F2F2F2]/40 p-4" aria-label="利用不可のread model"><p className="text-[13px] text-[#112278]">表示できるデータはありません</p><p className="mt-1 text-[12px] leading-[18px] text-[#626161]">read modelが用意されるまで、架空の件数や状態は表示しません。</p></section>
+        ) : section === "coverage" ? (
+          <ObservationCoverage surfaces={coverage.surfaces} gaps={coverage.gaps} />
+        ) : displayedView === "activity" ? (
 
           activityLoading ? (
             <p className="text-[13px] leading-[18px] text-[#626161]">読み込んでいます...</p>
@@ -430,7 +455,6 @@ export default function RunsSection() {
             <p className="text-[13px] leading-[18px] text-[#C53F4B]">{activityError}</p>
           ) : (
             <div className="flex min-w-0 flex-col gap-3">
-              <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} />
               {activityItems.length > 0 && filteredActivityItems.length === 0 ? (
                 <p className="text-[13px] leading-[18px] text-[#626161]">
                   条件に一致するExecutionはありません。
@@ -455,7 +479,7 @@ export default function RunsSection() {
 
       </div>
 
-      <ObservationCoverage surfaces={coverage.surfaces} gaps={coverage.gaps} />
+      {section !== "coverage" && !unavailableTitle && <ObservationCoverage surfaces={coverage.surfaces} gaps={coverage.gaps} />}
 
       {reviewingExecutionId && getAccessToken() && (
         <CorrelationReviewModal
@@ -466,6 +490,7 @@ export default function RunsSection() {
         />
       )}
 
+      </div>
     </div>
 
   );
