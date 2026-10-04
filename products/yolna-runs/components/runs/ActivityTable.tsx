@@ -11,6 +11,7 @@
 
 import type { ActivityItemView } from "@tact/runs-core/tact-runs-view";
 import { PermissionBadge, ResultBadge, WorkReference } from "./badges";
+import { executionActionPresentation } from "@/lib/executionInspector";
 
 function formatTimestamp(iso: string): string {
 
@@ -99,7 +100,7 @@ export default function ActivityTable({
                   <span className="ml-1 text-[10px] text-[#8A8A8A]">{item.targetSystem.subLabel}</span>
                 )}
               </td>
-              <td className="whitespace-nowrap px-4 py-2.5 font-medium">{item.action}</td>
+              <td className="whitespace-nowrap px-4 py-2.5 font-medium">{executionActionPresentation(item.action)}</td>
               <td className="px-4 py-2.5"><ResultBadge status={item.executionStatus} /></td>
               <td className="px-4 py-2.5"><PermissionBadge result={item.permissionEvaluation} /></td>
               <td className="px-4 py-2.5">

@@ -12,10 +12,11 @@ const execution = {
 } as unknown as CanonicalExecution;
 
 const model = toExecutionInspectorViewModel(execution, [], []);
-assert.equal(model.summary.action, "UPDATE_PAGE");
+assert.equal(model.summary.action, "\u30da\u30fc\u30b8\u3092\u66f4\u65b0");
+assert.equal(model.summary.result, "\u5b8c\u4e86");
 assert.equal(model.summary.occurredAt, "2026-01-02T03:04:05.000Z");
 assert.equal(model.summary.observedAt, "2026-01-02T03:05:05.000Z");
-assert.equal(model.permission.registered, "Unknown");
+assert.equal(model.permission.evaluation, "\u672a\u8a55\u4fa1");
 assert.equal(model.technical.invocationId, "invoke-1");
 assert.equal(model.permission.downstream.length, 0);
 assert.equal(model.summary.actor, "AI\uff08requester-1\uff09");

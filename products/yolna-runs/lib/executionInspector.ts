@@ -1,6 +1,5 @@
 import {
   actionLabel,
-  executionResultLabel,
   principalLabel,
   targetSystemLabel,
 } from "@tact/runs-core/tact-runs-view";
@@ -8,6 +7,7 @@ import type {
   CanonicalExecution,
   DownstreamPermissionEvidence,
   PermissionDecision,
+  ExecutionStatus,
 } from "@tact/runs-core/tact-execution";
 
 export type ExecutionInspectorViewModel = {
@@ -66,6 +66,33 @@ const authorityLabel: Record<DownstreamPermissionEvidence["authorityLevel"], str
   NON_AUTHORITATIVE: "\u53c2\u8003",
   UNKNOWN: "\u6a29\u9650\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093",
 };
+const resultLabel: Record<ExecutionStatus, string> = {
+  observed: "\u89b3\u6e2c\u6e08\u307f",
+  running: "\u5b9f\u884c\u4e2d",
+  succeeded: "\u5b8c\u4e86",
+  failed: "\u5931\u6557",
+  cancelled: "\u53d6\u308a\u6d88\u3057",
+  unknown: "\u5224\u5b9a\u3067\u304d\u307e\u305b\u3093",
+};
+const knownActionLabels: Record<string, string> = {
+  CREATE: "\u4f5c\u6210",
+  CREATE_PAGE: "\u30da\u30fc\u30b8\u3092\u4f5c\u6210",
+  UPDATE: "\u66f4\u65b0",
+  UPDATE_PAGE: "\u30da\u30fc\u30b8\u3092\u66f4\u65b0",
+  DELETE: "\u524a\u9664",
+  DELETE_PAGE: "\u30da\u30fc\u30b8\u3092\u524a\u9664",
+  SEND: "\u9001\u4fe1",
+  READ: "\u8aad\u307f\u53d6\u308a",
+};
+
+/** Presentation only: unknown operations retain their canonical words without inventing meaning. */
+export function executionActionPresentation(action: string): string {
+  return knownActionLabels[action] ?? action.replaceAll("_", " ");
+}
+
+export function executionResultPresentation(status: ExecutionStatus): string {
+  return resultLabel[status];
+}
 
 /** A read-only presentation projection. It never evaluates permissions or correlations. */
 export function toExecutionInspectorViewModel(
@@ -74,7 +101,7 @@ export function toExecutionInspectorViewModel(
   downstream: readonly DownstreamPermissionEvidence[],
 ): ExecutionInspectorViewModel {
   const target = targetSystemLabel(execution.provider, execution.targetProvider, execution.adapterVersion);
-  const action = actionLabel(execution.operation, execution.provider, execution.targetProvider);
+  const action = executionActionPresentation(actionLabel(execution.operation, execution.provider, execution.targetProvider));
   const actor = `${actorKindLabel[execution.actorKind]}${execution.actorId ? `\uff08${execution.actorId}\uff09` : ""}`;
   const ai = execution.agentId ? `AI\uff08${execution.agentId}\uff09` : null;
   const principal = principalLabel(execution.actorId);
@@ -96,7 +123,7 @@ export function toExecutionInspectorViewModel(
       resource,
       occurredAt: execution.providerOccurredAt,
       observedAt: execution.observedAt,
-      result: executionResultLabel(execution.status),
+      result: executionResultPresentation(execution.status),
       outcome: execution.outcomeStatus === "asserted" && execution.outcomeKind ? execution.outcomeKind : null,
       workId: execution.workId,
     },

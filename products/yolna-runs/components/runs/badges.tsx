@@ -62,7 +62,7 @@ const RESULT_LABELS: Record<ExecutionStatus, string> = {
   succeeded: "\u5b8c\u4e86",
   failed: "\u5931\u6557",
   cancelled: "\u53d6\u308a\u6d88\u3057",
-  unknown: "\u4e0d\u660e",
+  unknown: "\u5224\u5b9a\u3067\u304d\u307e\u305b\u3093",
 };
 
 export function ResultBadge({ status }: { status: ExecutionStatus }) {
