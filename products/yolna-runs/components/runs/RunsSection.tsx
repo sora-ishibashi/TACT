@@ -75,12 +75,13 @@ export default function RunsSection() {
   const [coverage, setCoverage] = useState<{ surfaces: ObservationSurface[]; gaps: CaptureGap[] }>({ surfaces: [], gaps: [] });
   const [workList, setWorkList] = useState<WorkListItem[]>([]);
   const [workListLoading, setWorkListLoading] = useState(true);
+  const [workListError, setWorkListError] = useState<PresentationStateKind | null>(null);
   const [workSearch, setWorkSearch] = useState("");
 
   const [workHeader, setWorkHeader] = useState<WorkHeaderView | null>(null);
   const [workItems, setWorkItems] = useState<WorkTimelineItemView[]>([]);
   const [workLoading, setWorkLoading] = useState(false);
-  const [workError, setWorkError] = useState<string | null>(null);
+  const [workError, setWorkError] = useState<PresentationStateKind | "not-found" | null>(null);
 
   const loadActivity = useCallback(async () => {
 
@@ -125,13 +126,22 @@ export default function RunsSection() {
 
   const loadWorkList = useCallback(async () => {
     const accessToken = getAccessToken();
-    if (!accessToken) { setWorkList([]); setWorkListLoading(false); return; }
+    if (!accessToken) { setWorkList([]); setWorkListError("permission-denied"); setWorkListLoading(false); return; }
     setWorkListLoading(true);
+    setWorkListError(null);
     try {
       const response = await fetch("/api/tact/runs/work", { headers: { Authorization: `Bearer ${accessToken}` } });
       const body = await response.json().catch(() => null);
-      setWorkList(response.ok && body?.success && Array.isArray(body.items) ? body.items : []);
-    } catch { setWorkList([]); } finally { setWorkListLoading(false); }
+      if (!response.ok || !body?.success) {
+        setWorkList([]);
+        setWorkListError(presentationStateForHttp(response.status));
+        return;
+      }
+      setWorkList(Array.isArray(body.items) ? body.items : []);
+    } catch {
+      setWorkList([]);
+      setWorkListError("error");
+    } finally { setWorkListLoading(false); }
   }, [getAccessToken]);
 
   const loadCoverage = useCallback(async () => {
@@ -194,6 +204,7 @@ export default function RunsSection() {
     const accessToken = getAccessToken();
 
     if (!accessToken) {
+      setWorkError("permission-denied");
       return;
     }
 
@@ -210,7 +221,7 @@ export default function RunsSection() {
       const body = await response.json().catch(() => null);
 
       if (!response.ok || !body?.success) {
-        setWorkError("Workを読み込めませんでした。");
+        setWorkError(response.status === 404 ? "not-found" : presentationStateForHttp(response.status));
         return;
       }
 
@@ -219,7 +230,7 @@ export default function RunsSection() {
 
     } catch {
 
-      setWorkError("Workを読み込めませんでした。");
+      setWorkError("error");
 
     } finally {
 
@@ -393,9 +404,9 @@ export default function RunsSection() {
       <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto px-6 py-5">
 
         {workLoading ? (
-          <p className="text-[13px] leading-[18px] text-[#626161]">読み込んでいます...</p>
+          <PresentationState kind="loading" />
         ) : workError ? (
-          <p className="text-[13px] leading-[18px] text-[#C53F4B]">{workError}</p>
+          workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />
         ) : workHeader ? (
           <WorkDetailView work={workHeader} items={workItems} onBack={handleBack} onReviewCorrelation={setReviewingExecutionId} />
         ) : (
@@ -429,7 +440,7 @@ export default function RunsSection() {
   return (
 
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-      {section === "work" && <WorkSidebar items={workList} selectedWorkId={selectedWorkId} search={workSearch} onSearch={setWorkSearch} onSelect={handleSelectWork} />}
+      {section === "work" && <WorkSidebar items={workList} state={workListLoading ? "loading" : workListError} selectedWorkId={selectedWorkId} search={workSearch} onSearch={setWorkSearch} onSelect={handleSelectWork} />}
       {(section === "activity" || section === "attention" || section === "coverage") && <SecondarySidebar title={section === "attention" ? "要確認" : section === "coverage" ? "接続・観測" : "実行記録のフィルタ"}>
         {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
         {section === "attention" ? <div className="flex flex-col gap-1"><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">すべて ({attentionItems.length})</button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">{category.label} ({category.count})</button>)}</div> : null}
@@ -445,7 +456,7 @@ export default function RunsSection() {
           than the viewport, even after fixing TactShell alone. */}
       <div className="mt-4 min-w-0">
 
-        {section === "home" ? <HomeView attention={attentionItems} works={workList} surfaces={coverage.surfaces} gaps={coverage.gaps} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "coverage" ? <ObservationCoverage surfaces={coverage.surfaces.filter((surface) => !selectedSurfaceId || surface.surfaceId === selectedSurfaceId)} gaps={coverage.gaps} /> : section === "activity" ? (
+        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : workListError ? <PresentationState kind={workListError} /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "coverage" ? <ObservationCoverage surfaces={coverage.surfaces.filter((surface) => !selectedSurfaceId || surface.surfaceId === selectedSurfaceId)} gaps={coverage.gaps} /> : section === "activity" ? (
 
           activityLoading ? (
             <PresentationState kind="loading" />
