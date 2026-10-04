@@ -20,7 +20,10 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { ActivityExplorer } from "./ActivityExplorer";
 import ActivityFilters from "./ActivityFilters";
 import AttentionInbox from "./AttentionInbox";
-import ObservationCoverage from "./ObservationCoverage";
+import { PermissionSidebar } from "./PermissionSidebar";
+import { PermissionManagementView } from "./PermissionManagementView";
+import { ConnectionObservationSidebar } from "./ConnectionObservationSidebar";
+import { ConnectionObservationView } from "./ConnectionObservationView";
 import { HomeView } from "./HomeView";
 import { WorkSidebar, type WorkListItem } from "./WorkSidebar";
 import WorkDetailView from "./WorkDetailView";
@@ -30,7 +33,6 @@ import { useRunsShell } from "@/components/shell/AppShell";
 import { SecondarySidebar } from "@/components/shell/SecondarySidebar";
 import { PresentationState, presentationStateForHttp, type PresentationStateKind } from "@/components/shell/PresentationState";
 import { PageHeader } from "@/components/shell/ShellContainers";
-import { japaneseProjection } from "@/lib/japaneseProjection";
 import {
   filterActivityItems,
   distinctActivityFilterOptions,
@@ -42,6 +44,11 @@ import {
 } from "@tact/runs-core/tact-runs-view";
 import type { CaptureGap, ObservationSurface } from "@tact/runs-core/tact-execution";
 import { attentionReasonJapanese } from "@tact/runs-core/tact-runs-view/attentionInbox";
+import type { PermissionScopeView } from "@tact/runs-core/tact-runs-view/permissionManagement";
+import {
+  buildCoverageServiceDetails,
+  type PublicConnection,
+} from "@tact/runs-core/tact-runs-view/coverageManagement";
 
 export default function RunsSection() {
 
@@ -63,8 +70,8 @@ export default function RunsSection() {
   // activityItemsへのclient-side filter)。
   const [activityFilters, setActivityFilters] = useState<ActivityItemFilters>({});
   const [attentionCategory, setAttentionCategory] = useState<AttentionCardView["attentionReason"] | null>(null);
-  const [coverageSearch, setCoverageSearch] = useState("");
   const [selectedSurfaceId, setSelectedSurfaceId] = useState<string | null>(null);
+  const [selectedPermissionScopeKey, setSelectedPermissionScopeKey] = useState<string | null>(null);
 
   const [activityItems, setActivityItems] = useState<ActivityItemView[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
@@ -73,7 +80,10 @@ export default function RunsSection() {
   const [attentionItems, setAttentionItems] = useState<AttentionCardView[]>([]);
   const [attentionLoading, setAttentionLoading] = useState(true);
   const [attentionError, setAttentionError] = useState<PresentationStateKind | null>(null);
-  const [coverage, setCoverage] = useState<{ surfaces: ObservationSurface[]; gaps: CaptureGap[] }>({ surfaces: [], gaps: [] });
+  const [coverage, setCoverage] = useState<{ surfaces: ObservationSurface[]; gaps: CaptureGap[]; connections: PublicConnection[] }>({ surfaces: [], gaps: [], connections: [] });
+  const [permissionScopes, setPermissionScopes] = useState<PermissionScopeView[]>([]);
+  const [permissionLoading, setPermissionLoading] = useState(true);
+  const [permissionError, setPermissionError] = useState<PresentationStateKind | null>(null);
   const [workList, setWorkList] = useState<WorkListItem[]>([]);
   const [workListLoading, setWorkListLoading] = useState(true);
   const [workListError, setWorkListError] = useState<PresentationStateKind | null>(null);
@@ -147,12 +157,38 @@ export default function RunsSection() {
 
   const loadCoverage = useCallback(async () => {
     const accessToken = getAccessToken();
-    if (!accessToken) { setCoverage({ surfaces: [], gaps: [] }); return; }
+    if (!accessToken) { setCoverage({ surfaces: [], gaps: [], connections: [] }); return; }
     try {
       const response = await fetch("/api/tact/runs/coverage", { headers: { Authorization: `Bearer ${accessToken}` } });
       const body = await response.json().catch(() => null);
-      if (response.ok && body?.success) setCoverage({ surfaces: Array.isArray(body.surfaces) ? body.surfaces : [], gaps: Array.isArray(body.gaps) ? body.gaps : [] });
-    } catch { setCoverage({ surfaces: [], gaps: [] }); }
+      if (response.ok && body?.success) setCoverage({
+        surfaces: Array.isArray(body.surfaces) ? body.surfaces : [],
+        gaps: Array.isArray(body.gaps) ? body.gaps : [],
+        connections: Array.isArray(body.connections) ? body.connections : [],
+      });
+    } catch { setCoverage({ surfaces: [], gaps: [], connections: [] }); }
+  }, [getAccessToken]);
+
+  const loadPermissionManagement = useCallback(async () => {
+    const accessToken = getAccessToken();
+    if (!accessToken) { setPermissionScopes([]); setPermissionLoading(false); return; }
+    setPermissionLoading(true);
+    setPermissionError(null);
+    try {
+      const response = await fetch("/api/tact/runs/permission-management", { headers: { Authorization: `Bearer ${accessToken}` } });
+      const body = await response.json().catch(() => null);
+      if (!response.ok || !body?.success) {
+        setPermissionError(presentationStateForHttp(response.status));
+        setPermissionScopes([]);
+        return;
+      }
+      setPermissionScopes(Array.isArray(body.scopes) ? body.scopes : []);
+    } catch {
+      setPermissionError("error");
+      setPermissionScopes([]);
+    } finally {
+      setPermissionLoading(false);
+    }
   }, [getAccessToken]);
 
   const loadAttention = useCallback(async () => {
@@ -253,6 +289,11 @@ export default function RunsSection() {
 
   useEffect(() => {
     queueMicrotask(() => { void loadCoverage(); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  useEffect(() => {
+    queueMicrotask(() => { void loadPermissionManagement(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
@@ -381,8 +422,13 @@ export default function RunsSection() {
     return [...counts].map(([id, count]) => ({ id: id as AttentionCardView["attentionReason"], count, label: attentionReasonJapanese(id as AttentionCardView["attentionReason"]) }));
   }, [attentionItems]);
   const filteredAttentionItems = useMemo(() => attentionCategory ? attentionItems.filter((item) => item.attentionReason === attentionCategory) : attentionItems, [attentionCategory, attentionItems]);
-  const filteredSurfaces = useMemo(() => coverage.surfaces.filter((surface) => `${surface.source} ${surface.health} ${surface.coverageStatus}`.toLowerCase().includes(coverageSearch.toLowerCase())), [coverage.surfaces, coverageSearch]);
-  const unavailableTitle = section === "work" ? "仕事" : section === "agent" ? "AI" : section === "permission" ? "権限" : null;
+  // SOR-187: pure projection (coverageManagement.ts) — classification/
+  // join判定は一切ここに無い、既存surfaces/gaps/connectionsをそのまま渡す。
+  const coverageDetails = useMemo(
+    () => buildCoverageServiceDetails({ surfaces: coverage.surfaces, gaps: coverage.gaps, connections: coverage.connections }),
+    [coverage.surfaces, coverage.gaps, coverage.connections]
+  );
+  const unavailableTitle = section === "work" ? "仕事" : section === "agent" ? "AI" : null;
 
   // One SOR-185 inspector instance is shared by Activity and Work Timeline.
   const executionInspector = (
@@ -450,13 +496,14 @@ export default function RunsSection() {
 
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       {section === "work" && <WorkSidebar items={workList} state={workListLoading ? "loading" : workListError} selectedWorkId={selectedWorkId} search={workSearch} onSearch={setWorkSearch} onSelect={handleSelectWork} />}
-      {(section === "activity" || section === "attention" || section === "coverage") && <SecondarySidebar title={section === "attention" ? "要確認" : section === "coverage" ? "接続・観測" : "実行記録のフィルタ"}>
+      {section === "permission" && <PermissionSidebar scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelect={setSelectedPermissionScopeKey} />}
+      {section === "coverage" && <ConnectionObservationSidebar details={coverageDetails} state={null} selectedSurfaceId={selectedSurfaceId} onSelect={setSelectedSurfaceId} />}
+      {(section === "activity" || section === "attention") && <SecondarySidebar title={section === "attention" ? "要確認" : "実行記録のフィルタ"}>
         {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
         {section === "attention" ? <div className="flex flex-col gap-1"><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">すべて ({attentionItems.length})</button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">{category.label} ({category.count})</button>)}</div> : null}
-        {section === "coverage" ? <div className="flex flex-col gap-2"><input aria-label="接続・観測を検索" value={coverageSearch} onChange={(event) => setCoverageSearch(event.target.value)} placeholder="検索" className="h-9 rounded border border-[#D9D9D9] px-2 text-[12px]" />{filteredSurfaces.map((surface) => <button key={surface.surfaceId} type="button" aria-pressed={selectedSurfaceId === surface.surfaceId} onClick={() => setSelectedSurfaceId(surface.surfaceId)} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">{surface.source} · {japaneseProjection(surface.health)}</button>)}{filteredSurfaces.length === 0 && <PresentationState kind="empty" />}</div> : null}
       </SecondarySidebar>}
       <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 lg:px-6">
-      <PageHeader title={unavailableTitle ?? (section === "home" ? "ホーム" : section === "attention" ? "要確認" : section === "activity" ? "実行記録" : "接続・観測")} />
+      <PageHeader title={unavailableTitle ?? (section === "home" ? "ホーム" : section === "attention" ? "要確認" : section === "activity" ? "実行記録" : section === "permission" ? "権限" : "接続・観測")} />
 
       {/* SOR-23 compact-width fix: this div is a flex item of the root
           (flex flex-col above) — same min-width:auto default as any other
@@ -465,7 +512,7 @@ export default function RunsSection() {
           than the viewport, even after fixing TactShell alone. */}
       <div className="mt-4 min-w-0">
 
-        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : workListError ? <PresentationState kind={workListError} /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "coverage" ? <ObservationCoverage surfaces={coverage.surfaces.filter((surface) => !selectedSurfaceId || surface.surfaceId === selectedSurfaceId)} gaps={coverage.gaps} /> : section === "activity" ? (
+        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : workListError ? <PresentationState kind={workListError} /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={null} selectedSurfaceId={selectedSurfaceId} /> : section === "activity" ? (
 
           activityLoading ? (
             <PresentationState kind="loading" />

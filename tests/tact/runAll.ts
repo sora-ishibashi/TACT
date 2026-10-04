@@ -251,6 +251,8 @@ import { run as runExecutionGovernanceApprovalRequestContract } from "./executio
 import { run as runExecutionGovernanceApprovalRequestConcurrency } from "./execution/governance/approvalRequestConcurrency.test";
 import { run as runExecutionGovernanceApprovalRequestImmutability } from "./execution/governance/approvalRequestImmutability.test";
 import { run as runRunsViewGovernanceApprovalInbox } from "./runsView/governanceApprovalInbox.test";
+import { run as runRunsViewPermissionManagementProjection } from "./runsView/permissionManagementProjection.test";
+import { run as runRunsViewCoverageManagementProjection } from "./runsView/coverageManagementProjection.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -477,6 +479,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/governance/approvalRequestConcurrency", run: runExecutionGovernanceApprovalRequestConcurrency },
   { name: "execution/governance/approvalRequestImmutability", run: runExecutionGovernanceApprovalRequestImmutability },
   { name: "runsView/governanceApprovalInbox", run: runRunsViewGovernanceApprovalInbox },
+  { name: "runsView/permissionManagementProjection", run: runRunsViewPermissionManagementProjection },
+  { name: "runsView/coverageManagementProjection", run: runRunsViewCoverageManagementProjection },
 ];
 
 async function main() {
