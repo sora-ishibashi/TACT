@@ -376,7 +376,7 @@ export default function RunsSection() {
               onClick={handleBack}
               className="w-fit text-[12px] text-[#626161] transition duration-150 ease-out hover:text-[#112278]"
             >
-              ← Back
+              ← 戻る
             </button>
             <p className="text-[13px] leading-[18px] text-[#626161]">このWorkは見つかりませんでした。</p>
           </div>
