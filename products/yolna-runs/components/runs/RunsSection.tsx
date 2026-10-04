@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ActivityExplorer } from "./ActivityExplorer";
 import ActivityFilters from "./ActivityFilters";
-import AttentionList from "./AttentionList";
+import AttentionInbox from "./AttentionInbox";
 import ObservationCoverage from "./ObservationCoverage";
 import { HomeView } from "./HomeView";
 import { WorkSidebar, type WorkListItem } from "./WorkSidebar";
@@ -41,6 +41,7 @@ import {
   type WorkTimelineItemView,
 } from "@tact/runs-core/tact-runs-view";
 import type { CaptureGap, ObservationSurface } from "@tact/runs-core/tact-execution";
+import { attentionReasonJapanese } from "@tact/runs-core/tact-runs-view/attentionInbox";
 
 export default function RunsSection() {
 
@@ -61,7 +62,7 @@ export default function RunsSection() {
   // を持つだけ。新しいAPI/queryは追加しない(既に読み込み済みの
   // activityItemsへのclient-side filter)。
   const [activityFilters, setActivityFilters] = useState<ActivityItemFilters>({});
-  const [attentionCategory, setAttentionCategory] = useState<string | null>(null);
+  const [attentionCategory, setAttentionCategory] = useState<AttentionCardView["attentionReason"] | null>(null);
   const [coverageSearch, setCoverageSearch] = useState("");
   const [selectedSurfaceId, setSelectedSurfaceId] = useState<string | null>(null);
 
@@ -377,7 +378,7 @@ export default function RunsSection() {
   const attentionCategories = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of attentionItems) counts.set(item.attentionReason, (counts.get(item.attentionReason) ?? 0) + 1);
-    return [...counts].map(([id, count]) => ({ id, count, label: id === "unknown" ? japaneseProjection("UNKNOWN") : itemLabel(id) }));
+    return [...counts].map(([id, count]) => ({ id: id as AttentionCardView["attentionReason"], count, label: attentionReasonJapanese(id as AttentionCardView["attentionReason"]) }));
   }, [attentionItems]);
   const filteredAttentionItems = useMemo(() => attentionCategory ? attentionItems.filter((item) => item.attentionReason === attentionCategory) : attentionItems, [attentionCategory, attentionItems]);
   const filteredSurfaces = useMemo(() => coverage.surfaces.filter((surface) => `${surface.source} ${surface.health} ${surface.coverageStatus}`.toLowerCase().includes(coverageSearch.toLowerCase())), [coverage.surfaces, coverageSearch]);
@@ -391,9 +392,6 @@ export default function RunsSection() {
       onClose={() => setInspectedExecutionId(null)}
     />
   );
-
-  function itemLabel(value: string) { return japaneseProjection(value) === value ? value.replaceAll("_", " ") : japaneseProjection(value); }
-
   if (!user) {
 
     return (
@@ -490,7 +488,7 @@ export default function RunsSection() {
           ) : attentionError ? (
             <PresentationState kind={attentionError} />
           ) : (
-            filteredAttentionItems.length === 0 ? <PresentationState kind="empty" /> : <AttentionList items={filteredAttentionItems} onSelectWork={handleSelectWork} onTransition={handleAttentionTransition} />
+            filteredAttentionItems.length === 0 ? <PresentationState kind="empty" /> : <AttentionInbox items={filteredAttentionItems} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermissionSettings={() => setSection("permission")} onTransition={handleAttentionTransition} />
           )
 
         )}

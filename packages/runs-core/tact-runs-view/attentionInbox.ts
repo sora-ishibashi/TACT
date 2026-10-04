@@ -21,6 +21,15 @@ export function attentionReasonJapanese(reason: AttentionCardView["attentionReas
   }
 }
 
+export function attentionReasonJapaneseExplanation(reason: AttentionCardView["attentionReason"]): string {
+  switch (reason) {
+    case "approval_required": return "この操作には人による承認が必要と記録されています。";
+    case "permission_mismatch": return "登録ルールの評価と一致しない記録があります。";
+    case "permission_unknown": return "権限の評価結果を確認できません。";
+    case "downstream_permission_conflict": return "接続先の権限情報と整合しない記録があります。";
+  }
+}
+
 export function permissionJapanese(result: AttentionCardView["permissionEvaluation"]): string {
   switch (result) {
     case "MATCH": return "登録ルールに一致";
