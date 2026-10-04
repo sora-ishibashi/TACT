@@ -139,7 +139,10 @@ export function WorkReference({
     const workLink = onSelectWork ? (
       <button
         type="button"
-        onClick={() => onSelectWork(workId)}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelectWork(workId);
+        }}
         className="text-[13px] font-medium text-[#172E95] underline-offset-2 transition duration-150 ease-out hover:underline"
       >
         {displayLabel}
@@ -157,7 +160,10 @@ export function WorkReference({
         {workLink}
         <button
           type="button"
-          onClick={onReview}
+          onClick={(event) => {
+            event.stopPropagation();
+            onReview();
+          }}
           className="text-[12px] text-[#626161] underline-offset-2 transition duration-150 ease-out hover:text-[#112278] hover:underline"
         >
           履歴
@@ -178,7 +184,10 @@ export function WorkReference({
       <Badge label={unresolvedLabel} tone="muted" />
       <button
         type="button"
-        onClick={onReview}
+        onClick={(event) => {
+          event.stopPropagation();
+          onReview();
+        }}
         className="text-[13px] font-medium text-[#172E95] underline-offset-2 transition duration-150 ease-out hover:underline"
       >
         確認

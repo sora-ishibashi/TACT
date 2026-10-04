@@ -31,9 +31,14 @@ export default function ActivityTable({
   items,
   onSelectWork,
   onReviewCorrelation,
+  onSelectExecution,
+  attentionExecutionIds = new Set<string>(),
 }: {
   items: ActivityItemView[];
   onSelectWork: (workId: string) => void;
+  /** Shared boundary for the SOR-185 Execution Inspector. */
+  onSelectExecution: (executionId: string) => void;
+  attentionExecutionIds?: ReadonlySet<string>;
   // SOR-77(加算的prop): 省略時は既存どおりReview actionを出さない。
   onReviewCorrelation?: (executionId: string) => void;
 }) {
@@ -71,13 +76,27 @@ export default function ActivityTable({
             <th scope="col" className="px-4 py-2.5">Permission</th>
             <th scope="col" className="px-4 py-2.5">Result</th>
             <th scope="col" className="px-4 py-2.5">Work</th>
+            <th scope="col" className="px-4 py-2.5">Attention</th>
           </tr>
         </thead>
 
         <tbody>
           {items.map((item) => (
 
-            <tr key={item.executionId} className="border-b border-[#D9D9D9] last:border-b-0 hover:bg-[#E6F2F2]/40">
+            <tr
+              key={item.executionId}
+              tabIndex={0}
+              role="button"
+              aria-label={`${item.action} の実行を開く`}
+              onClick={() => onSelectExecution(item.executionId)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelectExecution(item.executionId);
+                }
+              }}
+              className="cursor-pointer border-b border-[#D9D9D9] last:border-b-0 hover:bg-[#E6F2F2]/40 focus:outline-none focus:ring-2 focus:ring-[#18B5A6]"
+            >
 
               <td className="whitespace-nowrap px-4 py-2.5 text-[#626161]">{formatTimestamp(item.observedAt)}</td>
               <td className="px-4 py-2.5">{item.principalLabel}</td>
@@ -88,6 +107,9 @@ export default function ActivityTable({
                   <span className="ml-1 text-[10px] text-[#8A8A8A]">{item.targetSystem.subLabel}</span>
                 )}
               </td>
+              <td className="px-4 py-2.5 text-center" aria-label={attentionExecutionIds.has(item.executionId) ? "attention" : undefined}>
+                {attentionExecutionIds.has(item.executionId) ? <span className="text-[#C53F4B]">!</span> : null}
+              </td>
               <td className="whitespace-nowrap px-4 py-2.5 font-medium">{item.action}</td>
               <td className="px-4 py-2.5"><PermissionBadge result={item.permissionEvaluation} /></td>
               <td className="px-4 py-2.5"><ResultBadge status={item.executionStatus} /></td>
@@ -96,7 +118,7 @@ export default function ActivityTable({
                   workId={item.workId}
                   label={item.workTitle ?? undefined}
                   correlationStatus={item.correlationStatus}
-                  onSelectWork={onSelectWork}
+                  onSelectWork={(workId) => { onSelectWork(workId); }}
                   onReview={onReviewCorrelation ? () => onReviewCorrelation(item.executionId) : undefined}
                   isHumanCorrected={item.isHumanCorrected}
                 />

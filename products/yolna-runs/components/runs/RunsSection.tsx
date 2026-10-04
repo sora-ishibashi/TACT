@@ -17,12 +17,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
-import ActivityTable from "./ActivityTable";
+import { ActivityExplorer } from "./ActivityExplorer";
 import ActivityFilters from "./ActivityFilters";
 import AttentionList from "./AttentionList";
 import ObservationCoverage from "./ObservationCoverage";
 import WorkDetailView from "./WorkDetailView";
 import CorrelationReviewModal from "./CorrelationReviewModal";
+import { ExecutionInspector } from "./ExecutionInspector";
 import { useRunsShell } from "@/components/shell/AppShell";
 import { SecondarySidebar } from "@/components/shell/SecondarySidebar";
 import { PresentationState, presentationStateForHttp, type PresentationStateKind } from "@/components/shell/PresentationState";
@@ -50,6 +51,9 @@ export default function RunsSection() {
   // (CorrelationReviewModal→PATCH /api/tact/runs/execution/[id]/reclassify
   // が担う、絶対条件「No business logic in React」)。
   const [reviewingExecutionId, setReviewingExecutionId] = useState<string | null>(null);
+  // One shared selection boundary: Work/Attention/other screens can pass an
+  // execution id here without owning a second detail implementation.
+  const [inspectedExecutionId, setInspectedExecutionId] = useState<string | null>(null);
   // SOR-23(OBS-UX-P1 Priority 3/4): filter判定はcore/tact-runs-view側の
   // pure関数(filterActivityItems())に完全委譲——ここはcontrolled state
   // を持つだけ。新しいAPI/queryは追加しない(既に読み込み済みの
@@ -334,6 +338,10 @@ export default function RunsSection() {
     () => filterActivityItems(activityItems, activityFilters),
     [activityItems, activityFilters]
   );
+  const attentionExecutionIds = useMemo(
+    () => new Set(attentionItems.map((item) => item.executionId)),
+    [attentionItems]
+  );
   const attentionCategories = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of attentionItems) counts.set(item.attentionReason, (counts.get(item.attentionReason) ?? 0) + 1);
@@ -426,7 +434,7 @@ export default function RunsSection() {
               {activityItems.length > 0 && filteredActivityItems.length === 0 ? (
                 <PresentationState kind="empty" />
               ) : (
-                <ActivityTable items={filteredActivityItems} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} />
+                <ActivityExplorer items={filteredActivityItems} attentionExecutionIds={attentionExecutionIds} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={setInspectedExecutionId} />
               )}
             </div>
           )
@@ -453,6 +461,12 @@ export default function RunsSection() {
           onCorrected={(result) => handleExecutionCorrected(reviewingExecutionId, result)}
         />
       )}
+
+      <ExecutionInspector
+        executionId={inspectedExecutionId}
+        accessToken={getAccessToken()}
+        onClose={() => setInspectedExecutionId(null)}
+      />
 
       </div>
     </div>
