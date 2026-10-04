@@ -40,9 +40,7 @@ export default function RunsHomePage() {
       </header>
 
       {user ? (
-        <RunsAppShell>
-          <RunsSection />
-        </RunsAppShell>
+        <RunsAppShell><RunsSection /></RunsAppShell>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-5">
           <p className="text-[13px] leading-[18px] text-[#626161]">ログイン後にRunsを確認できます。</p>

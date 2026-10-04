@@ -48,7 +48,7 @@ const PERMISSION_TONE: Record<CanonicalPermissionResult, BadgeTone> = {
 };
 
 export function PermissionBadge({ result }: { result: CanonicalPermissionResult }) {
-  return <Badge label={japaneseProjection(result) || permissionResultLabel(result)} tone={PERMISSION_TONE[result]} />;
+  return <Badge label={japaneseProjection(result) === result ? permissionResultLabel(result) : japaneseProjection(result)} tone={PERMISSION_TONE[result]} />;
 }
 
 const RESULT_TONE: Partial<Record<ExecutionStatus, BadgeTone>> = {

@@ -102,7 +102,7 @@ export default function ActivityFilters({
         value={filters.providerLabel ?? ""}
         onChange={(event) => set("providerLabel", event.target.value)}
       >
-        <option value="">All SaaS</option>
+        <option value="">すべてのSaaS</option>
         {options.providerLabels.map((label) => (
           <option key={label} value={label}>{label}</option>
         ))}
