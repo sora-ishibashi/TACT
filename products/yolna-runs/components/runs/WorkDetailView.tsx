@@ -74,7 +74,7 @@ export default function WorkDetailView({
         onClick={onBack}
         className="w-fit text-[12px] text-[#626161] transition duration-150 ease-out hover:text-[#112278]"
       >
-        ← Back
+            ← 戻る
       </button>
 
       <div className="flex flex-col gap-1">
@@ -171,7 +171,7 @@ export default function WorkDetailView({
                           onClick={() => onReviewCorrelation(item.executionId)}
                           className="shrink-0 text-[12px] text-[#626161] underline-offset-2 transition duration-150 ease-out hover:text-[#112278] hover:underline"
                         >
-                          History
+                          履歴
                         </button>
                       )}
                     </div>

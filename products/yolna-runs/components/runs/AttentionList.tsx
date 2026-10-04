@@ -19,6 +19,7 @@
 
 import type { AttentionCardView } from "@tact/runs-core/tact-runs-view";
 import { AttentionReasonBadge, AttentionStatusBadge, PermissionBadge, ResultBadge, WorkReference } from "./badges";
+import { japaneseProjection } from "@/lib/japaneseProjection";
 
 function formatTimestamp(iso: string): string {
 
@@ -90,7 +91,7 @@ export default function AttentionList({
                 onSelectWork={onSelectWork}
               />
             ) : (
-              <span className="text-[10px] font-medium text-[#8A8A8A]">Unassigned</span>
+              <span className="text-[10px] font-medium text-[#8A8A8A]">{japaneseProjection("UNASSIGNED")}</span>
             )}
 
           </div>
@@ -102,12 +103,12 @@ export default function AttentionList({
           <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[13px] leading-[18px] text-[#112278] sm:grid-cols-4">
 
             <div>
-              <dt className="text-[10px] uppercase tracking-wide text-[#8A8A8A]">Principal</dt>
+              <dt className="text-[10px] tracking-wide text-[#8A8A8A]">依頼元</dt>
               <dd>{item.principalLabel}</dd>
             </div>
 
             <div>
-              <dt className="text-[10px] uppercase tracking-wide text-[#8A8A8A]">Agent</dt>
+              <dt className="text-[10px] tracking-wide text-[#8A8A8A]">AI</dt>
               <dd>{item.agentLabel}</dd>
             </div>
 
@@ -137,7 +138,7 @@ export default function AttentionList({
                 className="text-[10px] text-[#8A8A8A]"
                 title={item.executionId}
               >
-                Execution {formatExecutionId(item.executionId)}
+                実行 {formatExecutionId(item.executionId)}
               </span>
             </div>
 
@@ -149,7 +150,7 @@ export default function AttentionList({
                     onClick={() => onTransition(item.attentionId, "acknowledge")}
                     className="rounded-full border border-[#D9D9D9] px-3 py-1 text-[12px] font-medium text-[#112278] transition duration-150 ease-out hover:border-[#172E95] hover:text-[#172E95]"
                   >
-                    Acknowledge
+                    確認済みにする
                   </button>
                 )}
                 <button
@@ -157,7 +158,7 @@ export default function AttentionList({
                   onClick={() => onTransition(item.attentionId, "resolve")}
                   className="rounded-full bg-[#18B5A6] px-3 py-1 text-[12px] font-medium text-white transition duration-150 ease-out hover:bg-[#149488]"
                 >
-                  Resolve
+                  解決する
                 </button>
               </div>
             )}
