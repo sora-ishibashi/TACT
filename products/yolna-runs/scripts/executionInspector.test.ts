@@ -18,4 +18,10 @@ assert.equal(model.summary.observedAt, "2026-01-02T03:05:05.000Z");
 assert.equal(model.permission.registered, "Unknown");
 assert.equal(model.technical.invocationId, "invoke-1");
 assert.equal(model.permission.downstream.length, 0);
+assert.equal(model.summary.actor, "AI\uff08requester-1\uff09");
+
+const humanModel = toExecutionInspectorViewModel({ ...execution, actorKind: "human", actorId: "user-1", agentId: null } as CanonicalExecution, [], []);
+assert.equal(humanModel.summary.ai, null);
+assert.equal(humanModel.summary.actor, "\u4eba\uff08user-1\uff09");
+assert.ok(humanModel.summary.actionSentence.startsWith("\u4eba\uff08user-1\uff09"));
 console.log("PASS execution inspector projection");

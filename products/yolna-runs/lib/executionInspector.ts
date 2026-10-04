@@ -1,10 +1,8 @@
 import {
   actionLabel,
   executionResultLabel,
-  permissionResultLabel,
   principalLabel,
   targetSystemLabel,
-  toCanonicalPermissionResultFromExecutionStatus,
 } from "@tact/runs-core/tact-runs-view";
 import type {
   CanonicalExecution,
@@ -17,7 +15,7 @@ export type ExecutionInspectorViewModel = {
   summary: {
     actionSentence: string;
     actor: string;
-    ai: string;
+    ai: string | null;
     principal: string;
     provider: string;
     action: string;
@@ -29,10 +27,9 @@ export type ExecutionInspectorViewModel = {
     workId: string | null;
   };
   permission: {
-    registered: string;
     evaluation: string;
-    reason: string | null;
-    decisions: Array<{ policyId: string | null; ruleId: string | null; revision: number | null; reason: string; evaluatedAt: string }>;
+    reasonCode: string | null;
+    decisions: Array<{ ruleId: string | null; revision: number | null }>;
     downstream: Array<{ state: string; authority: string; observedAt: string }>;
   };
   technical: {
@@ -45,6 +42,31 @@ export type ExecutionInspectorViewModel = {
   };
 };
 
+const actorKindLabel: Record<CanonicalExecution["actorKind"], string> = {
+  human: "\u4eba",
+  ai_agent: "AI",
+  service: "\u30b5\u30fc\u30d3\u30b9",
+  connector: "\u63a5\u7d9a\u6a5f\u80fd",
+  system: "\u30b7\u30b9\u30c6\u30e0",
+};
+const permissionLabel: Record<CanonicalExecution["permissionStatus"], string> = {
+  allowed: "\u8a31\u53ef",
+  denied: "\u4e0d\u8a31\u53ef",
+  approval_required: "\u627f\u8a8d\u304c\u5fc5\u8981",
+  unknown: "\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093",
+  pending: "\u672a\u8a55\u4fa1",
+};
+const downstreamStateLabel: Record<DownstreamPermissionEvidence["permissionState"], string> = {
+  allowed: "\u8a31\u53ef",
+  denied: "\u4e0d\u8a31\u53ef",
+  unknown: "\u4e0d\u660e",
+};
+const authorityLabel: Record<DownstreamPermissionEvidence["authorityLevel"], string> = {
+  AUTHORITATIVE: "\u6b63\u672c",
+  NON_AUTHORITATIVE: "\u53c2\u8003",
+  UNKNOWN: "\u6a29\u9650\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093",
+};
+
 /** A read-only presentation projection. It never evaluates permissions or correlations. */
 export function toExecutionInspectorViewModel(
   execution: CanonicalExecution,
@@ -53,7 +75,8 @@ export function toExecutionInspectorViewModel(
 ): ExecutionInspectorViewModel {
   const target = targetSystemLabel(execution.provider, execution.targetProvider, execution.adapterVersion);
   const action = actionLabel(execution.operation, execution.provider, execution.targetProvider);
-  const ai = execution.agentId ?? "AI\u60c5\u5831\u306a\u3057";
+  const actor = `${actorKindLabel[execution.actorKind]}${execution.actorId ? `\uff08${execution.actorId}\uff09` : ""}`;
+  const ai = execution.agentId ? `AI\uff08${execution.agentId}\uff09` : null;
   const principal = principalLabel(execution.actorId);
   const resource = execution.resourceIdentifier ?? execution.resourceType;
   const source = execution.sourceMetadata && typeof execution.sourceMetadata === "object" && !Array.isArray(execution.sourceMetadata)
@@ -64,8 +87,8 @@ export function toExecutionInspectorViewModel(
   return {
     executionId: execution.id,
     summary: {
-      actionSentence: `${ai} \u304c ${target.label} \u3067 ${action}${resource ? `\uff08${resource}\uff09` : ""}\u3092\u5b9f\u884c\u3057\u307e\u3057\u305f\u3002`,
-      actor: execution.actorKind,
+      actionSentence: `${actor} \u304c ${target.label} \u3067 ${action}${resource ? `\uff08${resource}\uff09` : ""}\u3092\u5b9f\u884c\u3057\u307e\u3057\u305f\u3002`,
+      actor,
       ai,
       principal,
       provider: target.subLabel ? `${target.label}\uff08${target.subLabel}\uff09` : target.label,
@@ -74,15 +97,14 @@ export function toExecutionInspectorViewModel(
       occurredAt: execution.providerOccurredAt,
       observedAt: execution.observedAt,
       result: executionResultLabel(execution.status),
-      outcome: execution.outcomeStatus ? `${execution.outcomeStatus}${execution.outcomeKind ? ` / ${execution.outcomeKind}` : ""}` : null,
+      outcome: execution.outcomeStatus === "asserted" && execution.outcomeKind ? execution.outcomeKind : null,
       workId: execution.workId,
     },
     permission: {
-      registered: permissionResultLabel(toCanonicalPermissionResultFromExecutionStatus(execution.permissionStatus)),
-      evaluation: execution.permissionStatus,
-      reason: execution.permissionReasonCode,
-      decisions: decisions.map((decision) => ({ policyId: decision.policyId, ruleId: decision.registryRuleId ?? null, revision: decision.registryRuleRevision ?? null, reason: decision.reasonCode, evaluatedAt: decision.evaluatedAt })),
-      downstream: downstream.map((evidence) => ({ state: evidence.permissionState, authority: evidence.authorityLevel, observedAt: evidence.observedAt })),
+      evaluation: permissionLabel[execution.permissionStatus],
+      reasonCode: execution.permissionReasonCode,
+      decisions: decisions.map((decision) => ({ ruleId: decision.registryRuleId ?? null, revision: decision.registryRuleRevision ?? null })),
+      downstream: downstream.map((evidence) => ({ state: downstreamStateLabel[evidence.permissionState], authority: authorityLabel[evidence.authorityLevel], observedAt: evidence.observedAt })),
     },
     technical: {
       observationMode: execution.observationMode,

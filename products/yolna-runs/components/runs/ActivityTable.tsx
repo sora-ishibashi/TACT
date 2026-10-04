@@ -43,6 +43,10 @@ export default function ActivityTable({
   onReviewCorrelation?: (executionId: string) => void;
 }) {
 
+  const labels = {
+    time: "\u6642\u523b", ai: "AI", principal: "\u4f9d\u983c\u5143", service: "\u30b5\u30fc\u30d3\u30b9", action: "\u64cd\u4f5c", result: "\u7d50\u679c", permission: "\u6a29\u9650", work: "\u4ed5\u4e8b", attention: "\u8981\u78ba\u8a8d", detail: "\u8a73\u7d30",
+  };
+
   if (items.length === 0) {
 
     return (
@@ -68,60 +72,51 @@ export default function ActivityTable({
 
         <thead>
           <tr className="border-b border-[#D9D9D9] bg-[#F2F2F2]/60 text-[12px] font-medium text-[#626161]">
-            <th scope="col" className="px-4 py-2.5">Time</th>
-            <th scope="col" className="px-4 py-2.5">Principal</th>
-            <th scope="col" className="px-4 py-2.5">Agent</th>
-            <th scope="col" className="px-4 py-2.5">SaaS</th>
-            <th scope="col" className="px-4 py-2.5">Action</th>
-            <th scope="col" className="px-4 py-2.5">Permission</th>
-            <th scope="col" className="px-4 py-2.5">Result</th>
-            <th scope="col" className="px-4 py-2.5">Work</th>
-            <th scope="col" className="px-4 py-2.5">Attention</th>
+            <th scope="col" className="px-4 py-2.5">{labels.time}</th>
+            <th scope="col" className="px-4 py-2.5">{labels.ai}</th>
+            <th scope="col" className="px-4 py-2.5">{labels.principal}</th>
+            <th scope="col" className="px-4 py-2.5">{labels.service}</th>
+            <th scope="col" className="px-4 py-2.5">{labels.action}</th>
+            <th scope="col" className="px-4 py-2.5">{labels.result}</th>
+            <th scope="col" className="px-4 py-2.5">{labels.permission}</th>
+            <th scope="col" className="px-4 py-2.5">{labels.work}</th>
+            <th scope="col" className="px-4 py-2.5">{labels.attention}</th>
+            <th scope="col" className="px-4 py-2.5"><span className="sr-only">{labels.detail}</span></th>
           </tr>
         </thead>
 
         <tbody>
           {items.map((item) => (
 
-            <tr
-              key={item.executionId}
-              tabIndex={0}
-              role="button"
-              aria-label={`${item.action} の実行を開く`}
-              onClick={() => onSelectExecution(item.executionId)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onSelectExecution(item.executionId);
-                }
-              }}
-              className="cursor-pointer border-b border-[#D9D9D9] last:border-b-0 hover:bg-[#E6F2F2]/40 focus:outline-none focus:ring-2 focus:ring-[#18B5A6]"
-            >
+            <tr key={item.executionId} className="border-b border-[#D9D9D9] last:border-b-0 hover:bg-[#E6F2F2]/40">
 
               <td className="whitespace-nowrap px-4 py-2.5 text-[#626161]">{formatTimestamp(item.observedAt)}</td>
-              <td className="px-4 py-2.5">{item.principalLabel}</td>
               <td className="px-4 py-2.5">{item.agentLabel}</td>
+              <td className="px-4 py-2.5">{item.principalLabel}</td>
               <td className="px-4 py-2.5">
                 <span>{item.targetSystem.label}</span>
                 {item.targetSystem.subLabel && (
                   <span className="ml-1 text-[10px] text-[#8A8A8A]">{item.targetSystem.subLabel}</span>
                 )}
               </td>
-              <td className="px-4 py-2.5 text-center" aria-label={attentionExecutionIds.has(item.executionId) ? "attention" : undefined}>
-                {attentionExecutionIds.has(item.executionId) ? <span className="text-[#C53F4B]">!</span> : null}
-              </td>
               <td className="whitespace-nowrap px-4 py-2.5 font-medium">{item.action}</td>
-              <td className="px-4 py-2.5"><PermissionBadge result={item.permissionEvaluation} /></td>
               <td className="px-4 py-2.5"><ResultBadge status={item.executionStatus} /></td>
+              <td className="px-4 py-2.5"><PermissionBadge result={item.permissionEvaluation} /></td>
               <td className="px-4 py-2.5">
                 <WorkReference
                   workId={item.workId}
-                  label={item.workTitle ?? undefined}
+                  label={item.workTitle ?? (item.workId ? "\u4ed5\u4e8b\u540d\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093" : undefined)}
                   correlationStatus={item.correlationStatus}
                   onSelectWork={(workId) => { onSelectWork(workId); }}
                   onReview={onReviewCorrelation ? () => onReviewCorrelation(item.executionId) : undefined}
                   isHumanCorrected={item.isHumanCorrected}
                 />
+              </td>
+              <td className="px-4 py-2.5 text-center" aria-label={attentionExecutionIds.has(item.executionId) ? labels.attention : undefined}>
+                {attentionExecutionIds.has(item.executionId) ? <span className="text-[#C53F4B]">!</span> : null}
+              </td>
+              <td className="px-4 py-2.5">
+                <button type="button" onClick={() => onSelectExecution(item.executionId)} className="text-[12px] text-[#172E95] underline-offset-2 hover:underline">{labels.detail}</button>
               </td>
 
             </tr>
