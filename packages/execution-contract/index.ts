@@ -247,3 +247,194 @@ export interface ConversationLinkProjectionWriter {
   upsertConversationLink(input: ConversationLinkProjectionUpsertInput): Promise<void>;
 
 }
+
+// =========================
+// Preflight / Complete — Provider-neutral Governance Wire Contract (SOR-138 Slice 1)
+// =========================
+//
+// Shared between a future Yolna-side caller and Yolna Runs
+// (packages/runs-core/tact-execution/governance/contract.ts — the only
+// implementation in Slice 1). Maps onto the already-landed SOR-8B
+// GovernanceInvocation/GovernanceDecision model (packages/runs-core's
+// tact-execution/governance/types.ts) without exposing that model's
+// internal DB row shapes here.
+//
+// Vocabulary strings (actorKind/actionCategory/provider/sourceType/
+// outcome status) are plain `string`-typed below, not imported closed
+// unions, so this package keeps zero runtime or type dependency on
+// @tact/runs-core (the dependency direction is runs-core -> this
+// package, never the reverse). Each value is validated against Runs' own
+// closed vocabulary at the implementation boundary and rejected
+// explicitly when unrecognized — never silently coerced or defaulted.
+// No Composio/Slack/Notion/LLM-specific field exists here, only the
+// generic actor/action/provider vocabulary every adapter already
+// normalizes execution events into.
+
+export type PreflightVerdict = "ALLOW" | "DENY" | "APPROVAL_REQUIRED" | "UNKNOWN";
+
+export const PREFLIGHT_VERDICTS: readonly PreflightVerdict[] = ["ALLOW", "DENY", "APPROVAL_REQUIRED", "UNKNOWN"];
+
+export interface PreflightRequest {
+
+  // Caller-supplied idempotency identity (maps to GovernanceInvocation.id).
+  // Resubmitting the same invocationId with identical content is always
+  // safe; resubmitting it with different content is rejected explicitly,
+  // never silently overwritten or merged.
+  invocationId: string;
+
+  userId: string;
+
+  organizationId?: string | null;
+
+  workspaceId?: string | null;
+
+  workId?: string | null;
+
+  connectionId?: string | null;
+
+  // Runs' own ExecutionActorKind vocabulary ("human" | "ai_agent" |
+  // "service" | "connector" | "system"), validated at the boundary.
+  actorKind: string;
+
+  actorId?: string | null;
+
+  agentId?: string | null;
+
+  onBehalfOfActorKind?: string | null;
+
+  onBehalfOfActorId?: string | null;
+
+  // Runs' own ExecutionActionCategory vocabulary ("read" | "create" |
+  // "update" | "send" | "delete" | "share" | "execute" | "approve" |
+  // "unknown"), validated at the boundary.
+  actionCategory: string;
+
+  operation: string;
+
+  resourceType?: string | null;
+
+  resourceIdentifier?: string | null;
+
+  // Runs' own closed ExecutionProvider vocabulary, validated at the
+  // boundary (never coerced/guessed when unrecognized).
+  targetProvider?: string | null;
+
+  // ISO-8601 with an explicit timezone offset.
+  attemptedAt: string;
+
+}
+
+export interface PreflightResponse {
+
+  decisionId: string;
+
+  invocationId: string;
+
+  verdict: PreflightVerdict;
+
+  reasonCode: string;
+
+  evaluatorVersion: string;
+
+  // = GovernanceDecision.policySetFingerprint: a SHA-256 digest of the
+  // enabled, time-effective Permission Registry rule set this verdict was
+  // computed against.
+  policyVersion: string;
+
+  matchedRuleIdentifier: string | null;
+
+  // Always null/null in Slice 1 — nothing resolves a human approval yet.
+  // Present now so a later slice that wires real approval resolution does
+  // not need a breaking wire change.
+  approval: { approvalId: string | null; status: "approved" | "rejected" | null };
+
+}
+
+export interface CompleteRequestExecutionEvidence {
+
+  // Runs' own closed ExecutionProvider vocabulary, validated at the
+  // boundary.
+  provider: string;
+
+  // Runs' own closed ExecutionSourceType vocabulary, validated at the
+  // boundary.
+  sourceType: string;
+
+  // Idempotency key for the resulting Canonical Execution capture, same
+  // role as every other adapter's externalEventId.
+  externalEventId: string;
+
+  adapterVersion: string;
+
+  // Runs' own closed ExecutionStatus vocabulary, validated at the
+  // boundary when present.
+  status?: string;
+
+  errorCode?: string | null;
+
+  errorMessage?: string | null;
+
+  resourceType?: string | null;
+
+  resourceIdentifier?: string | null;
+
+  providerOccurredAt?: string | null;
+
+}
+
+export interface CompleteRequestOutcome {
+
+  // Runs' own closed ExecutionOutcomeStatus vocabulary ("unknown" |
+  // "asserted"), validated at the boundary.
+  status: string;
+
+  outcomeKind?: string | null;
+
+  summary?: string | null;
+
+  // Runs' own closed ExecutionOutcomeMethod vocabulary ("adapter_asserted"
+  // | "manual_override"). Defaults to "adapter_asserted" when omitted.
+  method?: string;
+
+}
+
+export interface CompleteRequest {
+
+  decisionId: string;
+
+  invocationId: string;
+
+  // Trust is never carried as a wire field here — see
+  // governance/contract.ts's header comment. It is established entirely
+  // by which `capture` dependency the caller of complete() is allowed to
+  // inject, exactly as the existing telemetry-ingest route already
+  // authenticates a caller before it is allowed to reach captureExecution().
+  execution: CompleteRequestExecutionEvidence;
+
+  outcome?: CompleteRequestOutcome | null;
+
+}
+
+export type CompleteResultStatus =
+  | "linked"
+  | "already_linked"
+  | "link_conflict"
+  | "invocation_not_found"
+  | "decision_not_found"
+  | "invalid"
+  | "unavailable"
+  | "error";
+
+export interface CompleteResult {
+
+  status: CompleteResultStatus;
+
+  executionId?: string;
+
+  governanceExecutionLinkId?: string;
+
+  outcomeRecorded?: boolean;
+
+  reason?: string;
+
+}
