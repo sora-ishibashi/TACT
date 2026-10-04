@@ -50,6 +50,7 @@ export default function WorkDetailView({
   items,
   onBack,
   onReviewCorrelation,
+  onSelectExecution,
 }: {
   work: WorkHeaderView;
   items: WorkTimelineItemView[];
@@ -58,6 +59,8 @@ export default function WorkDetailView({
   // (RunsSectionが既にActivityへ渡しているのと同じ関数をそのまま渡す
   // だけ——判定・永続化ロジックはここに一切無い)。
   onReviewCorrelation?: (executionId: string) => void;
+  /** SOR-185 attaches the inspector here; this view never owns one. */
+  onSelectExecution?: (executionId: string) => void;
 }) {
 
   return (
@@ -80,7 +83,7 @@ export default function WorkDetailView({
       <div className="flex flex-col gap-1">
 
         <h2 className="text-[24px] font-medium leading-[32px] text-[#112278]">
-          {work.title ?? work.workId}
+          {work.title ?? "記録なし"}
         </h2>
 
         <div className="flex flex-wrap items-center gap-3 text-[12px] text-[#626161]">
@@ -115,22 +118,22 @@ export default function WorkDetailView({
 
             <thead>
               <tr className="border-b border-[#D9D9D9] bg-[#F2F2F2]/60 text-[12px] font-medium text-[#626161]">
-                <th scope="col" className="px-4 py-2.5">Time</th>
-                <th scope="col" className="px-4 py-2.5">Principal</th>
-                <th scope="col" className="px-4 py-2.5">Agent</th>
-                <th scope="col" className="px-4 py-2.5">SaaS</th>
-                <th scope="col" className="px-4 py-2.5">Action</th>
-                <th scope="col" className="px-4 py-2.5">Permission</th>
-                <th scope="col" className="px-4 py-2.5">Result</th>
-                <th scope="col" className="px-4 py-2.5">Outcome</th>
-                <th scope="col" className="px-4 py-2.5">Why this Work</th>
+                <th scope="col" className="px-4 py-2.5">時刻</th>
+                <th scope="col" className="px-4 py-2.5">依頼元</th>
+                <th scope="col" className="px-4 py-2.5">AI</th>
+                <th scope="col" className="px-4 py-2.5">サービス</th>
+                <th scope="col" className="px-4 py-2.5">操作</th>
+                <th scope="col" className="px-4 py-2.5">権限</th>
+                <th scope="col" className="px-4 py-2.5">結果</th>
+                <th scope="col" className="px-4 py-2.5">結果の状態</th>
+                <th scope="col" className="px-4 py-2.5">この仕事との関係</th>
               </tr>
             </thead>
 
             <tbody>
               {items.map((item) => (
 
-                <tr key={item.executionId} className="border-b border-[#D9D9D9] last:border-b-0 hover:bg-[#E6F2F2]/40">
+                <tr key={item.executionId} onClick={() => onSelectExecution?.(item.executionId)} className={`border-b border-[#D9D9D9] last:border-b-0 hover:bg-[#E6F2F2]/40 ${onSelectExecution ? "cursor-pointer" : ""}`}>
 
                   <td className="whitespace-nowrap px-4 py-2.5 text-[#626161]">{formatTimestamp(item.observedAt)}</td>
                   <td className="px-4 py-2.5">{item.principalLabel}</td>

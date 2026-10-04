@@ -21,6 +21,8 @@ import { ActivityExplorer } from "./ActivityExplorer";
 import ActivityFilters from "./ActivityFilters";
 import AttentionList from "./AttentionList";
 import ObservationCoverage from "./ObservationCoverage";
+import { HomeView } from "./HomeView";
+import { WorkSidebar, type WorkListItem } from "./WorkSidebar";
 import WorkDetailView from "./WorkDetailView";
 import CorrelationReviewModal from "./CorrelationReviewModal";
 import { ExecutionInspector } from "./ExecutionInspector";
@@ -43,7 +45,7 @@ import type { CaptureGap, ObservationSurface } from "@tact/runs-core/tact-execut
 export default function RunsSection() {
 
   const { user, getAccessToken } = useAuth();
-  const { section } = useRunsShell();
+  const { section, setSection } = useRunsShell();
 
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
   // SOR-77(CORRELATION-REVIEW-P1): レビュー対象のexecutionId(モーダル
@@ -71,6 +73,9 @@ export default function RunsSection() {
   const [attentionLoading, setAttentionLoading] = useState(true);
   const [attentionError, setAttentionError] = useState<PresentationStateKind | null>(null);
   const [coverage, setCoverage] = useState<{ surfaces: ObservationSurface[]; gaps: CaptureGap[] }>({ surfaces: [], gaps: [] });
+  const [workList, setWorkList] = useState<WorkListItem[]>([]);
+  const [workListLoading, setWorkListLoading] = useState(true);
+  const [workSearch, setWorkSearch] = useState("");
 
   const [workHeader, setWorkHeader] = useState<WorkHeaderView | null>(null);
   const [workItems, setWorkItems] = useState<WorkTimelineItemView[]>([]);
@@ -116,6 +121,17 @@ export default function RunsSection() {
 
     }
 
+  }, [getAccessToken]);
+
+  const loadWorkList = useCallback(async () => {
+    const accessToken = getAccessToken();
+    if (!accessToken) { setWorkList([]); setWorkListLoading(false); return; }
+    setWorkListLoading(true);
+    try {
+      const response = await fetch("/api/tact/runs/work", { headers: { Authorization: `Bearer ${accessToken}` } });
+      const body = await response.json().catch(() => null);
+      setWorkList(response.ok && body?.success && Array.isArray(body.items) ? body.items : []);
+    } catch { setWorkList([]); } finally { setWorkListLoading(false); }
   }, [getAccessToken]);
 
   const loadCoverage = useCallback(async () => {
@@ -225,6 +241,11 @@ export default function RunsSection() {
 
   useEffect(() => {
     queueMicrotask(() => { void loadCoverage(); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  useEffect(() => {
+    queueMicrotask(() => { void loadWorkList(); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
@@ -408,6 +429,7 @@ export default function RunsSection() {
   return (
 
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      {section === "work" && <WorkSidebar items={workList} selectedWorkId={selectedWorkId} search={workSearch} onSearch={setWorkSearch} onSelect={handleSelectWork} />}
       {(section === "activity" || section === "attention" || section === "coverage") && <SecondarySidebar title={section === "attention" ? "要確認" : section === "coverage" ? "接続・観測" : "実行記録のフィルタ"}>
         {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
         {section === "attention" ? <div className="flex flex-col gap-1"><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">すべて ({attentionItems.length})</button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">{category.label} ({category.count})</button>)}</div> : null}
@@ -423,7 +445,7 @@ export default function RunsSection() {
           than the viewport, even after fixing TactShell alone. */}
       <div className="mt-4 min-w-0">
 
-        {section === "home" ? <PresentationState kind="unknown" /> : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "coverage" ? <ObservationCoverage surfaces={coverage.surfaces.filter((surface) => !selectedSurfaceId || surface.surfaceId === selectedSurfaceId)} gaps={coverage.gaps} /> : section === "activity" ? (
+        {section === "home" ? <HomeView attention={attentionItems} works={workList} surfaces={coverage.surfaces} gaps={coverage.gaps} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "coverage" ? <ObservationCoverage surfaces={coverage.surfaces.filter((surface) => !selectedSurfaceId || surface.surfaceId === selectedSurfaceId)} gaps={coverage.gaps} /> : section === "activity" ? (
 
           activityLoading ? (
             <PresentationState kind="loading" />
