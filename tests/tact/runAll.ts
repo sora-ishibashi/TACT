@@ -245,6 +245,11 @@ import { run as runExecutionRunsCoreImportIsolation } from "./execution/runsCore
 import { run as runExecutionGovernanceContract } from "./execution/governance/contract.test";
 import { run as runExecutionGovernanceTwoPathContract } from "./execution/governance/twoPathContract.test";
 import { run as runExecutionGovernanceConcurrency } from "./execution/governance/concurrency.test";
+import { run as runExecutionGovernanceApprovalRequestStore } from "./execution/governance/approvalRequestStore.test";
+import { run as runExecutionGovernanceApprovalRequestContract } from "./execution/governance/approvalRequestContract.test";
+import { run as runExecutionGovernanceApprovalRequestConcurrency } from "./execution/governance/approvalRequestConcurrency.test";
+import { run as runExecutionGovernanceApprovalRequestImmutability } from "./execution/governance/approvalRequestImmutability.test";
+import { run as runRunsViewGovernanceApprovalInbox } from "./runsView/governanceApprovalInbox.test";
 
 const suites: { name: string; run: () => Promise<{ pass: number; fail: number }> }[] = [
   { name: "intent/classifyIntent", run: runClassifyIntent },
@@ -465,6 +470,11 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/governance/contract", run: runExecutionGovernanceContract },
   { name: "execution/governance/twoPathContract", run: runExecutionGovernanceTwoPathContract },
   { name: "execution/governance/concurrency", run: runExecutionGovernanceConcurrency },
+  { name: "execution/governance/approvalRequestStore", run: runExecutionGovernanceApprovalRequestStore },
+  { name: "execution/governance/approvalRequestContract", run: runExecutionGovernanceApprovalRequestContract },
+  { name: "execution/governance/approvalRequestConcurrency", run: runExecutionGovernanceApprovalRequestConcurrency },
+  { name: "execution/governance/approvalRequestImmutability", run: runExecutionGovernanceApprovalRequestImmutability },
+  { name: "runsView/governanceApprovalInbox", run: runRunsViewGovernanceApprovalInbox },
 ];
 
 async function main() {

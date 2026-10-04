@@ -62,6 +62,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       createGovernanceInvocation: store.createGovernanceInvocation,
       listGovernanceDecisionsForInvocation: store.listGovernanceDecisionsForInvocation,
       appendGovernanceDecision: store.appendGovernanceDecision,
+      // SOR-138 Slice 2A added this required dep after this Slice 1 test
+      // file was written — see contract.test.ts's identical comment.
+      ensureGovernanceApprovalRequestForDecision: store.ensureGovernanceApprovalRequestForDecision,
       listActivePermissionRulesForMatching: async () => [rule],
       now: () => new Date("2026-10-04T00:00:01.000Z"),
     };
@@ -115,6 +118,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       createGovernanceInvocation: store.createGovernanceInvocation,
       listGovernanceDecisionsForInvocation: store.listGovernanceDecisionsForInvocation,
       appendGovernanceDecision: store.appendGovernanceDecision,
+      ensureGovernanceApprovalRequestForDecision: store.ensureGovernanceApprovalRequestForDecision,
       listActivePermissionRulesForMatching: async () => {
         callCount += 1;
         return callCount === 1 ? [allowRule] : [denyRule];
@@ -163,6 +167,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       createGovernanceInvocation: store.createGovernanceInvocation,
       listGovernanceDecisionsForInvocation: store.listGovernanceDecisionsForInvocation,
       appendGovernanceDecision: store.appendGovernanceDecision,
+      ensureGovernanceApprovalRequestForDecision: store.ensureGovernanceApprovalRequestForDecision,
       listActivePermissionRulesForMatching: async (userId) => allRules.filter((r) => r.userId === userId || r.userId === null),
       now: () => new Date("2026-10-04T00:00:01.000Z"),
     };

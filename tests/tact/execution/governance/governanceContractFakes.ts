@@ -16,6 +16,10 @@ import type {
   GovernanceDecisionInput,
   GovernanceExecutionLink,
   GovernanceExecutionLinkInput,
+  GovernanceApprovalRequest,
+  GovernanceApprovalRequestInput,
+  GovernanceApprovalRequestStatus,
+  GovernanceApprovalResolver,
 } from "@tact/runs-core/tact-execution/governance/types";
 import type {
   CanonicalExecution,
@@ -71,6 +75,19 @@ export type FakeLinkOutcome =
   | { status: "already_exists"; link: GovernanceExecutionLink }
   | { status: "execution_already_linked" };
 
+export type FakeEnsureApprovalRequestOutcome =
+  | { status: "created"; approvalRequest: GovernanceApprovalRequest }
+  | { status: "already_exists"; approvalRequest: GovernanceApprovalRequest }
+  | { status: "decision_not_found" }
+  | { status: "verdict_not_approval_required" }
+  | { status: "invalid"; errors: string[] };
+
+export type FakeResolveApprovalRequestOutcome =
+  | { status: "resolved"; approvalRequest: GovernanceApprovalRequest }
+  | { status: "already_resolved"; approvalRequest: GovernanceApprovalRequest }
+  | { status: "not_found" }
+  | { status: "invalid"; errors: string[] };
+
 export interface FakeGovernanceStoreOptions {
 
   // Inserts one microtask yield before each store function's own
@@ -103,6 +120,12 @@ export function makeFakeGovernanceStore(options: FakeGovernanceStoreOptions = {}
   const decisions = new Map<string, GovernanceDecision>();
   const linksByExecutionId = new Map<string, GovernanceExecutionLink>();
   let linkIdCounter = 0;
+  // Keyed by governance_decision_id, mirroring the real table's
+  // UNIQUE(governance_decision_id) constraint — the sole concurrency
+  // boundary for this table (see store.ts's own comment).
+  const approvalRequestsByDecisionId = new Map<string, GovernanceApprovalRequest>();
+  const approvalRequestsById = new Map<string, GovernanceApprovalRequest>();
+  let approvalRequestIdCounter = 0;
 
   async function maybeYield(): Promise<void> {
     if (artificialRaceYield) {
@@ -194,18 +217,160 @@ export function makeFakeGovernanceStore(options: FakeGovernanceStoreOptions = {}
 
   }
 
+  // Private helper — mirrors store.ts's own non-exported
+  // createGovernanceApprovalRequest(): raw, non-verifying insert. Not
+  // returned from this factory's public object, for the same reason the
+  // real one isn't exported from the governance barrel (see store.ts's
+  // comment) — the only path a test may call is
+  // ensureGovernanceApprovalRequestForDecision() below.
+  async function insertApprovalRequestRow(input: GovernanceApprovalRequestInput): Promise<FakeEnsureApprovalRequestOutcome> {
+
+    if (!input.userId || !input.governanceDecisionId) {
+      return { status: "invalid", errors: ["userId and governanceDecisionId are required"] };
+    }
+
+    const existing = approvalRequestsByDecisionId.get(input.governanceDecisionId);
+
+    if (existing) {
+      // No canonical-payload comparison here (unlike invocation/decision) —
+      // there is nothing mutable to disagree on besides the decision id
+      // itself, so a duplicate claim is unconditionally already_exists
+      // (same simplification store.ts's own createGovernanceApprovalRequest
+      // makes, see that function's comment).
+      return { status: "already_exists", approvalRequest: existing };
+    }
+
+    approvalRequestIdCounter += 1;
+
+    const approvalRequest: GovernanceApprovalRequest = {
+      id: `apr-${approvalRequestIdCounter}`,
+      userId: input.userId,
+      governanceDecisionId: input.governanceDecisionId,
+      status: "pending",
+      requestedAt: new Date().toISOString(),
+      resolvedAt: null,
+      resolvedByActorKind: null,
+      resolvedByActorId: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    approvalRequestsByDecisionId.set(input.governanceDecisionId, approvalRequest);
+    approvalRequestsById.set(approvalRequest.id, approvalRequest);
+
+    return { status: "created", approvalRequest };
+
+  }
+
+  // Mirrors store.ts's own ensureGovernanceApprovalRequestForDecision()
+  // exactly (Human Owner correction 2): never trusts a caller-supplied
+  // verdict — always re-reads the persisted decision from this fake's own
+  // `decisions` map and verifies tenant + verdict before creating
+  // anything. Missing decision and a different tenant's decision
+  // deliberately collapse to the same decision_not_found outcome.
+  async function ensureGovernanceApprovalRequestForDecision(governanceDecisionId: string, trustedUserId: string): Promise<FakeEnsureApprovalRequestOutcome> {
+
+    await maybeYield();
+
+    if (!governanceDecisionId || !trustedUserId) {
+      return { status: "invalid", errors: ["governanceDecisionId and trustedUserId are required"] };
+    }
+
+    const decision = decisions.get(governanceDecisionId);
+
+    if (!decision || decision.userId !== trustedUserId) {
+      return { status: "decision_not_found" };
+    }
+
+    if (decision.verdict !== "APPROVAL_REQUIRED") {
+      return { status: "verdict_not_approval_required" };
+    }
+
+    return insertApprovalRequestRow({ userId: trustedUserId, governanceDecisionId });
+
+  }
+
+  async function getGovernanceApprovalRequest(id: string, userId: string): Promise<GovernanceApprovalRequest | undefined> {
+    const approvalRequest = approvalRequestsById.get(id);
+    return approvalRequest && approvalRequest.userId === userId ? approvalRequest : undefined;
+  }
+
+  // Single-statement CAS equivalent: mirrors store.ts's
+  // transitionGovernanceApprovalRequest() exactly — tenant ownership +
+  // status === "pending" is the CAS predicate, re-checked synchronously
+  // here (JS execution between the `maybeYield()` and the mutation below is
+  // never preempted, so this still correctly serializes two "concurrent"
+  // callers racing via Promise.all, exactly like the real single UPDATE
+  // statement would under Postgres' row lock).
+  async function resolveGovernanceApprovalRequest(
+    id: string,
+    userId: string,
+    targetStatus: "approved" | "rejected",
+    resolver: GovernanceApprovalResolver
+  ): Promise<FakeResolveApprovalRequestOutcome> {
+
+    await maybeYield();
+
+    // Mirrors store.ts's validateGovernanceApprovalResolver() exactly
+    // (Human Owner correction 1): "human" is the only legal actorKind, and
+    // an empty/whitespace-only actorId is rejected before any mutation.
+    const actorId = typeof resolver?.actorId === "string" ? resolver.actorId.trim() : "";
+    if (resolver?.actorKind !== "human" || actorId.length === 0) {
+      return { status: "invalid", errors: [`resolvedByActorKind must be "human" with a non-empty actorId (got actorKind=${JSON.stringify(resolver?.actorKind)})`] };
+    }
+
+    const current = approvalRequestsById.get(id);
+
+    if (!current || current.userId !== userId) {
+      return { status: "not_found" };
+    }
+
+    if (current.status !== "pending") {
+      return { status: "already_resolved", approvalRequest: current };
+    }
+
+    const resolved: GovernanceApprovalRequest = {
+      ...current,
+      status: targetStatus,
+      resolvedAt: new Date().toISOString(),
+      resolvedByActorKind: "human",
+      resolvedByActorId: actorId,
+    };
+
+    approvalRequestsById.set(id, resolved);
+    approvalRequestsByDecisionId.set(resolved.governanceDecisionId, resolved);
+
+    return { status: "resolved", approvalRequest: resolved };
+
+  }
+
+  async function approveGovernanceApprovalRequest(id: string, userId: string, resolver: GovernanceApprovalResolver): Promise<FakeResolveApprovalRequestOutcome> {
+    return resolveGovernanceApprovalRequest(id, userId, "approved", resolver);
+  }
+
+  async function rejectGovernanceApprovalRequest(id: string, userId: string, resolver: GovernanceApprovalResolver): Promise<FakeResolveApprovalRequestOutcome> {
+    return resolveGovernanceApprovalRequest(id, userId, "rejected", resolver);
+  }
+
   return {
     invocations,
     decisions,
     linksByExecutionId,
+    approvalRequestsByDecisionId,
+    approvalRequestsById,
     createGovernanceInvocation,
     appendGovernanceDecision,
     getGovernanceInvocation,
     listGovernanceDecisionsForInvocation,
     linkInvocationExecution,
+    ensureGovernanceApprovalRequestForDecision,
+    getGovernanceApprovalRequest,
+    approveGovernanceApprovalRequest,
+    rejectGovernanceApprovalRequest,
   };
 
 }
+
+export type FakeApprovalRequestStatus = GovernanceApprovalRequestStatus;
 
 export function makeFakeCapture() {
 

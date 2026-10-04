@@ -110,6 +110,27 @@
 //     conflict for what is, from the caller's perspective, a perfectly
 //     valid invocation.
 
+// =========================
+// SOR-138 Slice 2A addendum (Human Owner approval, 2026-10-04)
+// =========================
+//
+// GovernanceApprovalRequest is a separate, first-class pre-execution Human
+// Decision record (./types.ts, ./store.ts) — never a mutation of
+// GovernanceDecision (still append-only, see the original header above) and
+// never the post-execution tact_execution_attentions lifecycle. preflight()
+// now ensures one exists, idempotently, before returning any "decided"
+// response for an APPROVAL_REQUIRED verdict (see decideAndEnsureApproval()
+// below) — on the fresh-evaluation path, the sequential-retry path, AND the
+// race-loser-recovery path, so a prior process dying between persisting the
+// decision and persisting its approval request is recovered by the next
+// call rather than left dangling. Persistence failure at that step fails
+// preflight() closed (`unavailable`) — it never fabricates a successful
+// "decided" response carrying a missing/fake approval handle.
+//
+// No HTTP route, no UI, and no SOR-184 file is touched by this slice. The
+// resolution functions (approveGovernanceApprovalRequest/
+// rejectGovernanceApprovalRequest, ./store.ts) are Runs Core functions only.
+
 import { createHash } from "node:crypto";
 import type {
   PreflightRequest,
@@ -146,8 +167,9 @@ import {
   createGovernanceInvocation,
   appendGovernanceDecision,
   listGovernanceDecisionsForInvocation,
+  ensureGovernanceApprovalRequestForDecision,
 } from "./store";
-import type { GovernanceInvocation, GovernanceInvocationInput, GovernanceDecision, GovernanceExecutionLink, GovernanceExecutionLinkInput } from "./types";
+import type { GovernanceInvocation, GovernanceInvocationInput, GovernanceDecision, GovernanceExecutionLink, GovernanceExecutionLinkInput, GovernanceApprovalRequest } from "./types";
 
 // =========================
 // Narrow local return types for the governance store's own `Promise<any>`
@@ -180,6 +202,20 @@ type LinkInvocationExecutionOutcome =
   | { status: "unavailable" }
   | { status: "error"; message: string };
 
+// store.ts's own ensureGovernanceApprovalRequestForDecision() already
+// returns this exact shape (not `Promise<any>` — see that file's comment
+// on why this one differs from createGovernanceInvocation/
+// appendGovernanceDecision), so this is a type alias, not a re-narrowing
+// like the three above.
+type EnsureGovernanceApprovalRequestOutcome =
+  | { status: "created"; approvalRequest: GovernanceApprovalRequest }
+  | { status: "already_exists"; approvalRequest: GovernanceApprovalRequest }
+  | { status: "decision_not_found" }
+  | { status: "verdict_not_approval_required" }
+  | { status: "invalid"; errors: string[] }
+  | { status: "unavailable" }
+  | { status: "error"; message: string };
+
 // =========================
 // Preflight
 // =========================
@@ -207,6 +243,17 @@ export interface PreflightDeps {
 
   appendGovernanceDecision: (input: ReturnType<typeof buildGovernanceDecisionFromRegistry>) => Promise<AppendGovernanceDecisionOutcome>;
 
+  // SOR-138 Slice 2A: ensures the durable pre-execution Human Decision
+  // record exists for an APPROVAL_REQUIRED decision. Idempotent on
+  // governanceDecisionId (see store.ts's own comment) — safe to call on
+  // every path that returns a "decided" response for the same decision,
+  // including retries and crash recovery (see decideAndEnsureApproval()
+  // below). This dep re-verifies the persisted decision's verdict itself
+  // (Human Owner correction 2) — it is NOT told the verdict by this file;
+  // it is only given the decisionId/userId and independently reads/checks
+  // the decision row before creating anything.
+  ensureGovernanceApprovalRequestForDecision: (governanceDecisionId: string, userId: string) => Promise<EnsureGovernanceApprovalRequestOutcome>;
+
   now: () => Date;
 
 }
@@ -216,6 +263,7 @@ const defaultPreflightDeps: PreflightDeps = {
   listGovernanceDecisionsForInvocation,
   listActivePermissionRulesForMatching,
   appendGovernanceDecision,
+  ensureGovernanceApprovalRequestForDecision,
   now: () => new Date(),
 };
 
@@ -261,7 +309,14 @@ function deterministicFirstDecisionId(userId: string, invocationId: string): str
 
 }
 
-function toPreflightResponse(decision: GovernanceDecision): PreflightResponse {
+// SOR-138 Slice 2A: approval now sources from the live GovernanceApprovalRequest,
+// never from decision.approvalId/approvalStatus (see types.ts's comment on why
+// those two fields are legacy/reserved as of this slice — they stay null
+// forever, by construction, and are never read here again). `verdict` is
+// always decision.verdict, unconditionally — approving or rejecting a request
+// never rewrites it (Human Owner decision 4: a recorded human decision is not
+// a verdict change).
+function toPreflightResponse(decision: GovernanceDecision, approvalRequest: GovernanceApprovalRequest | null): PreflightResponse {
   return {
     decisionId: decision.id,
     invocationId: decision.invocationId,
@@ -270,8 +325,52 @@ function toPreflightResponse(decision: GovernanceDecision): PreflightResponse {
     evaluatorVersion: decision.evaluatorVersion,
     policyVersion: decision.policySetFingerprint,
     matchedRuleIdentifier: decision.policyIdentifierSnapshot,
-    approval: { approvalId: decision.approvalId, status: decision.approvalStatus },
+    approval: approvalRequest
+      ? { approvalId: approvalRequest.id, status: approvalRequest.status === "pending" ? null : approvalRequest.status }
+      : { approvalId: null, status: null },
   };
+}
+
+// Single funnel for every "this decision is now the answer" path below
+// (fresh evaluation, sequential retry, and race-loser recovery) — ensures
+// the approval request exists BEFORE returning a decided response, per
+// Human Owner decision ("PREFLIGHT INTEGRATION"): never return an
+// actionable APPROVAL_REQUIRED response with a fake/missing approval
+// handle. ALLOW/DENY/UNKNOWN never reach the store at all. Unavailable/error
+// from the approval store fails preflight() closed as `unavailable` —
+// exactly the crash-recovery and persistence-unavailable behavior required.
+async function decideAndEnsureApproval(decision: GovernanceDecision, deps: PreflightDeps): Promise<PreflightOutcome> {
+
+  if (decision.verdict !== "APPROVAL_REQUIRED") {
+    return { status: "decided", response: toPreflightResponse(decision, null) };
+  }
+
+  const approvalOutcome = await deps.ensureGovernanceApprovalRequestForDecision(decision.id, decision.userId);
+
+  if (approvalOutcome.status === "created" || approvalOutcome.status === "already_exists") {
+    return { status: "decided", response: toPreflightResponse(decision, approvalOutcome.approvalRequest) };
+  }
+
+  if (approvalOutcome.status === "invalid") {
+    return { status: "invalid", errors: approvalOutcome.errors };
+  }
+
+  // decision_not_found / verdict_not_approval_required are structurally
+  // unreachable from THIS call site specifically: `decision` just came
+  // from a successful appendGovernanceDecision()/listGovernanceDecisionsForInvocation()
+  // read of this exact row, and the `if` above already confirmed
+  // decision.verdict === "APPROVAL_REQUIRED" in-memory. If the store ever
+  // disagrees with itself here (e.g. the decision vanished between that
+  // read and this call — it never should, GovernanceDecision is
+  // append-only and never deleted), fail closed rather than guess; never
+  // treat it as "no approval needed" and silently fall back to
+  // {approvalId:null,status:null} for a verdict this function already
+  // knows is APPROVAL_REQUIRED.
+  return {
+    status: "unavailable",
+    reason: approvalOutcome.status === "error" ? approvalOutcome.message : `governance approval request boundary returned unexpected status: ${approvalOutcome.status}`,
+  };
+
 }
 
 function requireClosedField<T extends string>(
@@ -407,7 +506,11 @@ export async function preflight(
     const effective = pickEffectiveDecision(existingDecisions);
 
     if (effective) {
-      return { status: "decided", response: toPreflightResponse(effective) };
+      // Crash recovery (Human Owner decision, "PREFLIGHT INTEGRATION"):
+      // this path is also reached when a prior process persisted the
+      // decision but died before ensuring its approval request — this
+      // call recovers that, idempotently, exactly like a fresh call would.
+      return decideAndEnsureApproval(effective, deps);
     }
 
     // No decision was ever persisted for this invocation yet. This is
@@ -459,7 +562,7 @@ export async function preflight(
     const winner = pickEffectiveDecision(racedDecisions);
 
     if (winner) {
-      return { status: "decided", response: toPreflightResponse(winner) };
+      return decideAndEnsureApproval(winner, deps);
     }
 
     // Structurally unreachable (an idempotency_conflict on this
@@ -477,7 +580,7 @@ export async function preflight(
     };
   }
 
-  return { status: "decided", response: toPreflightResponse(decisionOutcome.decision) };
+  return decideAndEnsureApproval(decisionOutcome.decision, deps);
 
 }
 

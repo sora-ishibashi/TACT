@@ -352,9 +352,26 @@ export interface PreflightResponse {
 
   matchedRuleIdentifier: string | null;
 
-  // Always null/null in Slice 1 — nothing resolves a human approval yet.
-  // Present now so a later slice that wires real approval resolution does
-  // not need a breaking wire change.
+  // SOR-138 Slice 1: always null/null (nothing resolved a human approval
+  // yet). SOR-138 Slice 2A: populated once a durable GovernanceApprovalRequest
+  // exists for an APPROVAL_REQUIRED verdict — approvalId is present as soon
+  // as the request exists (even while still pending), and status stays null
+  // until it resolves.
+  //
+  // IMPORTANT — this field reports the RECORDED HUMAN DECISION only. It is
+  // NOT sufficient authorization to execute:
+  //   - status === "approved" is not an execution token, lease, or grant.
+  //   - it is not replay-safe, not one-shot, not target-bound, and not
+  //     transaction-bound — nothing here proves the approved action and the
+  //     action actually attempted later are the same action against the
+  //     same target/value/state.
+  //   - verdict above never changes because of this field. An
+  //     APPROVAL_REQUIRED verdict stays APPROVAL_REQUIRED forever on this
+  //     decision, resolved or not — approval/rejection is a fact about a
+  //     separate record, not a verdict rewrite.
+  // Replay protection, expiry, and transaction/target binding are explicitly
+  // out of this contract slice (tracked against SOR-160/SOR-164/SOR-169 and
+  // later live-mediation work) — do not infer any of them from this shape.
   approval: { approvalId: string | null; status: "approved" | "rejected" | null };
 
 }
