@@ -68,6 +68,11 @@ function makePreflightDeps(
     createGovernanceInvocation: store.createGovernanceInvocation,
     listGovernanceDecisionsForInvocation: store.listGovernanceDecisionsForInvocation,
     appendGovernanceDecision: store.appendGovernanceDecision,
+    // SOR-138 Slice 2A added this required dep after this Slice 1 test file
+    // was written — wired to the real fake so this shared helper keeps
+    // compiling/running unchanged. Approval-request behavior itself is
+    // exercised in approvalRequestContract.test.ts, not here.
+    ensureGovernanceApprovalRequestForDecision: store.ensureGovernanceApprovalRequestForDecision,
     listActivePermissionRulesForMatching,
     now: () => now,
   };
@@ -104,8 +109,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const outcome = await preflight(makeRequest(), TRUSTED_USER_A, deps);
     results.push(check("[APPROVAL_REQUIRED] verdict=APPROVAL_REQUIRED", outcome.status === "decided" && outcome.response.verdict === "APPROVAL_REQUIRED"));
     results.push(check(
-      "[APPROVAL_REQUIRED] approval fields are present but unresolved in Slice 1",
-      outcome.status === "decided" && outcome.response.approval.approvalId === null && outcome.response.approval.status === null
+      // SOR-138 Slice 2A superseded this assertion intentionally: Slice 1
+      // always returned {approvalId:null,status:null} for every verdict
+      // (nothing resolved an approval yet); Slice 2A now ensures a durable
+      // GovernanceApprovalRequest exists for APPROVAL_REQUIRED specifically,
+      // so approvalId becomes a stable non-null handle while status stays
+      // null until a human resolves it — see
+      // approvalRequestContract.test.ts's "[1]" case for the full behavior.
+      "[APPROVAL_REQUIRED] approval carries a durable approvalId, status null while unresolved (Slice 2A)",
+      outcome.status === "decided" && outcome.response.approval.approvalId !== null && outcome.response.approval.status === null
     ));
   }
 

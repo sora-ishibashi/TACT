@@ -59,6 +59,9 @@ function makeDeps(rules: Parameters<typeof makeFakeRule>[0][]): { deps: Prefligh
     createGovernanceInvocation: store.createGovernanceInvocation,
     listGovernanceDecisionsForInvocation: store.listGovernanceDecisionsForInvocation,
     appendGovernanceDecision: store.appendGovernanceDecision,
+    // SOR-138 Slice 2A added this required dep after this Slice 1 test file
+    // was written — see contract.test.ts's identical comment.
+    ensureGovernanceApprovalRequestForDecision: store.ensureGovernanceApprovalRequestForDecision,
     listActivePermissionRulesForMatching: async () => builtRules,
     now: () => new Date("2026-10-04T00:00:01.000Z"),
   };
