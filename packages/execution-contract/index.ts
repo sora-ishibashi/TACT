@@ -282,7 +282,16 @@ export interface PreflightRequest {
   // never silently overwritten or merged.
   invocationId: string;
 
-  userId: string;
+  // Deliberately NO userId/tenant-identity field here (Human Owner
+  // correction, SOR-138 Slice 1 security re-review): tenant identity must
+  // never be self-asserted by a wire payload. The implementation
+  // (packages/runs-core/tact-execution/governance/contract.ts's
+  // preflight()) takes the acting user's id as its own separate,
+  // trusted function argument — supplied by whatever authenticated
+  // server/adapter boundary calls preflight(), the same pattern
+  // complete() already uses for its own `userId` argument. Adding a
+  // userId-shaped field back to this interface is a visible, reviewable
+  // change to this file, not something a caller can smuggle in.
 
   organizationId?: string | null;
 

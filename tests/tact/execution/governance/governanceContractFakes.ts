@@ -70,20 +70,54 @@ export type FakeLinkOutcome =
   | { status: "already_exists"; link: GovernanceExecutionLink }
   | { status: "execution_already_linked" };
 
-export function makeFakeGovernanceStore() {
+export interface FakeGovernanceStoreOptions {
 
+  // Inserts one microtask yield before each store function's own
+  // check-then-write step, so two calls issued back-to-back via
+  // Promise.all genuinely interleave at the same point two truly
+  // concurrent requests against real Postgres connections would — used
+  // only by the concurrency-focused test file. Default false: every
+  // other test in this suite relies on fully synchronous, deterministic
+  // single-caller ordering and must not be affected by this.
+  artificialRaceYield?: boolean;
+
+}
+
+export function makeFakeGovernanceStore(options: FakeGovernanceStoreOptions = {}) {
+
+  const { artificialRaceYield = false } = options;
+
+  // Mirrors the real schema's unique(id, user_id) on
+  // tact_governance_invocations (products/yolna-runs/supabase/migrations/
+  // 20270101000013...sql): the SAME invocationId string may legitimately
+  // belong to two different tenants as two separate rows. Keying this
+  // fake by id alone would wrongly make one tenant's invocation collide
+  // with another's.
   const invocations = new Map<string, GovernanceInvocation>();
+  // tact_governance_decisions.id is a GLOBAL primary key — correctly
+  // keyed by id alone.
   const decisions = new Map<string, GovernanceDecision>();
   const linksByExecutionId = new Map<string, GovernanceExecutionLink>();
   let linkIdCounter = 0;
 
+  const invocationKey = (userId: string, id: string) => `${userId}\u001f${id}`;
+
+  async function maybeYield(): Promise<void> {
+    if (artificialRaceYield) {
+      await Promise.resolve();
+    }
+  }
+
   async function createGovernanceInvocation(input: GovernanceInvocationInput): Promise<FakeCreateInvocationOutcome> {
 
-    const existing = invocations.get(input.id);
+    await maybeYield();
+
+    const key = invocationKey(input.userId, input.id);
+    const existing = invocations.get(key);
 
     if (!existing) {
       const invocation: GovernanceInvocation = { ...input, createdAt: new Date().toISOString() };
-      invocations.set(input.id, invocation);
+      invocations.set(key, invocation);
       return { status: "created", invocation };
     }
 
@@ -94,6 +128,8 @@ export function makeFakeGovernanceStore() {
   }
 
   async function appendGovernanceDecision(input: GovernanceDecisionInput): Promise<FakeAppendDecisionOutcome> {
+
+    await maybeYield();
 
     const existing = decisions.get(input.id);
 
@@ -110,8 +146,7 @@ export function makeFakeGovernanceStore() {
   }
 
   async function getGovernanceInvocation(id: string, userId: string): Promise<GovernanceInvocation | undefined> {
-    const invocation = invocations.get(id);
-    return invocation && invocation.userId === userId ? invocation : undefined;
+    return invocations.get(invocationKey(userId, id));
   }
 
   async function listGovernanceDecisionsForInvocation(id: string, userId: string): Promise<GovernanceDecision[]> {

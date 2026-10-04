@@ -72,8 +72,45 @@
 //     a materially different verdict) is out of this slice's scope
 //     (tracked conceptually against SOR-164's future transaction-bound
 //     authorization work, not implemented here).
+//
+//   - preflight() tenant identity (Human Owner correction, second
+//     security re-review): the acting user's id is NEVER read from the
+//     wire PreflightRequest — there is no such field on that type at all
+//     (@tact/execution-contract's own header comment on PreflightRequest).
+//     preflight() takes it as its own separate, trusted `userId` function
+//     argument, exactly mirroring complete()'s existing `userId`
+//     argument. A caller cannot choose, escalate to, or read another
+//     tenant's Governance state merely by putting a different value
+//     somewhere in the request body — there is nowhere on that body for
+//     such a value to go.
+//
+//   - preflight() first-decision concurrency (Human Owner correction,
+//     second security re-review): the FIRST GovernanceDecision for a
+//     given invocation always uses a deterministic id derived from
+//     (userId, invocationId) — see deterministicFirstDecisionId() below —
+//     never a fresh random one, specifically so the already-existing,
+//     already-relied-upon atomic
+//     "INSERT, detect 23505, read back and compare" claim pattern
+//     (identical to the one governance/store.ts's own
+//     createGovernanceInvocation/appendGovernanceDecision already use,
+//     and to the one this repository's every other idempotent store
+//     function uses) is sufficient, BY ITSELF, to guarantee that at most
+//     one first-decision row can ever be persisted for one invocation —
+//     even if two callers race past the "does a decision already exist?"
+//     read at the same instant. No new UNIQUE constraint and no advisory
+//     lock is needed for this guarantee; it falls out of the existing
+//     `tact_governance_decisions.id` primary key once the id stops being
+//     random for this one specific case. The rare case where two truly
+//     concurrent evaluations would have produced DIFFERENT content (e.g.
+//     a registry edit landed in between the two evaluations) still
+//     surfaces as the store's existing `idempotency_conflict` outcome;
+//     preflight() reacts to that by re-reading the invocation's decisions
+//     and returning whichever one actually won the race — it never
+//     fabricates a second row, never guesses, and never reports a raw
+//     conflict for what is, from the caller's perspective, a perfectly
+//     valid invocation.
 
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type {
   PreflightRequest,
   PreflightResponse,
@@ -170,8 +207,6 @@ export interface PreflightDeps {
 
   appendGovernanceDecision: (input: ReturnType<typeof buildGovernanceDecisionFromRegistry>) => Promise<AppendGovernanceDecisionOutcome>;
 
-  newDecisionId: () => string;
-
   now: () => Date;
 
 }
@@ -181,7 +216,6 @@ const defaultPreflightDeps: PreflightDeps = {
   listGovernanceDecisionsForInvocation,
   listActivePermissionRulesForMatching,
   appendGovernanceDecision,
-  newDecisionId: () => randomUUID(),
   now: () => new Date(),
 };
 
@@ -193,6 +227,29 @@ const defaultPreflightDeps: PreflightDeps = {
 // operation has an unambiguous existing value to compare against.
 function pickEffectiveDecision(decisions: readonly GovernanceDecision[]): GovernanceDecision | undefined {
   return [...decisions].sort((a, b) => Date.parse(a.evaluatedAt) - Date.parse(b.evaluatedAt))[0];
+}
+
+// Deterministic, collision-safe across tenants (Human Owner correction:
+// GovernanceInvocation.id is only unique PER (user_id, id) — two
+// different users may legitimately reuse the same invocationId string —
+// so the FIRST decision's id cannot simply equal invocation.id itself,
+// which is a GLOBAL primary key on tact_governance_decisions.
+// SHA-256-derived, formatted as a syntactically valid uuid (version/
+// variant bits set so the "uuid" column type accepts it), including
+// userId in the hash input so no two different tenants' invocations can
+// ever target the same decision row.
+function deterministicFirstDecisionId(userId: string, invocationId: string): string {
+
+  const digest = createHash("sha256").update(`${userId}\u001fgovernance-decision\u001f${invocationId}`, "utf8").digest();
+  const bytes = Buffer.from(digest.subarray(0, 16));
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = bytes.toString("hex");
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+
 }
 
 function toPreflightResponse(decision: GovernanceDecision): PreflightResponse {
@@ -250,7 +307,8 @@ function optionalClosedField<T extends string>(
 }
 
 function toGovernanceInvocationInput(
-  request: PreflightRequest
+  request: PreflightRequest,
+  trustedUserId: string
 ): { ok: true; input: GovernanceInvocationInput } | { ok: false; errors: string[] } {
 
   const errors: string[] = [];
@@ -261,7 +319,7 @@ function toGovernanceInvocationInput(
   const targetProvider = optionalClosedField(errors, "targetProvider", request.targetProvider, EXECUTION_PROVIDERS);
 
   if (!request.invocationId) errors.push("invocationId is required");
-  if (!request.userId) errors.push("userId is required");
+  if (!trustedUserId) errors.push("a trusted userId argument is required");
   if (!request.operation) errors.push("operation is required");
   if (!request.attemptedAt) errors.push("attemptedAt is required");
 
@@ -273,7 +331,10 @@ function toGovernanceInvocationInput(
     ok: true,
     input: {
       id: request.invocationId,
-      userId: request.userId,
+      // Trusted argument only — see this file's header comment on
+      // "preflight() tenant identity". `request` itself has no userId
+      // field to read even by mistake.
+      userId: trustedUserId,
       organizationId: request.organizationId ?? null,
       workspaceId: request.workspaceId ?? null,
       workId: request.workId ?? null,
@@ -296,10 +357,11 @@ function toGovernanceInvocationInput(
 
 export async function preflight(
   request: PreflightRequest,
+  userId: string,
   deps: PreflightDeps = defaultPreflightDeps
 ): Promise<PreflightOutcome> {
 
-  const mapped = toGovernanceInvocationInput(request);
+  const mapped = toGovernanceInvocationInput(request, userId);
 
   if (!mapped.ok) {
     return { status: "invalid", errors: mapped.errors };
@@ -339,12 +401,14 @@ export async function preflight(
       return { status: "decided", response: toPreflightResponse(effective) };
     }
 
-    // No decision was ever persisted for this invocation (e.g. a prior
+    // No decision was ever persisted for this invocation yet. This is
+    // either (a) recovery of a never-completed first evaluation (a prior
     // call's process died between claiming the invocation and appending
-    // its decision) — this is recovery of a never-completed first
-    // evaluation, not a re-evaluation of an already-decided retry, so
-    // falling through to evaluate+persist below is still "create the
-    // first decision", not "silently overwrite an existing one".
+    // its decision), or (b) the losing side of a genuine concurrent race
+    // against another call that is *also* about to evaluate right now —
+    // both fall through to the same evaluate-and-claim step below, which
+    // is safe precisely because the claim that follows is deterministic
+    // (see header comment on "first-decision concurrency").
 
   }
 
@@ -353,7 +417,19 @@ export async function preflight(
   // never as a resolved UNKNOWN/ALLOW outcome.
   const rules = await deps.listActivePermissionRulesForMatching(invocation.userId);
 
-  const decisionId = deps.newDecisionId();
+  // Deterministic, not random (see header comment on "first-decision
+  // concurrency"): the FIRST decision attempt's id turns the
+  // already-existing PRIMARY KEY on tact_governance_decisions into the
+  // sole concurrency-safety mechanism this needs — no new UNIQUE
+  // constraint, no advisory lock, no migration. Two callers racing past
+  // the "no decision yet" check above will attempt to insert the exact
+  // same row id; at most one of those inserts can ever land. Derived from
+  // (userId, invocationId) rather than invocation.id alone, because
+  // invocation.id is only unique PER tenant (unique(id, user_id) on
+  // tact_governance_invocations) while tact_governance_decisions.id is a
+  // GLOBAL primary key — two different tenants legitimately reusing the
+  // same invocationId string must never target the same decision row.
+  const decisionId = deterministicFirstDecisionId(invocation.userId, invocation.id);
   const decisionInput = buildGovernanceDecisionFromRegistry(invocation, decisionId, rules, deps.now());
 
   const decisionOutcome = await deps.appendGovernanceDecision(decisionInput);
@@ -363,12 +439,30 @@ export async function preflight(
   }
 
   if (decisionOutcome.status === "idempotency_conflict") {
-    // decisionId is freshly generated per call (crypto.randomUUID()), so
-    // this is only reachable if a caller injects a colliding
-    // newDecisionId() — treated the same as any other store-level
-    // conflict, never silently retried with a new id on the caller's
-    // behalf.
-    return { status: "invocation_conflict" };
+
+    // Lost a genuine race: another call's evaluation landed first with
+    // DIFFERENT content for the same deterministic id (the only way this
+    // specific store call can report a conflict here — see header
+    // comment). The invocation itself is perfectly valid; re-read
+    // whichever decision actually won and hand that back, exactly as the
+    // sequential-retry path above already does. Never fabricate a second
+    // row, never silently pick "the earliest" among rows this call
+    // itself persisted (only the other call's single winning row can
+    // exist here), and never surface a raw conflict for what is, from
+    // this caller's perspective, a normal successful Preflight.
+    const racedDecisions = await deps.listGovernanceDecisionsForInvocation(invocation.id, invocation.userId);
+    const winner = pickEffectiveDecision(racedDecisions);
+
+    if (winner) {
+      return { status: "decided", response: toPreflightResponse(winner) };
+    }
+
+    // Structurally unreachable (an idempotency_conflict on this
+    // deterministic id means a row with that id already exists for this
+    // invocation), but never guess if the store ever disagrees with
+    // itself between these two calls.
+    return { status: "unavailable", reason: "governance decision race could not be resolved" };
+
   }
 
   if (decisionOutcome.status === "unavailable" || decisionOutcome.status === "error") {

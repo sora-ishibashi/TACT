@@ -20,10 +20,11 @@ import type { PreflightRequest } from "@tact/execution-contract";
 import { makeFakeGovernanceStore, makeFakeRule } from "./governanceContractFakes";
 import { check, summarize, type CheckResult } from "../../lib/check";
 
+const TRUSTED_USER_ID = "user-1";
+
 // Path A: a Slack-shaped tool invocation (an AI agent sending a message).
 const slackShapedRequest: PreflightRequest = {
   invocationId: randomUUID(),
-  userId: "user-1",
   actorKind: "ai_agent",
   agentId: "sales-agent",
   actionCategory: "send",
@@ -39,7 +40,6 @@ const slackShapedRequest: PreflightRequest = {
 // same governance contract.
 const notionShapedRequest: PreflightRequest = {
   invocationId: randomUUID(),
-  userId: "user-1",
   actorKind: "ai_agent",
   agentId: "sales-agent",
   actionCategory: "update",
@@ -60,7 +60,6 @@ function makeDeps(rules: Parameters<typeof makeFakeRule>[0][]): { deps: Prefligh
     listGovernanceDecisionsForInvocation: store.listGovernanceDecisionsForInvocation,
     appendGovernanceDecision: store.appendGovernanceDecision,
     listActivePermissionRulesForMatching: async () => builtRules,
-    newDecisionId: () => randomUUID(),
     now: () => new Date("2026-10-04T00:00:01.000Z"),
   };
 
@@ -78,8 +77,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const slack = makeDeps([{ targetProvider: "slack", actionCategory: "send", decision: "allowed", reasonCode: "equivalent_allow" }]);
     const notion = makeDeps([{ targetProvider: "notion", actionCategory: "update", decision: "allowed", reasonCode: "equivalent_allow" }]);
 
-    const slackOutcome = await preflight(slackShapedRequest, slack.deps);
-    const notionOutcome = await preflight(notionShapedRequest, notion.deps);
+    const slackOutcome = await preflight(slackShapedRequest, TRUSTED_USER_ID, slack.deps);
+    const notionOutcome = await preflight(notionShapedRequest, TRUSTED_USER_ID, notion.deps);
 
     results.push(check(
       "[two-path/ALLOW] both tool paths go through the same preflight() and reach ALLOW for an equivalent allow rule",
@@ -105,8 +104,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const slack = makeDeps([{ targetProvider: "slack", actionCategory: "send", decision: "approval_required", reasonCode: "equivalent_approval" }]);
     const notion = makeDeps([{ targetProvider: "notion", actionCategory: "update", decision: "approval_required", reasonCode: "equivalent_approval" }]);
 
-    const slackOutcome = await preflight(slackShapedRequest, slack.deps);
-    const notionOutcome = await preflight(notionShapedRequest, notion.deps);
+    const slackOutcome = await preflight(slackShapedRequest, TRUSTED_USER_ID, slack.deps);
+    const notionOutcome = await preflight(notionShapedRequest, TRUSTED_USER_ID, notion.deps);
 
     results.push(check(
       "[two-path/APPROVAL_REQUIRED] both tool paths reach APPROVAL_REQUIRED for an equivalent approval rule",
@@ -121,8 +120,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const slack = makeDeps([]);
     const notion = makeDeps([]);
 
-    const slackOutcome = await preflight(slackShapedRequest, slack.deps);
-    const notionOutcome = await preflight(notionShapedRequest, notion.deps);
+    const slackOutcome = await preflight(slackShapedRequest, TRUSTED_USER_ID, slack.deps);
+    const notionOutcome = await preflight(notionShapedRequest, TRUSTED_USER_ID, notion.deps);
 
     results.push(check(
       "[two-path/UNKNOWN] an unregistered tool path fails closed to UNKNOWN identically, regardless of provider",
@@ -137,7 +136,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   // across tool paths).
   {
     const { deps } = makeDeps([{ targetProvider: "slack", actionCategory: "send", decision: "allowed", reasonCode: "slack_only" }]);
-    const notionOutcome = await preflight(notionShapedRequest, deps);
+    const notionOutcome = await preflight(notionShapedRequest, TRUSTED_USER_ID, deps);
 
     results.push(check(
       "[two-path/isolation] a Slack-scoped rule does not leak an ALLOW into the Notion-shaped path",
