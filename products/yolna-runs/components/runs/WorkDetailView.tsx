@@ -19,6 +19,7 @@
 
 import type { WorkHeaderView, WorkTimelineItemView } from "@tact/runs-core/tact-runs-view";
 import { PermissionBadge, ResultBadge } from "./badges";
+import { executionActionPresentation } from "@/lib/executionInspector";
 
 function formatTimestamp(iso: string): string {
 
@@ -41,7 +42,7 @@ function formatConfidence(confidence: number | null): string | null {
     return null;
   }
 
-  return `${Math.round(confidence * 100)}%`;
+  return `信頼度 ${Math.round(confidence * 100)}%`;
 
 }
 
@@ -50,6 +51,7 @@ export default function WorkDetailView({
   items,
   onBack,
   onReviewCorrelation,
+  onSelectExecution,
 }: {
   work: WorkHeaderView;
   items: WorkTimelineItemView[];
@@ -58,6 +60,8 @@ export default function WorkDetailView({
   // (RunsSectionが既にActivityへ渡しているのと同じ関数をそのまま渡す
   // だけ——判定・永続化ロジックはここに一切無い)。
   onReviewCorrelation?: (executionId: string) => void;
+  /** SOR-185 attaches the inspector here; this view never owns one. */
+  onSelectExecution?: (executionId: string) => void;
 }) {
 
   return (
@@ -80,7 +84,7 @@ export default function WorkDetailView({
       <div className="flex flex-col gap-1">
 
         <h2 className="text-[24px] font-medium leading-[32px] text-[#112278]">
-          {work.title ?? work.workId}
+          {work.title ?? "記録なし"}
         </h2>
 
         <div className="flex flex-wrap items-center gap-3 text-[12px] text-[#626161]">
@@ -90,11 +94,11 @@ export default function WorkDetailView({
           <span aria-hidden="true">・</span>
           <span>{work.statusLabel}</span>
           <span aria-hidden="true">・</span>
-          <span>{work.executionCount} execution{work.executionCount === 1 ? "" : "s"}</span>
+          <span>実行記録 {work.executionCount}件</span>
           {work.attentionCount !== null && (
             <>
               <span aria-hidden="true">・</span>
-              <span>{work.attentionCount} open attention{work.attentionCount === 1 ? "" : "s"}</span>
+              <span>要確認 {work.attentionCount}件</span>
             </>
           )}
         </div>
@@ -104,7 +108,7 @@ export default function WorkDetailView({
       {items.length === 0 ? (
 
         <p className="text-[13px] leading-[18px] text-[#626161]">
-          このWorkに紐づくExecutionはまだありません。
+          この仕事に紐づく実行記録はまだありません。
         </p>
 
       ) : (
@@ -115,15 +119,16 @@ export default function WorkDetailView({
 
             <thead>
               <tr className="border-b border-[#D9D9D9] bg-[#F2F2F2]/60 text-[12px] font-medium text-[#626161]">
-                <th scope="col" className="px-4 py-2.5">Time</th>
-                <th scope="col" className="px-4 py-2.5">Principal</th>
-                <th scope="col" className="px-4 py-2.5">Agent</th>
-                <th scope="col" className="px-4 py-2.5">SaaS</th>
-                <th scope="col" className="px-4 py-2.5">Action</th>
-                <th scope="col" className="px-4 py-2.5">Permission</th>
-                <th scope="col" className="px-4 py-2.5">Result</th>
-                <th scope="col" className="px-4 py-2.5">Outcome</th>
-                <th scope="col" className="px-4 py-2.5">Why this Work</th>
+                <th scope="col" className="px-4 py-2.5">時刻</th>
+                <th scope="col" className="px-4 py-2.5">依頼元</th>
+                <th scope="col" className="px-4 py-2.5">AI</th>
+                <th scope="col" className="px-4 py-2.5">サービス</th>
+                <th scope="col" className="px-4 py-2.5">操作</th>
+                <th scope="col" className="px-4 py-2.5">権限</th>
+                <th scope="col" className="px-4 py-2.5">結果</th>
+                <th scope="col" className="px-4 py-2.5">結果の状態</th>
+                <th scope="col" className="px-4 py-2.5">この仕事との関係</th>
+                <th scope="col" className="px-4 py-2.5">詳細</th>
               </tr>
             </thead>
 
@@ -141,7 +146,7 @@ export default function WorkDetailView({
                       <span className="ml-1 text-[10px] text-[#8A8A8A]">{item.targetSystem.subLabel}</span>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 font-medium">{item.action}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 font-medium">{executionActionPresentation(item.action)}</td>
                   <td className="px-4 py-2.5"><PermissionBadge result={item.permissionEvaluation} /></td>
                   <td className="px-4 py-2.5"><ResultBadge status={item.executionStatus} /></td>
                   <td className="px-4 py-2.5">
@@ -154,7 +159,7 @@ export default function WorkDetailView({
                     {item.outcomeKind ? (
                       <span className="text-[12px] text-[#112278]">{item.outcomeKind}</span>
                     ) : (
-                      <span className="text-[12px] text-[#8A8A8A]">Unknown</span>
+                      <span className="text-[12px] text-[#8A8A8A]">結果を確認できていません</span>
                     )}
                   </td>
                   <td className="px-4 py-2.5">
@@ -162,7 +167,7 @@ export default function WorkDetailView({
                       <div className="flex flex-col">
                         <span className="text-[12px] text-[#112278]">{item.correlationMethodLabel ?? "—"}</span>
                         {formatConfidence(item.correlationConfidence) !== null && (
-                          <span className="text-[10px] text-[#8A8A8A]">{formatConfidence(item.correlationConfidence)} confidence</span>
+                          <span className="text-[10px] text-[#8A8A8A]">{formatConfidence(item.correlationConfidence)}</span>
                         )}
                       </div>
                       {item.isHumanCorrected && onReviewCorrelation && (
@@ -175,6 +180,9 @@ export default function WorkDetailView({
                         </button>
                       )}
                     </div>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {onSelectExecution && <button type="button" onClick={() => onSelectExecution(item.executionId)} className="text-[12px] text-[#172E95] underline-offset-2 hover:underline">詳細</button>}
                   </td>
 
                 </tr>

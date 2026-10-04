@@ -115,3 +115,12 @@ export async function listWorkTitlesByIdsViaRegistry(
   return getWorkProjectionRepository().listWorkTitlesByIds(workIds, userId, accessToken);
 
 }
+
+/** Read-only Work index used by Work-centric Runs surfaces. */
+export async function listRecentWorksForUserViaRegistry(
+  userId: string,
+  accessToken: string,
+  options?: { limit?: number }
+): Promise<WorkReference[]> {
+  return getWorkProjectionRepository().listRecentWorksForUser(userId, accessToken, options);
+}
