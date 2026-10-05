@@ -205,6 +205,60 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   });
 
+  // =========================
+  // fix#4: a bounded request timeout — the fetch must never be allowed to
+  // hang indefinitely, and an abort/timeout must never throw out of
+  // sendConnectionProjectionSnapshotBestEffort() (canonical operation
+  // must remain unaffected).
+  // =========================
+  await withEnv({ RUNS_PROJECTION_BASE_URL: "https://runs.example.com", RUNS_PROJECTION_INGESTION_TOKEN: "test-token" }, async () => {
+
+    let capturedSignal: AbortSignal | null = null;
+
+    // Models real fetch's own abort contract: it never settles until the
+    // passed-in AbortSignal fires, then rejects with an AbortError — this
+    // is the shape a hung request + timeout actually takes in production,
+    // without this test itself waiting out a real multi-second timer.
+    const abortAwareDeps: SendConnectionProjectionSnapshotDeps = {
+      listConnectionsForUser: async () => [makeConnection()],
+      now: () => "2027-02-01T00:00:00.000Z",
+      fetchImpl: ((_input: string | URL | Request, init?: RequestInit) => {
+        capturedSignal = (init?.signal as AbortSignal | undefined) ?? null;
+        return new Promise<Response>((_resolve, reject) => {
+          capturedSignal?.addEventListener("abort", () => {
+            const abortError = new Error("The operation was aborted");
+            abortError.name = "AbortError";
+            reject(abortError);
+          });
+        });
+      }) as typeof fetch,
+    };
+
+    let threwOnAbort = false;
+    const pending = sendConnectionProjectionSnapshotBestEffort({ userId: "user-1", accessToken: "token-1" }, abortAwareDeps)
+      .catch(() => { threwOnAbort = true; });
+
+    // listConnectionsForUser() is awaited before fetchImpl is called, so
+    // capturedSignal is not set on this same microtask tick — yield once
+    // to let the function reach its fetchImpl call before inspecting it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const signal = mustHaveCaptured<AbortSignal>(capturedSignal, "[fix#4] fetchImpl capture");
+    results.push(check(
+      "[producer] fetchImpl receives an AbortSignal (bounded-timeout wiring is present)",
+      typeof signal.addEventListener === "function"
+    ));
+
+    // Trigger the bound timeout's abort path directly (same effect as the
+    // internal timer firing) instead of waiting out the real timeout —
+    // the call under test is what must never throw once that happens.
+    signal.dispatchEvent(new Event("abort"));
+    await pending;
+
+    results.push(check("[producer] an aborted/timed-out request never throws (best-effort)", !threwOnAbort));
+
+  });
+
   return summarize("integration/connectionProjectionProducer", results);
 
 }

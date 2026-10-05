@@ -70,6 +70,14 @@ const defaultDeps: SendConnectionProjectionSnapshotDeps = {
   now: () => new Date().toISOString(),
 };
 
+// SOR-212(fix#4、絶対条件): "projection failureはcanonical operationへ
+// 影響してはならない"——このfetchがhangするとcanonical操作(POST
+// /connections・/confirm・/disconnect)自体のHTTP responseがtimeoutし
+// てしまい、既に成功しているcanonical mutationの結果が呼び出し元に
+// 返らなくなる。bounded timeoutでそれを構造的に防ぐ(新しいenvは
+// 追加しない、固定値)。
+const PROJECTION_SNAPSHOT_TIMEOUT_MS = 4000;
+
 // 絶対条件(データ最小化): providerConnectionRef/metadataはここで一切
 // 読み取らない——フィールド自体が無いため、将来この関数を誤って拡張
 // しても、読み取っていない値を送ることは構造的にできない。
@@ -143,6 +151,9 @@ export async function sendConnectionProjectionSnapshotBestEffort(
     return;
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROJECTION_SNAPSHOT_TIMEOUT_MS);
+
   try {
 
     const response = await deps.fetchImpl(endpoint, {
@@ -152,6 +163,7 @@ export async function sendConnectionProjectionSnapshotBestEffort(
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(snapshot),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -165,11 +177,17 @@ export async function sendConnectionProjectionSnapshotBestEffort(
 
   } catch (error) {
 
+    // abort(timeout)もネットワークエラーも、ここで必ず握り潰す——
+    // 絶対条件(fix#4): このfunctionはどんな失敗モードでもthrowしない。
     console.warn(
       "[tact-integration/connectionProjection] Connection projection snapshot request failed; " +
       "the canonical Connection operation already succeeded and is unaffected.",
       error instanceof Error ? error.message : String(error)
     );
+
+  } finally {
+
+    clearTimeout(timeout);
 
   }
 

@@ -142,6 +142,30 @@ create policy "tact_runs_connection_projection_state_select_own"
 -- calling this function — this function performs its own structural
 -- validation too, defense in depth, since SECURITY DEFINER functions are
 -- reachable by any caller holding the service_role grant).
+--
+-- Stale-snapshot guard (SOR-212 fix#2, absolute condition): the producer
+-- sends full snapshots over plain HTTP, which does not guarantee network
+-- order — an older snapshot (A) can physically arrive after a newer one
+-- (B) if B's request happens to land first. Without a guard, A would
+-- overwrite B's already-visible, more current rows with stale data.
+--
+-- pg_advisory_xact_lock serializes concurrent calls for the SAME user
+-- (keyed by hashtext(p_user_id::text) under a fixed namespace, so two
+-- different users' snapshots never contend) — the lock is held for the
+-- rest of this transaction and released automatically on commit/rollback,
+-- never explicitly unlocked. Holding it across the
+-- "compare current last_snapshot_at -> delete -> insert -> advance state"
+-- sequence is what makes the comparison race-free: no concurrent call for
+-- this user can observe or write between this function's read of
+-- last_snapshot_at and its own write of it.
+--
+-- p_snapshot_at <= the already-stored last_snapshot_at (strictly older OR
+-- an exact-timestamp replay) is a safe no-op: no delete, no insert, no
+-- state update — the function returns {"outcome": "stale_ignored"}
+-- without touching any row. Only a strictly newer snapshot proceeds to
+-- replace rows and advance the state row ({"outcome": "replaced"}). A
+-- user's first-ever snapshot always proceeds (no stored
+-- last_snapshot_at to compare against yet).
 
 create or replace function public.replace_tact_runs_connection_projection_snapshot(
   p_user_id uuid,
@@ -156,10 +180,27 @@ as $$
 declare
   v_item jsonb;
   v_count integer := 0;
+  v_current_last_snapshot_at timestamptz;
 begin
 
   if p_connections is null or jsonb_typeof(p_connections) <> 'array' then
     raise exception 'replace_tact_runs_connection_projection_snapshot: p_connections must be a JSON array';
+  end if;
+
+  -- Per-user serialization (fix#2) — see header comment above. Namespaced
+  -- with hashtext() of a fixed string so this lock keyspace never
+  -- collides with an unrelated advisory lock elsewhere in this database.
+  perform pg_advisory_xact_lock(
+    hashtext('tact_runs_connection_projection_snapshot'),
+    hashtext(p_user_id::text)
+  );
+
+  select last_snapshot_at into v_current_last_snapshot_at
+  from public.tact_runs_connection_projection_state
+  where user_id = p_user_id;
+
+  if v_current_last_snapshot_at is not null and p_snapshot_at <= v_current_last_snapshot_at then
+    return jsonb_build_object('outcome', 'stale_ignored', 'count', 0);
   end if;
 
   delete from public.tact_runs_connection_projection where user_id = p_user_id;

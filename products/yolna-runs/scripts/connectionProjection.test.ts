@@ -50,10 +50,18 @@ interface FakeProjectionRow {
   provider: string; source_created_at: string; source_updated_at: string; projected_at: string;
 }
 
-function makeFakeClient(initial: { stateRows?: FakeStateRow[]; projectionRows?: FakeProjectionRow[] } = {}) {
+function makeFakeClient(initial: {
+  stateRows?: FakeStateRow[];
+  projectionRows?: FakeProjectionRow[];
+  // SOR-212 fix#1 regression: lets a test force a specific table's
+  // select() to resolve with a DB error instead of rows, modeling a
+  // transient Supabase failure independent from "no row exists".
+  errorOn?: Partial<Record<"tact_runs_connection_projection_state" | "tact_runs_connection_projection", { message: string }>>;
+} = {}) {
 
   const stateRows = new Map<string, FakeStateRow>((initial.stateRows ?? []).map((r) => [r.user_id, { ...r }]));
   let projectionRows: FakeProjectionRow[] = (initial.projectionRows ?? []).map((r) => ({ ...r }));
+  const errorOn = initial.errorOn ?? {};
 
   function queryBuilder(table: string) {
 
@@ -70,13 +78,21 @@ function makeFakeClient(initial: { stateRows?: FakeStateRow[]; projectionRows?: 
     const builder: {
       select: (cols: string) => typeof builder;
       eq: (col: string, val: unknown) => typeof builder;
-      maybeSingle: () => Promise<{ data: Record<string, unknown> | null; error: null }>;
-      then: (resolve: (value: { data: Record<string, unknown>[]; error: null }) => void) => void;
+      maybeSingle: () => Promise<{ data: Record<string, unknown> | null; error: { message: string } | null }>;
+      then: (resolve: (value: { data: Record<string, unknown>[] | null; error: { message: string } | null }) => void) => void;
     } = {
       select: () => builder,
       eq: (col, val) => { filters.push([col, val]); return builder; },
-      maybeSingle: async () => ({ data: matching()[0] ?? null, error: null }),
-      then: (resolve) => resolve({ data: matching(), error: null }),
+      maybeSingle: async () => {
+        const forcedError = errorOn[table as keyof typeof errorOn];
+        if (forcedError) return { data: null, error: forcedError };
+        return { data: matching()[0] ?? null, error: null };
+      },
+      then: (resolve) => {
+        const forcedError = errorOn[table as keyof typeof errorOn];
+        if (forcedError) { resolve({ data: null, error: forcedError }); return; }
+        resolve({ data: matching(), error: null });
+      },
     };
 
     return builder;
@@ -107,6 +123,15 @@ function makeFakeClient(initial: { stateRows?: FakeStateRow[]; projectionRows?: 
         if (!item.externalConnectionId || !item.service || !item.status || !item.provider || !item.createdAt || !item.updatedAt) {
           return { data: null, error: { message: "connection item missing a required field" } };
         }
+      }
+
+      // Stale-snapshot guard (SOR-212 fix#2), modeling the migration's
+      // own pg_advisory_xact_lock + compare-then-write sequence: an
+      // incoming snapshot no newer than the already-stored
+      // last_snapshot_at is a safe no-op — no delete/insert/state update.
+      const existing = stateRows.get(userId);
+      if (existing && snapshotAt <= existing.last_snapshot_at) {
+        return { data: { outcome: "stale_ignored", count: 0 }, error: null };
       }
 
       // Same ordering as the migration: delete + reinsert, THEN advance
@@ -256,6 +281,129 @@ async function run(): Promise<void> {
     check("[projection] a failed snapshot attempt throws", threw);
     check("[projection] a failed snapshot attempt never advances lastSnapshotAt", state.lastSnapshotAt === "2027-01-01T00:00:00.000Z");
     check("[projection] a failed snapshot attempt leaves the previous successful snapshot's rows intact", items.length === 1 && items[0].externalConnectionId === "conn-1");
+  }
+
+  // =========================
+  // projection: DB error must never be mistaken for "no row"/"zero rows"
+  // (SOR-212 fix#1, most important invariant in this review round) —
+  // a DB error reading the state row, or the projection rows, must
+  // throw, never silently resolve to `unavailable`/`[]` via `?? []`.
+  // =========================
+  {
+    const client = makeFakeClient({ errorOn: { tact_runs_connection_projection_state: { message: "simulated state read failure" } } });
+    const repo = createPostgresConnectionProjectionRepository({ getClient: () => client });
+
+    let threw = false;
+    try {
+      await repo.getSnapshotState("user-a");
+    } catch {
+      threw = true;
+    }
+    check("[projection] getSnapshotState DB error throws instead of resolving to unavailable", threw);
+  }
+
+  {
+    const client = makeFakeClient();
+    const writer = createPostgresConnectionProjectionWriter({ getClient: () => client });
+
+    // A real snapshot exists (state read would report "available" if it
+    // could be read) — only the connection-list read fails.
+    await writer.replaceSnapshot({ userId: "user-a", snapshotAt: "2027-01-01T00:00:00.000Z", connections: [
+      { externalConnectionId: "conn-1", service: "gmail", status: "active", provider: "composio", createdAt: "2027-01-01T00:00:00.000Z", updatedAt: "2027-01-01T00:00:00.000Z" },
+    ] });
+
+    const failingClient = makeFakeClient({
+      stateRows: [{ user_id: "user-a", last_snapshot_at: "2027-01-01T00:00:00.000Z", projected_at: "2027-01-01T00:00:00.000Z" }],
+      errorOn: { tact_runs_connection_projection: { message: "simulated list read failure" } },
+    });
+    const repo = createPostgresConnectionProjectionRepository({ getClient: () => failingClient });
+
+    const state = await repo.getSnapshotState("user-a");
+    check("[projection] state read still reports available when only the list read fails", state.readState === "available");
+
+    let threw = false;
+    try {
+      await repo.listConnectionsForUser("user-a");
+    } catch {
+      threw = true;
+    }
+    check("[projection] listConnectionsForUser DB error throws instead of resolving to []", threw);
+
+    // Reproduces the coverage route's own fail-closed wrapping
+    // (products/yolna-runs/app/api/tact/runs/coverage/route.ts) against
+    // the real adapter functions — state=available followed by a list
+    // error must settle on unavailable+[], never "available" + [] (a
+    // false authoritative zero).
+    let connectionReadState: "available" | "unavailable" = "unavailable";
+    let connections: unknown[] = [];
+    try {
+      const snapshotState = await repo.getSnapshotState("user-a");
+      if (snapshotState.readState === "available") {
+        connectionReadState = "available";
+        connections = await repo.listConnectionsForUser("user-a");
+      }
+    } catch {
+      connectionReadState = "unavailable";
+      connections = [];
+    }
+    check(
+      "[projection] coverage route wrapping: state available + list DB error never returns available+[] (fails closed to unavailable)",
+      connectionReadState === "unavailable" && connections.length === 0
+    );
+  }
+
+  // =========================
+  // projection: stale snapshot cannot overwrite a newer one that already
+  // landed (SOR-212 fix#2) — models out-of-order network arrival (newer
+  // snapshot B applied, then older snapshot A arrives late).
+  // =========================
+  {
+    const client = makeFakeClient();
+    const writer = createPostgresConnectionProjectionWriter({ getClient: () => client });
+    const repo = createPostgresConnectionProjectionRepository({ getClient: () => client });
+
+    // Newer snapshot (B) applied first.
+    const newer = await writer.replaceSnapshot({
+      userId: "user-a",
+      snapshotAt: "2027-01-02T00:00:00.000Z",
+      connections: [
+        { externalConnectionId: "conn-newer", service: "gmail", status: "active", provider: "composio", createdAt: "2027-01-02T00:00:00.000Z", updatedAt: "2027-01-02T00:00:00.000Z" },
+      ],
+    });
+
+    // Older snapshot (A) arrives late, after B is already visible.
+    const olderResult = await writer.replaceSnapshot({
+      userId: "user-a",
+      snapshotAt: "2027-01-01T00:00:00.000Z",
+      connections: [
+        { externalConnectionId: "conn-older", service: "slack", status: "active", provider: "composio", createdAt: "2027-01-01T00:00:00.000Z", updatedAt: "2027-01-01T00:00:00.000Z" },
+      ],
+    });
+
+    const state = await repo.getSnapshotState("user-a");
+    const items = await repo.listConnectionsForUser("user-a");
+
+    check("[projection] newer snapshot applies cleanly", newer === undefined);
+    check("[projection] a late-arriving older snapshot does not throw (safe no-op)", olderResult === undefined);
+    check("[projection] rows remain exactly the newer snapshot's rows after an older snapshot arrives late",
+      items.length === 1 && items[0].externalConnectionId === "conn-newer");
+    check("[projection] last_snapshot_at remains the newer snapshot's timestamp, not rolled back",
+      state.lastSnapshotAt === "2027-01-02T00:00:00.000Z");
+
+    // Exact-timestamp replay (e.g. a retried HTTP request for the same
+    // snapshot) is also a safe no-op, never an error and never a
+    // duplicate re-write.
+    const replayResult = await writer.replaceSnapshot({
+      userId: "user-a",
+      snapshotAt: "2027-01-02T00:00:00.000Z",
+      connections: [
+        { externalConnectionId: "conn-replay-should-not-apply", service: "notion", status: "active", provider: "composio", createdAt: "2027-01-02T00:00:00.000Z", updatedAt: "2027-01-02T00:00:00.000Z" },
+      ],
+    });
+    const itemsAfterReplay = await repo.listConnectionsForUser("user-a");
+    check("[projection] a same-timestamp replay does not throw (safe no-op)", replayResult === undefined);
+    check("[projection] a same-timestamp replay never applies its rows",
+      itemsAfterReplay.length === 1 && itemsAfterReplay[0].externalConnectionId === "conn-newer");
   }
 
   // =========================

@@ -97,11 +97,20 @@ export function createPostgresConnectionProjectionRepository(
 
       const client = requireClient(deps);
 
-      const { data } = await client
+      const { data, error } = await client
         .from("tact_runs_connection_projection_state")
         .select("last_snapshot_at")
         .eq("user_id", userId)
         .maybeSingle();
+
+      // 絶対条件(SOR-212): DB errorを「state行なし」と混同しない——
+      // 混同するとDB障害時にauthoritativeな"unavailable"ではなく、
+      // 偶然readStateが進んでいた過去のcacheの残骸等と誤認しうる余地を
+      // 残す。errorは必ずthrowし、呼び出し側(coverage route)のcatchで
+      // fail closedさせる。
+      if (error) {
+        throw new Error(`[yolna-runs/lib/projection] getSnapshotState failed: ${error.message}`);
+      }
 
       if (!data) {
         return { readState: "unavailable", lastSnapshotAt: null };
@@ -121,10 +130,21 @@ export function createPostgresConnectionProjectionRepository(
 
       const client = requireClient(deps);
 
-      const { data } = await client
+      const { data, error } = await client
         .from("tact_runs_connection_projection")
         .select(PROJECTION_COLUMNS)
         .eq("user_id", userId);
+
+      // 絶対条件(SOR-212、最重要invariant): DB errorを空配列(`data ?? []`)
+      // と混同しない。state read=availableの直後にこのqueryがerrorに
+      // なった場合、混同すると「available + []」=「このuserは正規に
+      // ゼロConnection」という虚偽のauthoritative zeroをcoverage route側
+      // へ返してしまう。errorは必ずthrowし、呼び出し側のcatchで
+      // connectionReadState="unavailable"・connections=[]へfail closed
+      // させる。
+      if (error) {
+        throw new Error(`[yolna-runs/lib/projection] listConnectionsForUser failed: ${error.message}`);
+      }
 
       return (data ?? []).map((row) => toConnectionProjectionItem(row as ConnectionProjectionRow));
 

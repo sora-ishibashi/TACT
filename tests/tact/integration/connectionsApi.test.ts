@@ -22,6 +22,7 @@ import { POST as confirmConnectionRoute } from "../../../app/api/tact/connection
 import {
   POST as disconnectConnectionRoute,
   parseDisconnectRequestBody,
+  shouldSendDisconnectProjectionSnapshot,
 } from "../../../app/api/tact/connections/disconnect/route";
 import { check, summarize, type CheckResult } from "../lib/check";
 
@@ -205,6 +206,33 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     check(
       "[PRODUCT-P1] disconnect: 未対応serviceのbody自体はparse段階では通す(unsupported_service判定はdisconnectIntegrationConnection()側の責務、parseはform validationのみ)",
       parseDisconnectRequestBody({ service: "notion" }).ok === true
+    )
+  );
+
+  // =========================
+  // shouldSendDisconnectProjectionSnapshot(): 純粋関数、認証不要
+  // (SOR-212 fix#3, disconnect retryがprojectionを自己修復できる
+  // ようにするための判定ロジック regression)
+  // =========================
+
+  results.push(
+    check(
+      "[SOR-212][fix#3] status=disconnectedはsnapshotを送る",
+      shouldSendDisconnectProjectionSnapshot("disconnected") === true
+    )
+  );
+
+  results.push(
+    check(
+      "[SOR-212][fix#3] status=not_connectedでもsnapshotを送る(disconnect retryのrepair path)",
+      shouldSendDisconnectProjectionSnapshot("not_connected") === true
+    )
+  );
+
+  results.push(
+    check(
+      "[SOR-212][fix#3] status=unsupported_serviceはsnapshotを送らない",
+      shouldSendDisconnectProjectionSnapshot("unsupported_service") === false
     )
   );
 
