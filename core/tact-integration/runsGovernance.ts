@@ -85,6 +85,21 @@ export type RunsGovernanceConfigResult =
 
 const MIN_HMAC_KEY_BYTES = 32;
 
+// Exact hostnames only (Human Owner correction, SOR-138 Slice 3A-1 TLS
+// landing review) — never a substring/prefix/suffix heuristic. HMAC
+// protects integrity/authenticity, not confidentiality: plaintext HTTP to
+// any remote host would let a network observer read the signed tenant
+// context, governance request contents, and decision/invocation
+// identifiers, and replay a captured request inside the freshness window.
+// HTTP is therefore accepted only for loopback/local development, never
+// for a remote host, regardless of whether that host is public or a
+// private RFC1918 address — this slice does not broaden "local" beyond
+// explicit loopback semantics. `URL.hostname` already normalizes an IPv6
+// host to a canonical bracketed form (e.g. both "[::1]" and
+// "[0:0:0:0:0:0:0:1]" parse to hostname "[::1]"), so this set only needs
+// that one canonical representative, not every equivalent spelling.
+const LOOPBACK_HTTP_HOSTNAMES: readonly string[] = ["localhost", "127.0.0.1", "[::1]"];
+
 // RUNS_GOVERNANCE_BASE_URL is treated as an ORIGIN only — never a path
 // prefix, credentials, query, or fragment. This is load-bearing, not
 // cosmetic: the HMAC signature covers only the request's pathname (see
@@ -112,6 +127,13 @@ function parseGovernanceBaseUrl(rawBaseUrl: string): string | null {
   }
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+
+  // Plaintext HTTP is accepted only for loopback/local development (see
+  // LOOPBACK_HTTP_HOSTNAMES's own comment above) — any remote host, public
+  // or private-network, must use https:.
+  if (parsed.protocol === "http:" && !LOOPBACK_HTTP_HOSTNAMES.includes(parsed.hostname)) {
     return null;
   }
 

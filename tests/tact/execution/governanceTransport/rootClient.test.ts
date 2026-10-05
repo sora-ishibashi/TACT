@@ -375,7 +375,34 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
-  // [base-4]..[base-9]: rejected base URLs never reach fetch
+  // [base-11] IPv4 loopback http is allowed
+  {
+    const { deps, calls } = makeDeps({ response: { status: 200, body: { success: true, decision: preflightResponseBody } } }, {
+      loadConfig: () => loadRunsGovernanceConfig(makeConfigEnv("http://127.0.0.1:3000/")),
+    });
+    const result = await callRunsGovernancePreflight({ onBehalfOfUserId: "user-a", request: makePreflightRequest() }, deps);
+    results.push(check(
+      "[base-11] an IPv4 loopback (127.0.0.1) http:// base URL is accepted",
+      result.status === "decided" && calls[0]?.url === "http://127.0.0.1:3000/api/tact/runs/governance/preflight"
+    ));
+  }
+
+  // [base-12] IPv6 loopback http is allowed — written with the expanded
+  // form to also prove URL's own hostname canonicalization (both forms
+  // parse to the same hostname "[::1]") is what this check actually relies
+  // on, not a string match against the caller's literal spelling.
+  {
+    const { deps, calls } = makeDeps({ response: { status: 200, body: { success: true, decision: preflightResponseBody } } }, {
+      loadConfig: () => loadRunsGovernanceConfig(makeConfigEnv("http://[0:0:0:0:0:0:0:1]:3000/")),
+    });
+    const result = await callRunsGovernancePreflight({ onBehalfOfUserId: "user-a", request: makePreflightRequest() }, deps);
+    results.push(check(
+      "[base-12] an IPv6 loopback (::1) http:// base URL is accepted regardless of spelling",
+      result.status === "decided" && calls[0]?.url === "http://[::1]:3000/api/tact/runs/governance/preflight"
+    ));
+  }
+
+  // [base-4]..[base-9], [base-13]..[base-14]: rejected base URLs never reach fetch
   const rejectedBaseUrls: Array<[string, string]> = [
     ["base-4", "not-a-url"],
     ["base-5", "ftp://runs.example"],
@@ -383,6 +410,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ["base-7", "https://runs.example/?x=1"],
     ["base-8", "https://runs.example/#x"],
     ["base-9", "https://runs.example/base"],
+    ["base-13", "http://runs.example"],
+    ["base-14", "http://192.168.1.5:3000"],
   ];
 
   for (const [label, rawBaseUrl] of rejectedBaseUrls) {
@@ -411,6 +440,10 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     results.push(check("[base-8 reason] a fragment yields reason=invalid_base_url", !r5.ok && r5.reason === "invalid_base_url"));
     const r6 = loadRunsGovernanceConfig(makeConfigEnv("https://runs.example/base"));
     results.push(check("[base-9 reason] a non-root path prefix yields reason=invalid_base_url", !r6.ok && r6.reason === "invalid_base_url"));
+    const r7 = loadRunsGovernanceConfig(makeConfigEnv("http://runs.example"));
+    results.push(check("[base-13 reason] remote http:// (no TLS) yields reason=invalid_base_url — HMAC is not confidentiality", !r7.ok && r7.reason === "invalid_base_url"));
+    const r8 = loadRunsGovernanceConfig(makeConfigEnv("http://192.168.1.5:3000"));
+    results.push(check("[base-14 reason] private-LAN http:// is still rejected — this slice uses exact loopback semantics, not RFC1918", !r8.ok && r8.reason === "invalid_base_url"));
   }
 
   // [base-10] the signer uses the ACTUAL target URL's pathname, not a
