@@ -584,8 +584,8 @@ export default function RunsSection() {
 
       {executionInspector}
 
-      {section === "agent" && selectedAgentId && <AgentManagementPeek items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onClose={() => setSelectedAgentId(null)} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} />}
-      {section === "permission" && selectedPermissionScopeKey && <PermissionManagementPeek scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onClose={() => setSelectedPermissionScopeKey(null)} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} />}
+      {section === "agent" && selectedAgentId && !inspectedExecutionId && <AgentManagementPeek items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onClose={() => setSelectedAgentId(null)} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} />}
+      {section === "permission" && selectedPermissionScopeKey && !inspectedExecutionId && <PermissionManagementPeek scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onClose={() => setSelectedPermissionScopeKey(null)} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} />}
       {section === "coverage" && selectedSurfaceId && <ConnectionObservationPeek details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} onClose={() => setSelectedSurfaceId(null)} />}
 
       </div>
