@@ -1,167 +1,27 @@
 "use client";
 
-// =========================
-// ActivityFilters (SOR-23 OBS-UX-P1 Priority 3/4/5)
-// =========================
-//
-// 絶対条件(SOR-23指示「No business logic in React」の延長): 判定
-// (どのitemが残るか)は一切ここに無い——core/tact-runs-view.
-// filterActivityItems()/distinctActivityFilterOptions()(pure関数)へ
-// 完全に委譲する。このcomponentはcontrolled inputの集合であり、選ばれた
-// ActivityItemFiltersをそのまま呼び出し元(RunsSection)へ渡すだけ。
-//
-// Priority 3(Unassigned/Ambiguous discoverability)は、この既存filter
-// bar内のCorrelation status selectとして実現する——専用の別画面/別
-// ledgerは作らない(絶対条件「no duplicate ledger」)。
-
-import type { ActivityFilterOptions, ActivityItemFilters } from "@tact/runs-core/tact-runs-view";
-import type { CanonicalPermissionResult, CanonicalCorrelationResult } from "@tact/runs-core/tact-runs-view";
+import type { ActivityFilterOptions, ActivityItemFilters, CanonicalPermissionResult, CanonicalCorrelationResult } from "@tact/runs-core/tact-runs-view";
 import type { ExecutionStatus } from "@tact/runs-core/tact-execution/types";
+import type { ReactNode } from "react";
 import { japaneseProjection } from "@/lib/japaneseProjection";
 
-const SELECT_CLASS =
-  "h-9 rounded-xl border border-[#D9D9D9] bg-white px-2 text-[13px] text-[#112278] outline-none focus:border-[#18B5A6]";
-
+const SELECT_CLASS = "mt-1 h-8 w-full rounded border border-[#D9D9D9] bg-white px-2 text-[12px] text-[#171717] outline-none focus:border-[#172E95]";
 const PERMISSION_OPTIONS: CanonicalPermissionResult[] = ["MATCH", "MISMATCH", "APPROVAL_REQUIRED", "UNKNOWN"];
 const EXECUTION_STATUS_OPTIONS: ExecutionStatus[] = ["observed", "running", "succeeded", "failed", "cancelled", "unknown"];
 const CORRELATION_STATUS_OPTIONS: CanonicalCorrelationResult[] = ["CORRELATED", "AMBIGUOUS", "UNASSIGNED"];
-
-function labelForExecutionStatus(status: ExecutionStatus): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
+type FilterField = "correlationStatus" | "agentLabel" | "principalLabel" | "providerLabel" | "permissionEvaluation" | "executionStatus" | "observedFrom" | "observedTo";
+const labels: Record<FilterField, string> = { correlationStatus: "仕事への関連付け", agentLabel: "AI", principalLabel: "依頼元", providerLabel: "サービス", permissionEvaluation: "権限", executionStatus: "結果", observedFrom: "期間（開始）", observedTo: "期間（終了）" };
+function statusLabel(status: ExecutionStatus): string { switch (status) { case "observed": return "観測済み"; case "running": return "実行中"; case "succeeded": return "完了"; case "failed": return "失敗"; case "cancelled": return "取り消し"; case "unknown": return "判定できません"; default: return String(status); } }
+function FilterSelect({ field, value, onChange, children }: { field: FilterField; value: string; onChange: (value: string) => void; children: ReactNode }) {
+  return <label className="text-[11px] font-medium text-[#626161]">{labels[field]}<select className={SELECT_CLASS} value={value} onChange={(event) => onChange(event.target.value)}>{children}</select></label>;
 }
 
-function labelForCorrelationStatus(status: CanonicalCorrelationResult): string {
-  return japaneseProjection(status);
-}
-
-export default function ActivityFilters({
-  filters,
-  options,
-  onChange,
-}: {
-  filters: ActivityItemFilters;
-  options: ActivityFilterOptions;
-  onChange: (filters: ActivityItemFilters) => void;
-}) {
-
-  const set = <K extends keyof ActivityItemFilters>(key: K, value: string) => {
-    onChange({ ...filters, [key]: value === "" ? undefined : (value as ActivityItemFilters[K]) });
-  };
-
-  const hasActiveFilters = Object.values(filters).some((value) => value !== undefined && value !== "");
-
-  return (
-
-    // SOR-23 compact-width fix: as a flex item of RunsSection's wrapper,
-    // this container defaults to min-width:auto (its own unwrapped
-    // max-content width — the sum of every filter control in one line).
-    // Without min-w-0 it never actually receives a constrained available
-    // width from its parent, so flex-wrap has nothing to wrap against and
-    // the row spills past the viewport instead of wrapping onto new lines.
-    <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-[#D9D9D9] bg-[#F2F2F2]/40 px-3 py-2">
-
-      <select
-        aria-label="Correlation status"
-        className={SELECT_CLASS}
-        value={filters.correlationStatus ?? ""}
-        onChange={(event) => set("correlationStatus", event.target.value)}
-      >
-        <option value="">すべての仕事への紐づけ</option>
-        {CORRELATION_STATUS_OPTIONS.map((status) => (
-          <option key={status} value={status}>{labelForCorrelationStatus(status)}</option>
-        ))}
-      </select>
-
-      <select
-        aria-label="Agent"
-        className={SELECT_CLASS}
-        value={filters.agentLabel ?? ""}
-        onChange={(event) => set("agentLabel", event.target.value)}
-      >
-        <option value="">すべてのAI</option>
-        {options.agentLabels.map((label) => (
-          <option key={label} value={label}>{label}</option>
-        ))}
-      </select>
-
-      <select
-        aria-label="Principal"
-        className={SELECT_CLASS}
-        value={filters.principalLabel ?? ""}
-        onChange={(event) => set("principalLabel", event.target.value)}
-      >
-        <option value="">すべての依頼元</option>
-        {options.principalLabels.map((label) => (
-          <option key={label} value={label}>{label}</option>
-        ))}
-      </select>
-
-      <select
-        aria-label="SaaS"
-        className={SELECT_CLASS}
-        value={filters.providerLabel ?? ""}
-        onChange={(event) => set("providerLabel", event.target.value)}
-      >
-        <option value="">すべてのSaaS</option>
-        {options.providerLabels.map((label) => (
-          <option key={label} value={label}>{label}</option>
-        ))}
-      </select>
-
-      <select
-        aria-label="Permission"
-        className={SELECT_CLASS}
-        value={filters.permissionEvaluation ?? ""}
-        onChange={(event) => set("permissionEvaluation", event.target.value)}
-      >
-        <option value="">すべての権限</option>
-        {PERMISSION_OPTIONS.map((status) => (
-          <option key={status} value={status}>{japaneseProjection(status)}</option>
-        ))}
-      </select>
-
-      <select
-        aria-label="Result"
-        className={SELECT_CLASS}
-        value={filters.executionStatus ?? ""}
-        onChange={(event) => set("executionStatus", event.target.value)}
-      >
-        <option value="">すべての結果</option>
-        {EXECUTION_STATUS_OPTIONS.map((status) => (
-          <option key={status} value={status}>{labelForExecutionStatus(status)}</option>
-        ))}
-      </select>
-
-      <input
-        type="date"
-        aria-label="From date"
-        className={SELECT_CLASS}
-        value={filters.observedFrom ?? ""}
-        onChange={(event) => set("observedFrom", event.target.value)}
-      />
-
-      <span className="text-[12px] text-[#8A8A8A]">〜</span>
-
-      <input
-        type="date"
-        aria-label="To date"
-        className={SELECT_CLASS}
-        value={filters.observedTo ?? ""}
-        onChange={(event) => set("observedTo", event.target.value)}
-      />
-
-      {hasActiveFilters && (
-        <button
-          type="button"
-          onClick={() => onChange({})}
-          className="h-9 rounded-xl px-2 text-[12px] text-[#626161] transition duration-150 ease-out hover:text-[#112278]"
-        >
-          フィルタをクリア
-        </button>
-      )}
-
-    </div>
-
-  );
-
+export default function ActivityFilters({ filters, options, onChange }: { filters: ActivityItemFilters; options: ActivityFilterOptions; onChange: (filters: ActivityItemFilters) => void }) {
+  const set = (key: FilterField, value: string) => onChange({ ...filters, [key]: value === "" ? undefined : value });
+  const active = (Object.keys(labels) as FilterField[]).flatMap((key) => {
+    const value = filters[key];
+    return value === undefined || value === "" ? [] : [[key, String(value)] as const];
+  });
+  const chipLabel = (key: FilterField, value: string) => key === "executionStatus" ? statusLabel(value as ExecutionStatus) : key === "correlationStatus" || key === "permissionEvaluation" ? japaneseProjection(value) : value;
+  return <div className="min-w-0"><p className="mb-2 text-[10px] font-semibold tracking-wide text-[#8A8A8A]">絞り込み</p><div className="grid gap-2 sm:grid-cols-2"><FilterSelect field="correlationStatus" value={filters.correlationStatus ?? ""} onChange={(value) => set("correlationStatus", value)}><option value="">すべて</option>{CORRELATION_STATUS_OPTIONS.map((value) => <option key={value} value={value}>{japaneseProjection(value)}</option>)}</FilterSelect><FilterSelect field="agentLabel" value={filters.agentLabel ?? ""} onChange={(value) => set("agentLabel", value)}><option value="">すべて</option>{options.agentLabels.map((value) => <option key={value} value={value}>{value}</option>)}</FilterSelect><FilterSelect field="principalLabel" value={filters.principalLabel ?? ""} onChange={(value) => set("principalLabel", value)}><option value="">すべて</option>{options.principalLabels.map((value) => <option key={value} value={value}>{value}</option>)}</FilterSelect><FilterSelect field="providerLabel" value={filters.providerLabel ?? ""} onChange={(value) => set("providerLabel", value)}><option value="">すべて</option>{options.providerLabels.map((value) => <option key={value} value={value}>{value}</option>)}</FilterSelect><FilterSelect field="permissionEvaluation" value={filters.permissionEvaluation ?? ""} onChange={(value) => set("permissionEvaluation", value)}><option value="">すべて</option>{PERMISSION_OPTIONS.map((value) => <option key={value} value={value}>{japaneseProjection(value)}</option>)}</FilterSelect><FilterSelect field="executionStatus" value={filters.executionStatus ?? ""} onChange={(value) => set("executionStatus", value)}><option value="">すべて</option>{EXECUTION_STATUS_OPTIONS.map((value) => <option key={value} value={value}>{statusLabel(value)}</option>)}</FilterSelect><label className="text-[11px] font-medium text-[#626161]">{labels.observedFrom}<input type="date" className={SELECT_CLASS} value={filters.observedFrom ?? ""} onChange={(event) => set("observedFrom", event.target.value)} /></label><label className="text-[11px] font-medium text-[#626161]">{labels.observedTo}<input type="date" className={SELECT_CLASS} value={filters.observedTo ?? ""} onChange={(event) => set("observedTo", event.target.value)} /></label></div>{active.length > 0 && <div className="mt-3 border-t border-[#E5E5E5] pt-3"><p className="text-[10px] font-semibold tracking-wide text-[#8A8A8A]">適用中</p><div className="mt-2 flex flex-wrap gap-1.5">{active.map(([key, value]) => <button key={key} type="button" onClick={() => set(key, "")} className="rounded-full bg-[#F2F4FB] px-2 py-1 text-[11px] text-[#171717]">{labels[key]}: {chipLabel(key, value)} ×</button>)}<button type="button" onClick={() => onChange({})} className="px-1 text-[11px] text-[#626161] hover:text-[#171717]">すべて解除</button></div></div>}</div>;
 }

@@ -19,6 +19,7 @@ import type { ExecutionStatus } from "@tact/runs-core/tact-execution/types";
 import type { AttentionReason } from "@tact/runs-core/tact-execution/permission/attention";
 import type { AttentionStatus } from "@tact/runs-core/tact-execution/permission/attentionStore";
 import { japaneseProjection } from "@/lib/japaneseProjection";
+import { StatusIndicator } from "./StatusIndicator";
 
 type BadgeTone = "success" | "error" | "warning" | "neutral" | "muted";
 
@@ -51,22 +52,8 @@ export function PermissionBadge({ result }: { result: CanonicalPermissionResult 
   return <Badge label={japaneseProjection(result) === result ? permissionResultLabel(result) : japaneseProjection(result)} tone={PERMISSION_TONE[result]} />;
 }
 
-const RESULT_TONE: Partial<Record<ExecutionStatus, BadgeTone>> = {
-  succeeded: "success",
-  failed: "error",
-};
-
-const RESULT_LABELS: Record<ExecutionStatus, string> = {
-  observed: "\u89b3\u6e2c\u6e08\u307f",
-  running: "\u5b9f\u884c\u4e2d",
-  succeeded: "\u5b8c\u4e86",
-  failed: "\u5931\u6557",
-  cancelled: "\u53d6\u308a\u6d88\u3057",
-  unknown: "\u5224\u5b9a\u3067\u304d\u307e\u305b\u3093",
-};
-
 export function ResultBadge({ status }: { status: ExecutionStatus }) {
-  return <Badge label={RESULT_LABELS[status]} tone={RESULT_TONE[status] ?? "muted"} />;
+  return <StatusIndicator status={status} className="text-[11px] font-medium" />;
 }
 
 // SOR-178 / SEC-8D: permission_unknown/downstream_permission_conflict
