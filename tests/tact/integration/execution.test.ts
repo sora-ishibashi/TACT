@@ -205,6 +205,15 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
     // tests never override runsGovernancePreflight and must never trigger
     // this default fake at all (see its own throw below).
     runsGovernancePreflightCalls: 0,
+    // SOR-138 Slice 3A-3: counts actual Complete network-seam invocations.
+    // Unlike runsGovernancePreflight's default (which throws, since every
+    // ungoverned test must never reach it), this one defaults to a harmless
+    // "linked" success — completeRunsGovernanceBestEffort() itself already
+    // structurally guarantees zero calls for every path that never sets a
+    // governanceContext (see its own no-op guard), so every existing
+    // (non-3A-3) test in this file naturally asserts 0 here without needing
+    // to know this dep exists at all.
+    runsGovernanceCompleteCalls: 0,
   };
 
   const deps: ExecuteApprovedIntegrationActionDeps = {
@@ -296,6 +305,18 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
         "without overriding this dep. Either the test enabled the governance flag unintentionally, " +
         "or shouldGovernDirectIntegrationAction() regressed to govern an action it should not."
       );
+    },
+
+    // SOR-138 Slice 3A-3: harmless default (unlike runsGovernancePreflight's
+    // throwing default above) — completeRunsGovernanceBestEffort() itself
+    // guarantees this is never called unless a governed execution set a
+    // governanceContext, so there is nothing to defend against here the way
+    // the Preflight default has to. Governed-path Complete tests override
+    // this explicitly to capture/inspect the actual envelope.
+    runsGovernanceComplete: async () => {
+      calls.runsGovernanceCompleteCalls += 1;
+      calls.callOrder.push("runsGovernanceComplete");
+      return { status: "completed", result: { status: "linked" } };
     },
 
     ...overrides,
@@ -470,6 +491,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       check(
         "[承認後] 成功時はcompleteRun()が呼ばれ、failRun()は呼ばれない、status=completedを返す",
         outcome.status === "completed" && calls.completeRunCalls === 1 && calls.failRunCalls === 0
+      )
+    );
+
+    results.push(
+      check(
+        "[SOR-138/3A-3 write path] write経路はgovernanceContextを一切持たないため、Runs Completeは0回のまま",
+        calls.runsGovernanceCompleteCalls === 0
       )
     );
 
@@ -2783,6 +2811,13 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     results.push(
       check(
+        "[SOR-138/3A-3 runtime worker path] executeRuntimeIntegrationRead()はgovernanceContextを一切持たないため、Runs Completeは0回のまま(3Bまでは未配線)",
+        calls.runsGovernanceCompleteCalls === 0
+      )
+    );
+
+    results.push(
+      check(
         "[Resume] run.createdは再emitされない(既存Runをそのまま使う、二重emission防止)",
         !calls.emitAuditEventCalls.some((e) => e.eventType === "run.created")
       )
@@ -2972,7 +3007,15 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
     const GOVERNED_ACTION = { service: "slack" as const, operation: "list_channels", input: {} };
 
-    async function runGoverned(preflightFake: ExecuteApprovedIntegrationActionDeps["runsGovernancePreflight"], overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {}) {
+    async function runGoverned(
+      preflightFake: ExecuteApprovedIntegrationActionDeps["runsGovernancePreflight"],
+      overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {},
+      // SOR-138 Slice 3A-3: optional — tests that only care about the
+      // Preflight verdict (DENY/UNKNOWN/unavailable/etc.) never need this;
+      // the default (harmless "linked", wired in makeDeps()) is never even
+      // reached for those since governanceContext never gets set.
+      completeFake?: ExecuteApprovedIntegrationActionDeps["runsGovernanceComplete"]
+    ) {
       const { deps, calls } = makeDeps(overrides);
       // Wrap the test's fake so makeDeps()'s own call counter (normally
       // only incremented by the default throwing stub) still counts
@@ -2983,11 +3026,54 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         calls.callOrder.push("runsGovernancePreflight");
         return preflightFake(...args);
       }) as ExecuteApprovedIntegrationActionDeps["runsGovernancePreflight"];
+      if (completeFake) {
+        deps.runsGovernanceComplete = (async (...args: Parameters<typeof completeFake>) => {
+          calls.runsGovernanceCompleteCalls += 1;
+          calls.callOrder.push("runsGovernanceComplete");
+          return completeFake(...args);
+        }) as ExecuteApprovedIntegrationActionDeps["runsGovernanceComplete"];
+      }
       const outcome = await executeReadIntegrationAction(
         { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: GOVERNED_ACTION },
         deps
       );
       return { outcome, calls };
+    }
+
+    // SOR-138 Slice 3A-3: same wiring as runGoverned() above, but catches
+    // whatever executeReadIntegrationAction() itself throws instead of
+    // letting it reject the test — needed for the local-finalization-throw
+    // tests (review Section 21), where completeRun()/failRun() throwing is
+    // expected to propagate all the way out, and the test must inspect both
+    // that original error AND `calls` (runGoverned() alone can't do both,
+    // since a rejected call never returns `calls`).
+    async function runGovernedAllowingThrow(
+      preflightFake: ExecuteApprovedIntegrationActionDeps["runsGovernancePreflight"],
+      overrides: Partial<ExecuteApprovedIntegrationActionDeps>,
+      completeFake: ExecuteApprovedIntegrationActionDeps["runsGovernanceComplete"]
+    ) {
+      const { deps, calls } = makeDeps(overrides);
+      deps.runsGovernancePreflight = (async (...args: Parameters<typeof preflightFake>) => {
+        calls.runsGovernancePreflightCalls += 1;
+        calls.callOrder.push("runsGovernancePreflight");
+        return preflightFake(...args);
+      }) as ExecuteApprovedIntegrationActionDeps["runsGovernancePreflight"];
+      deps.runsGovernanceComplete = (async (...args: Parameters<typeof completeFake>) => {
+        calls.runsGovernanceCompleteCalls += 1;
+        calls.callOrder.push("runsGovernanceComplete");
+        return completeFake(...args);
+      }) as ExecuteApprovedIntegrationActionDeps["runsGovernanceComplete"];
+
+      let threw: unknown;
+      try {
+        await executeReadIntegrationAction(
+          { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: GOVERNED_ACTION },
+          deps
+        );
+      } catch (error) {
+        threw = error;
+      }
+      return { threw, calls };
     }
 
     function decided(verdict: "ALLOW" | "DENY" | "UNKNOWN" | "APPROVAL_REQUIRED", approvalStatus: "approved" | "rejected" | null = null) {
@@ -3037,6 +3123,299 @@ export async function run(): Promise<{ pass: number; fail: number }> {
             idx("completeRun") < idx("audit:run.completed")
           );
         })()
+      ));
+    }
+
+    // =========================
+    // SOR-138 Slice 3A-3 — Runs Complete wiring for governed direct
+    // slack.list_channels
+    // =========================
+
+    // ---- success: full envelope + ordering + Complete=1 proof ----
+    {
+      let preflightEnvelope: { request: { invocationId: string } } | undefined;
+      let completeEnvelope:
+        | { onBehalfOfUserId: string; request: { decisionId: string; invocationId: string; execution: Record<string, unknown>; outcome?: unknown } }
+        | undefined;
+
+      const { outcome, calls } = await runGoverned(
+        async (envelope) => {
+          preflightEnvelope = envelope as typeof preflightEnvelope;
+          return {
+            status: "decided" as const,
+            response: {
+              decisionId: "dec-1",
+              invocationId: envelope.request.invocationId,
+              verdict: "ALLOW" as const,
+              reasonCode: "test",
+              evaluatorVersion: "v1",
+              policyVersion: "a".repeat(64),
+              matchedRuleIdentifier: null,
+              approval: { approvalId: null, status: null },
+            },
+          };
+        },
+        {},
+        async (envelope) => {
+          completeEnvelope = envelope as unknown as typeof completeEnvelope;
+          return { status: "completed" as const, result: { status: "linked" as const } };
+        }
+      );
+
+      results.push(check(
+        "[SOR-138/3A-3 success] governed ALLOW + provider success: Preflight=1, Run=1, provider=1, Complete=1",
+        outcome.status === "completed" &&
+        calls.runsGovernancePreflightCalls === 1 &&
+        calls.createRunCalls === 1 &&
+        calls.executeIntegrationActionCalls === 1 &&
+        calls.runsGovernanceCompleteCalls === 1
+      ));
+
+      const runId = outcome.status === "completed" ? outcome.run.id : undefined;
+      const serializedComplete = JSON.stringify(completeEnvelope);
+
+      results.push(check(
+        "[SOR-138/3A-3 success] Complete envelope: same invocationId as Preflight, same decisionId, externalEventId===Run.id, provider='slack', sourceType='sdk_callback', adapterVersion='yolna-direct-integration@1', status='succeeded', outcome absent, providerOccurredAt absent/null, no raw provider output/providerExecutionRef",
+        !!completeEnvelope &&
+        !!preflightEnvelope &&
+        completeEnvelope.request.invocationId === preflightEnvelope.request.invocationId &&
+        completeEnvelope.request.decisionId === "dec-1" &&
+        completeEnvelope.request.execution.externalEventId === runId &&
+        completeEnvelope.request.execution.provider === "slack" &&
+        completeEnvelope.request.execution.sourceType === "sdk_callback" &&
+        completeEnvelope.request.execution.adapterVersion === "yolna-direct-integration@1" &&
+        completeEnvelope.request.execution.status === "succeeded" &&
+        completeEnvelope.request.outcome === undefined &&
+        (completeEnvelope.request.execution.providerOccurredAt === undefined || completeEnvelope.request.execution.providerOccurredAt === null) &&
+        !("errorCode" in completeEnvelope.request.execution) &&
+        !serializedComplete.includes("log-1") && // the fixture's providerExecutionRef value
+        !serializedComplete.includes("\"output\"")
+      ));
+
+      results.push(check(
+        "[SOR-138/3A-3 success ordering] executeIntegrationAction -> completeRun -> runsGovernanceComplete (Complete is attempted strictly after local Run/Task finalization, per the reviewed ordering)",
+        (() => {
+          const order = calls.callOrder;
+          const idx = (name: string) => order.indexOf(name);
+          return (
+            idx("executeIntegrationAction") >= 0 &&
+            idx("executeIntegrationAction") < idx("completeRun") &&
+            idx("completeRun") < idx("runsGovernanceComplete")
+          );
+        })()
+      ));
+    }
+
+    // ---- provider-declared failure: Complete execution.status='failed', errorCode mapped, no raw message/providerDetails ----
+    {
+      let completeEnvelope:
+        | { request: { execution: Record<string, unknown> } }
+        | undefined;
+      // A local counter, not calls.executeIntegrationActionCalls — this
+      // override replaces makeDeps()'s own counting default entirely, and
+      // (unlike the sibling makeDeps({...}) call sites elsewhere in this
+      // file) `calls` itself does not exist yet while runGoverned() is
+      // still being awaited, so it cannot be referenced from inside this
+      // closure.
+      let providerInvocations = 0;
+
+      const { outcome, calls } = await runGoverned(
+        decided("ALLOW"),
+        {
+          executeIntegrationAction: async () => {
+            providerInvocations += 1;
+            return {
+              status: "failed",
+              error: {
+                code: "provider_execution_failed",
+                message: "raw secret-ish provider detail that must never reach Complete",
+                retryable: false,
+              },
+            };
+          },
+        },
+        async (envelope) => {
+          completeEnvelope = envelope as unknown as typeof completeEnvelope;
+          return { status: "completed" as const, result: { status: "linked" as const } };
+        }
+      );
+
+      const serializedComplete = JSON.stringify(completeEnvelope);
+
+      results.push(check(
+        "[SOR-138/3A-3 provider failure] provider=1, Complete=1, execution.status='failed', errorCode=canonical code, no raw message/providerDetails, Run remains failed",
+        outcome.status === "failed" &&
+        providerInvocations === 1 &&
+        calls.runsGovernanceCompleteCalls === 1 &&
+        !!completeEnvelope &&
+        completeEnvelope.request.execution.status === "failed" &&
+        completeEnvelope.request.execution.errorCode === "provider_execution_failed" &&
+        (completeEnvelope.request.execution.errorMessage === undefined || completeEnvelope.request.execution.errorMessage === null) &&
+        !("providerDetails" in completeEnvelope.request.execution) &&
+        !serializedComplete.includes("raw secret-ish provider detail")
+      ));
+
+      results.push(check(
+        "[SOR-138/3A-3 provider failure ordering] failRun -> runsGovernanceComplete",
+        (() => {
+          const order = calls.callOrder;
+          const idx = (name: string) => order.indexOf(name);
+          return idx("failRun") >= 0 && idx("failRun") < idx("runsGovernanceComplete");
+        })()
+      ));
+    }
+
+    // ---- Complete success-result classes: both "linked" and "already_linked" preserve the normal provider outcome ----
+    for (const completeStatus of ["linked", "already_linked"] as const) {
+
+      const { outcome: successOutcome, calls: successCalls } = await runGoverned(
+        decided("ALLOW"),
+        {},
+        async () => ({ status: "completed" as const, result: { status: completeStatus } })
+      );
+      results.push(check(
+        `[SOR-138/3A-3 Complete result=${completeStatus}] provider success still returns completed`,
+        successOutcome.status === "completed" && successCalls.runsGovernanceCompleteCalls === 1
+      ));
+
+      const { outcome: failureOutcome, calls: failureCalls } = await runGoverned(
+        decided("ALLOW"),
+        {
+          executeIntegrationAction: async () => ({
+            status: "failed",
+            error: { code: "provider_execution_failed", message: "boom", retryable: false },
+          }),
+        },
+        async () => ({ status: "completed" as const, result: { status: completeStatus } })
+      );
+      results.push(check(
+        `[SOR-138/3A-3 Complete result=${completeStatus}] provider failure still returns failed`,
+        failureOutcome.status === "failed" && failureCalls.runsGovernanceCompleteCalls === 1
+      ));
+
+    }
+
+    // ---- Complete failure-result classes: none of these alter the provider/Run outcome, retry, or create a second Run ----
+    {
+
+      type CompleteFailureCase = {
+        label: string;
+        completeFake: ExecuteApprovedIntegrationActionDeps["runsGovernanceComplete"];
+      };
+
+      const cases: CompleteFailureCase[] = [
+        {
+          label: "A. transport unavailable",
+          completeFake: async () => ({ status: "unavailable", reason: "network_error" }),
+        },
+        {
+          label: "B. link_conflict",
+          completeFake: async () => ({ status: "completed", result: { status: "link_conflict" } }),
+        },
+        {
+          label: "C. invocation_not_found",
+          completeFake: async () => ({ status: "completed", result: { status: "invocation_not_found" } }),
+        },
+        {
+          label: "C. decision_not_found",
+          completeFake: async () => ({ status: "completed", result: { status: "decision_not_found" } }),
+        },
+        {
+          label: "D. invalid",
+          completeFake: async () => ({ status: "completed", result: { status: "invalid" } }),
+        },
+        {
+          label: "E. unexpected throw",
+          completeFake: async () => {
+            throw new Error("simulated Complete client crash");
+          },
+        },
+      ];
+
+      for (const { label, completeFake } of cases) {
+
+        const { outcome, calls } = await runGoverned(decided("ALLOW"), {}, completeFake);
+
+        results.push(check(
+          `[SOR-138/3A-3 Complete failure ${label}] provider call remains exactly 1, Run/Task based on actual provider result, no second Run, no provider retry, caller-facing status unchanged (completed)`,
+          outcome.status === "completed" &&
+          calls.executeIntegrationActionCalls === 1 &&
+          calls.createRunCalls === 1 &&
+          calls.runsGovernanceCompleteCalls === 1
+        ));
+
+      }
+
+    }
+
+    // ---- local-finalization-throw: completeRun() throws (success side) ----
+    {
+      let completeCalls = 0;
+
+      const { threw, calls } = await runGovernedAllowingThrow(
+        decided("ALLOW"),
+        {
+          completeRun: async () => {
+            throw new Error("simulated completeRun failure (local finalization)");
+          },
+        },
+        async () => {
+          completeCalls += 1;
+          return { status: "completed" as const, result: { status: "linked" as const } };
+        }
+      );
+
+      results.push(check(
+        "[SOR-138/3A-3 local-finalization-throw, success side] completeRun() throws: Runs Complete is still attempted exactly once with status=succeeded, and the ORIGINAL completeRun error propagates unmasked",
+        threw instanceof Error &&
+        threw.message === "simulated completeRun failure (local finalization)" &&
+        completeCalls === 1 &&
+        calls.runsGovernanceCompleteCalls === 1 &&
+        calls.createRunCalls === 1 &&
+        calls.executeIntegrationActionCalls === 1
+      ));
+    }
+
+    // ---- local-finalization-throw: failRun() throws (failure side) ----
+    {
+      let completeCalls = 0;
+      let capturedStatus: unknown;
+      // Local counter, not calls.executeIntegrationActionCalls — this
+      // override (needed to force a provider-declared failure) replaces
+      // makeDeps()'s own counting default, same reasoning as the earlier
+      // provider-declared-failure test above.
+      let providerInvocations = 0;
+
+      const { threw, calls } = await runGovernedAllowingThrow(
+        decided("ALLOW"),
+        {
+          executeIntegrationAction: async () => {
+            providerInvocations += 1;
+            return {
+              status: "failed",
+              error: { code: "provider_execution_failed", message: "boom", retryable: false },
+            };
+          },
+          failRun: async () => {
+            throw new Error("simulated failRun failure (local finalization)");
+          },
+        },
+        async (envelope) => {
+          completeCalls += 1;
+          capturedStatus = (envelope as { request: { execution: { status: unknown } } }).request.execution.status;
+          return { status: "completed" as const, result: { status: "linked" as const } };
+        }
+      );
+
+      results.push(check(
+        "[SOR-138/3A-3 local-finalization-throw, failure side] provider returned failed, failRun() throws: Runs Complete is still attempted exactly once with status=failed, and the ORIGINAL failRun error propagates unmasked",
+        threw instanceof Error &&
+        threw.message === "simulated failRun failure (local finalization)" &&
+        completeCalls === 1 &&
+        capturedStatus === "failed" &&
+        calls.runsGovernanceCompleteCalls === 1 &&
+        calls.createRunCalls === 1 &&
+        providerInvocations === 1
       ));
     }
 
@@ -3197,8 +3576,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     {
       const { outcome, calls } = await runGoverned(decided("DENY"));
       results.push(check(
-        "[SOR-138/DENY] blocks: invalid_action, Run 0, provider 0",
-        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+        "[SOR-138/DENY] blocks: invalid_action, Run 0, provider 0, Complete 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0 &&
+        calls.runsGovernanceCompleteCalls === 0
       ));
       results.push(check(
         "[SOR-138/DENY] no run.created, no provider.called emitted",
@@ -3210,8 +3590,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     {
       const { outcome, calls } = await runGoverned(decided("UNKNOWN"));
       results.push(check(
-        "[SOR-138/UNKNOWN] blocks: invalid_action, Run 0, provider 0",
-        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+        "[SOR-138/UNKNOWN] blocks: invalid_action, Run 0, provider 0, Complete 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0 &&
+        calls.runsGovernanceCompleteCalls === 0
       ));
     }
 
@@ -3219,8 +3600,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     {
       const { outcome, calls } = await runGoverned(decided("APPROVAL_REQUIRED", null));
       results.push(check(
-        "[SOR-138/APPROVAL_REQUIRED pending] blocks: invalid_action, Run 0, provider 0",
-        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+        "[SOR-138/APPROVAL_REQUIRED pending] blocks: invalid_action, Run 0, provider 0, Complete 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0 &&
+        calls.runsGovernanceCompleteCalls === 0
       ));
     }
 
@@ -3228,8 +3610,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     {
       const { outcome, calls } = await runGoverned(decided("APPROVAL_REQUIRED", "approved"));
       results.push(check(
-        "[SOR-138/APPROVAL_REQUIRED approved] an approved ApprovalRequest does NOT authorize execution — still blocks: invalid_action, Run 0, provider 0",
-        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+        "[SOR-138/APPROVAL_REQUIRED approved] an approved ApprovalRequest does NOT authorize execution — still blocks: invalid_action, Run 0, provider 0, Complete 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0 &&
+        calls.runsGovernanceCompleteCalls === 0
       ));
     }
 
@@ -3237,8 +3620,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     {
       const { outcome, calls } = await runGoverned(unavailable("unconfigured"));
       results.push(check(
-        "[SOR-138/unconfigured] blocks: invalid_action, Run 0, provider 0",
-        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+        "[SOR-138/unconfigured] blocks: invalid_action, Run 0, provider 0, Complete 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0 &&
+        calls.runsGovernanceCompleteCalls === 0
       ));
     }
 
@@ -3246,8 +3630,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     {
       const { outcome, calls } = await runGoverned(unavailable("timeout"));
       results.push(check(
-        "[SOR-138/timeout] blocks: invalid_action, Run 0, provider 0",
-        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+        "[SOR-138/timeout] blocks: invalid_action, Run 0, provider 0, Complete 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0 &&
+        calls.runsGovernanceCompleteCalls === 0
       ));
     }
 
@@ -3255,8 +3640,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     for (const reason of ["network_error", "non_2xx", "malformed_response", "invalid_response_shape"] as const) {
       const { outcome, calls } = await runGoverned(unavailable(reason));
       results.push(check(
-        `[SOR-138/${reason}] blocks: invalid_action, Run 0, provider 0`,
-        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+        `[SOR-138/${reason}] blocks: invalid_action, Run 0, provider 0, Complete 0`,
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0 &&
+        calls.runsGovernanceCompleteCalls === 0
       ));
     }
 
@@ -3264,8 +3650,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     {
       const { outcome, calls } = await runGoverned(unavailable("non_2xx"));
       results.push(check(
-        "[SOR-138/409-shaped non_2xx] blocks: invalid_action, Run 0, provider 0",
-        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+        "[SOR-138/409-shaped non_2xx] blocks: invalid_action, Run 0, provider 0, Complete 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0 &&
+        calls.runsGovernanceCompleteCalls === 0
       ));
     }
 
@@ -3280,8 +3667,9 @@ export async function run(): Promise<{ pass: number; fail: number }> {
           deps
         );
         results.push(check(
-          "[SOR-138/feature-disabled] exact legacy execution path: Preflight never called, completes via existing provider dispatch",
-          outcome.status === "completed" && calls.runsGovernancePreflightCalls === 0 && calls.executeIntegrationActionCalls === 1
+          "[SOR-138/feature-disabled] exact legacy execution path: Preflight never called, Complete never called, completes via existing provider dispatch",
+          outcome.status === "completed" && calls.runsGovernancePreflightCalls === 0 && calls.executeIntegrationActionCalls === 1 &&
+          calls.runsGovernanceCompleteCalls === 0
         ));
       } finally {
         if (originalFlag === undefined) delete process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED;
@@ -3297,8 +3685,8 @@ export async function run(): Promise<{ pass: number; fail: number }> {
         deps
       );
       results.push(check(
-        "[SOR-138/non-governed action] gmail.search_messages is never governed even with the flag on: Preflight 0, existing behavior unaffected",
-        calls.runsGovernancePreflightCalls === 0
+        "[SOR-138/non-governed action] gmail.search_messages is never governed even with the flag on: Preflight 0, Complete 0, existing behavior unaffected",
+        calls.runsGovernancePreflightCalls === 0 && calls.runsGovernanceCompleteCalls === 0
       ));
       void outcome;
     }

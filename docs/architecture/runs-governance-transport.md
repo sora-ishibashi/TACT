@@ -1,7 +1,7 @@
 # Yolna → Runs Governance Transport (SOR-138)
 
 Status: describes the current, live, root-side (Yolna/TACT) half of the SOR-138
-Runs Governance transport, as actually implemented through Slice 3A-2. This is
+Runs Governance transport, as actually implemented through Slice 3A-3. This is
 an operator/architecture reference, not a design proposal — it records what
 exists today and the non-claims below, nothing more.
 
@@ -23,8 +23,22 @@ operation: list_channels
 ```
 
 No other Slack operation and no other service is governed by this transport.
-Extending scope to any other action is a deliberate future change (Slice 3A-3,
-3B, or later), not an incidental side effect of this slice.
+Extending scope to any other action is a deliberate future change (Slice 3B
+or later), not an incidental side effect of this slice.
+
+As of Slice 3A-3, the current governed direct path is:
+
+```
+Yolna local checks
+→ Runs Preflight
+→ ALLOW
+→ post-ALLOW local revalidation (Section 3)
+→ exact Run attempt claim
+→ provider execution
+→ existing local Run/Task finalization
+→ Runs Complete (Section 3a)
+→ existing caller outcome
+```
 
 ## 2. Feature gate
 
@@ -77,6 +91,56 @@ never re-asks Preflight — the originally-planned attempt (and the
 `GovernanceDecision` Preflight was asked about) is either claimed exactly as
 planned or not claimed at all.
 
+### 3a. Runs Complete (Slice 3A-3)
+
+After the provider actually executes and the existing local Run/Task
+lifecycle has already been finalized (`completeRun()`/`failRun()`,
+`run.completed`/`run.failed`, `updateTaskStatus()`, reconciliation —
+unchanged from before this slice), `core/tact-integration/execution.ts`
+calls the already-landed `callRunsGovernanceComplete()` client exactly once,
+carrying the SAME `invocationId`/`decisionId` that Preflight produced the
+`ALLOW` for.
+
+Complete is **observation/governance recording, not a second authority**
+over whether the provider execution succeeded or failed:
+
+- It is awaited and bounded by the existing client's own request timeout —
+  never fire-and-forget, and never transparently retried.
+- Its outcome never changes the already-finalized Run/Task state, never
+  creates a second Run, and never triggers a provider retry. A Complete
+  recording failure (transport-unavailable, `link_conflict`,
+  `invocation_not_found`, `decision_not_found`, `invalid`, or an unexpected
+  client exception) is logged as a safe server-side warning (coarse
+  workId/taskId/runId/result-category fields only — never HMAC, secrets,
+  `providerConnectionRef`, or raw provider error detail) and otherwise
+  ignored by the caller-facing outcome.
+- If a local finalization write itself throws (e.g. `completeRun()` or
+  `failRun()`), Complete is still attempted with the evidence already known
+  at that point, and the original local error is the one that propagates —
+  Complete's own result never masks it.
+- `externalEventId` is always the canonical Yolna `Run.id` — never a
+  provider execution ref, Composio log id, taskId, or invocationId. One
+  canonical Run attempt maps to exactly one stable Complete
+  `externalEventId`.
+- No raw provider output, `providerExecutionRef`, or `providerConnectionRef`
+  is ever included in the Complete envelope — only the canonical, already-
+  sanitized `IntegrationErrorCode` on failure (`execution.errorCode`), never
+  `result.error.message` or `providerDetails`.
+- No `outcome` object is asserted for `list_channels` — this slice records
+  only that the governed attempt happened and how it concluded
+  (`"succeeded"` / `"failed"`), never a semantic judgment over its result.
+- `adapterVersion` is the named constant `"yolna-direct-integration@1"`,
+  identifying this specific direct-integration-boundary caller to Runs — a
+  future caller (e.g. the Trigger.dev worker, Slice 3B) will get its own
+  distinct value.
+
+This remains far short of **Complete Mediation**: Trigger.dev's own worker
+path does not call Complete at all yet (Section 3's precedence rule means
+Trigger.dev never even executes this governed action while the gate is ON),
+no write/destructive action is covered, and an `APPROVAL_REQUIRED` verdict
+with a recorded `approval.status: "approved"` still does not authorize
+execution — SOR-160 remains the owner of that future work.
+
 ## 4. Root environment contract
 
 Five environment variables, all consumed only by
@@ -116,16 +180,17 @@ set, changed, or read from a real deployment as part of writing it.
 
 ## 5. Non-claims
 
-This slice (through 3A-2) does **not** yet provide:
+This slice (through 3A-3) does **not** yet provide:
 
-- Complete capture — `callRunsGovernanceComplete()` exists in
-  `runsGovernance.ts` but is not called from anywhere (remains unwired).
 - Complete Mediation of all protected actions — only `slack.list_channels`
-  is governed; every other action is entirely unaffected by this transport.
+  is governed and completed; every other action is entirely unaffected by
+  this transport.
 - Trigger.dev governance propagation — the Trigger.dev runtime path itself
-  carries no governance `invocationId`/`decisionId` yet.
+  carries no governance `invocationId`/`decisionId` yet, and never calls
+  Complete (Section 3's precedence rule keeps it from even executing this
+  governed action while the gate is ON).
 - Protected-write governance — only a read action is governed; no write/
-  destructive action goes through Runs Preflight today.
+  destructive action goes through Runs Preflight or Complete today.
 - Transaction- or target-bound authorization — an `ALLOW` verdict authorizes
   the planned execution attempt's identity, not a specific target/value/
   transaction digest.
@@ -133,11 +198,16 @@ This slice (through 3A-2) does **not** yet provide:
   with `approval.status === "approved"` does **not** authorize execution;
   this slice has no transaction-bound execution grant mechanism. See
   Section 6.
+- Replay-safe human approval grants, execution leases, or any state-version
+  authorization — Complete's `invocationId`/`decisionId` identify an
+  attempt/decision pair for observation purposes only, not a security
+  capability token.
 
 ## 6. Related future work
 
-- **Slice 3A-3** — wiring `callRunsGovernanceComplete()`.
-- **Slice 3B** — Trigger.dev runtime governance propagation.
-- **SOR-160 / SOR-164 / SOR-169** — target/value binding, transaction
-  digests, leases/expiry/nonce, state-version authorization, and any
-  generic TOCTOU framework remain explicitly out of this slice's scope.
+- **Slice 3B** — Trigger.dev runtime governance propagation (including
+  wiring Complete into the Trigger.dev worker path).
+- **SOR-160** — generic Complete Mediation / protected-write mediation.
+- **SOR-164 / SOR-169** — target/value binding, transaction digests,
+  leases/expiry/nonce, state-version authorization, and any generic TOCTOU
+  framework remain explicitly out of this slice's scope.

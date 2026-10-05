@@ -46,13 +46,17 @@ import type { SourceReferentSnapshot } from "../tact-referent/types";
 // 依存も生まれない)。
 import type { RuntimeAdapter, RuntimeError } from "../tact-runtime/types";
 import { toRunExternalRefFields } from "../tact-runtime/types";
-// SOR-138 Slice 3A-2: the only import of the Runs governance client this
-// file (or any file) needs. This is a sibling of ./gateway.ts, not a
+// SOR-138 Slice 3A-2/3A-3: the only import of the Runs governance client
+// this file (or any file) needs. This is a sibling of ./gateway.ts, not a
 // dependency of it — the Composio provider adapter must remain unaware
 // that Runs governance exists at all (see runsGovernance.ts's own header
 // comment on dependency direction). Only the HTTP client/invocationId
-// helper is imported — never packages/runs-core or products/yolna-runs.
-import { callRunsGovernancePreflight, deriveGovernanceInvocationId } from "./runsGovernance";
+// helpers are imported — never packages/runs-core or products/yolna-runs.
+// Slice 3A-3 adds callRunsGovernanceComplete() to this same single import
+// line (not a second import statement) — it is the already-landed Slice
+// 3A-1 client, reused as-is; this file never duplicates its HMAC/transport
+// logic.
+import { callRunsGovernancePreflight, callRunsGovernanceComplete, deriveGovernanceInvocationId } from "./runsGovernance";
 
 // =========================
 // TACT Integration — Execution Boundary
@@ -189,6 +193,16 @@ export interface ExecuteApprovedIntegrationActionDeps {
   // never reaches this dep.
   runsGovernancePreflight: typeof callRunsGovernancePreflight;
 
+  // SOR-138 Slice 3A-3: DI seam for the already-landed Runs governance
+  // Complete HTTP client (same reasoning as runsGovernancePreflight above
+  // — never a real HTTP request in a unit test, never duplicated transport
+  // logic). Only ever called from completeRunsGovernanceBestEffort() below,
+  // and only when a governed execution actually set a
+  // RunsGovernanceExecutionContext on this call — every other path
+  // (legacy reads, writes, Runtime dispatch, the Runtime worker
+  // entrypoint) never reaches this dep.
+  runsGovernanceComplete: typeof callRunsGovernanceComplete;
+
 }
 
 const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
@@ -206,6 +220,7 @@ const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
   emitAuditEvent: defaultEmitAuditSafely,
   attachRunExternalRef: defaultAttachRunExternalRef,
   runsGovernancePreflight: callRunsGovernancePreflight,
+  runsGovernanceComplete: callRunsGovernanceComplete,
 };
 
 // 絶対条件(Phase C2.1a指示、最重要): reconciliation自体が失敗しても、
@@ -469,7 +484,43 @@ interface ExecuteIntegrationActionCoreParams {
   // trusted rather than re-derived.
   plan?: RunExecutionPlan;
 
+  // SOR-138 Slice 3A-3: set ONLY by executeReadIntegrationAction()'s
+  // governed slack.list_channels branch, after Preflight has already
+  // returned a decided ALLOW for this exact attempt — see
+  // RunsGovernanceExecutionContext's own comment below. Every other caller
+  // (the write path, legacy/ungoverned reads, Runtime dispatch, and the
+  // Runtime worker entrypoint) omits this, which is what keeps Runs
+  // Complete from ever being called for them.
+  governanceContext?: RunsGovernanceExecutionContext;
+
 }
+
+// =========================
+// RunsGovernanceExecutionContext (SOR-138 Slice 3A-3)
+// =========================
+//
+// Carries the exact Preflight identity this attempt was governed under
+// (invocationId + decisionId) from executeReadIntegrationAction()'s
+// governed branch into executeIntegrationActionCore(), so Runs Complete can
+// be recorded against the SAME invocation/decision Preflight already
+// produced an ALLOW for — never a re-derived or re-planned identity. This
+// is a small internal context, not a new public API; nothing outside this
+// file constructs one.
+interface RunsGovernanceExecutionContext {
+
+  invocationId: string;
+
+  decisionId: string;
+
+}
+
+// Named constant (absolute condition, review Section 4): identifies this
+// specific direct-integration-boundary Complete caller to Runs. A future
+// caller (e.g. the Trigger.dev worker, Slice 3B) gets its own distinct
+// adapterVersion rather than silently reusing this one — the two call
+// sites report evidence through structurally different code paths and
+// should remain distinguishable in Runs' own Canonical Execution records.
+const RUNS_GOVERNANCE_DIRECT_ADAPTER_VERSION = "yolna-direct-integration@1";
 
 // =========================
 // planRunForExecution (SOR-138 Slice 3A-2: Plan / Claim split)
@@ -699,6 +750,122 @@ async function prepareRunForExecution(
 
 }
 
+// =========================
+// completeRunsGovernanceBestEffort (SOR-138 Slice 3A-3)
+// =========================
+//
+// The ONLY call site of deps.runsGovernanceComplete() in this file. No-ops
+// immediately (zero Complete calls) when `governanceContext` is undefined —
+// this is what keeps every ungoverned path (legacy reads, writes, Runtime
+// dispatch, the Runtime worker entrypoint) from ever reaching Runs Complete
+// at all.
+//
+// Complete is observation/governance recording, not a second authority over
+// whether the provider execution succeeded or failed — the canonical Yolna
+// Run/Task outcome has ALREADY been finalized by this function's caller
+// before this is invoked (see executeIntegrationActionCore()'s own ordering
+// comment: provider result → local Run/Task finalization → Runs Complete).
+// Accordingly this function:
+//   - returns void, never a value the caller could branch provider/Run
+//     outcome on
+//   - never mutates Run/Task state
+//   - never calls the provider
+//   - calls deps.runsGovernanceComplete() at most once
+//   - is awaited (bounded by the existing client's own request timeout —
+//     never fire-and-forget, so this remains reliable even in a
+//     process-ending serverless environment)
+//   - never adds transparent retry
+//   - never throws — any unexpected rejection from the injected dep itself
+//     is caught here, not left to propagate and mask whatever the caller is
+//     about to do (or already did) with the real provider/Run outcome
+//   - logs only safe, coarse fields (workId/taskId/runId/Complete result
+//     category) on a recording failure — never HMAC/secret/
+//     providerConnectionRef/raw provider error/raw Complete `reason` (which
+//     may carry internal DB detail) — and deliberately does not introduce a
+//     new AuditEvent type for this (review Section 14: AuditEvent
+//     type/category is a closed contract; adding one is explicitly out of
+//     this slice's scope)
+async function completeRunsGovernanceBestEffort(
+  governanceContext: RunsGovernanceExecutionContext | undefined,
+  identity: { workId: string; taskId: string; runId: string; userId: string },
+  execution: { status: "succeeded" } | { status: "failed"; errorCode: string },
+  deps: ExecuteApprovedIntegrationActionDeps
+): Promise<void> {
+
+  if (!governanceContext) {
+    return;
+  }
+
+  try {
+
+    const completeResult = await deps.runsGovernanceComplete({
+      onBehalfOfUserId: identity.userId,
+      request: {
+        decisionId: governanceContext.decisionId,
+        invocationId: governanceContext.invocationId,
+        execution: {
+          provider: "slack",
+          sourceType: "sdk_callback",
+          // Absolute condition (review Section 7): the canonical Yolna
+          // Run.id, never providerExecutionRef/a Composio log id/taskId/
+          // invocationId. One canonical Run attempt = one stable Complete
+          // externalEventId.
+          externalEventId: identity.runId,
+          adapterVersion: RUNS_GOVERNANCE_DIRECT_ADAPTER_VERSION,
+          status: execution.status,
+          ...(execution.status === "failed" ? { errorCode: execution.errorCode } : {}),
+          // errorMessage/resourceType/resourceIdentifier/providerOccurredAt
+          // deliberately omitted — no raw provider message, no trusted
+          // provider-asserted timestamp, no resource identity exists here
+          // to report (review Sections 4/6: never invent one).
+        },
+        // No `outcome` for list_channels (review Section 4) — this slice
+        // asserts only that the governed execution attempt happened and
+        // how it concluded, never a semantic Outcome over its result.
+      },
+    });
+
+    const recordedCleanly =
+      completeResult.status === "completed" &&
+      (completeResult.result.status === "linked" || completeResult.result.status === "already_linked");
+
+    if (!recordedCleanly) {
+
+      console.warn(
+        "[tact-integration/execution] completeRunsGovernanceBestEffort(): Runs Complete recording did not " +
+        "cleanly succeed; this is non-authoritative observation only — the local Run/Task outcome was already " +
+        "finalized before this call and is not changed by it.",
+        {
+          workId: identity.workId,
+          taskId: identity.taskId,
+          runId: identity.runId,
+          completeClientStatus: completeResult.status,
+          completeCategory: completeResult.status === "completed" ? completeResult.result.status : completeResult.reason,
+        }
+      );
+
+    }
+
+  } catch {
+
+    // 絶対条件(Section11/13): Complete自体が失敗しても、この関数は
+    // 例外を外へ伝播させない——呼び出し元が既に確定させたprovider/Run
+    // outcomeを、この非authoritativeなrecording呼び出しの失敗によって
+    // 上書き/マスクしてはいけない(try/finallyで囲む呼び出し元が、元の
+    // local finalization errorをそのまま再送出できるようにするための
+    // 構造)。raw error自体はログに出さない(secret/内部DB詳細混入の
+    // 可能性を排除する、安全側)。
+    console.warn(
+      "[tact-integration/execution] completeRunsGovernanceBestEffort(): unexpected exception calling Runs " +
+      "Complete; this is non-authoritative observation only — the local Run/Task outcome was already finalized " +
+      "before this call and is not changed by it.",
+      { workId: identity.workId, taskId: identity.taskId, runId: identity.runId }
+    );
+
+  }
+
+}
+
 async function executeIntegrationActionCore(
   params: ExecuteIntegrationActionCoreParams,
   deps: ExecuteApprovedIntegrationActionDeps
@@ -786,25 +953,49 @@ async function executeIntegrationActionCore(
       accessToken
     );
 
-    await deps.completeRun(workId, userId, accessToken, run.id, {
-      result: completedResult,
-      externalRef,
-    });
+    // SOR-138 Slice 3A-3 ordering (review Sections 8/9/10): the local
+    // Run/Task finalization sequence below is wrapped in try/finally so
+    // that Runs Complete (non-authoritative observation) is attempted
+    // exactly once AFTER this sequence completes — whether it completes
+    // normally or throws. Provider reality is already known at this point;
+    // a Runs outage must never leave the canonical Run/Task lifecycle stuck
+    // merely because observation failed, and conversely, if a local
+    // finalization write itself throws, that original error must still
+    // propagate unmasked (a plain try/finally gives this for free — the
+    // finally's own call never throws, see completeRunsGovernanceBestEffort()'s
+    // own header comment, so it can never replace the original exception).
+    try {
 
-    // Fast Port P4b(Step11): run.completedのcanonical emitter。
-    // canonical Run status mutation確定後にemitする(provider.completed
-    // とは別event——infrastructure/storage failure等でprovider result
-    // とRun resultが一致しない可能性があるため、別eventとして残す
-    // 価値がある、Step11)。
-    await deps.emitAuditEvent(
-      { workId, taskId, runId: run.id, category: "execution", eventType: "run.completed" },
-      userId,
-      accessToken
-    );
+      await deps.completeRun(workId, userId, accessToken, run.id, {
+        result: completedResult,
+        externalRef,
+      });
 
-    await deps.updateTaskStatus(workId, userId, accessToken, taskId, "completed");
+      // Fast Port P4b(Step11): run.completedのcanonical emitter。
+      // canonical Run status mutation確定後にemitする(provider.completed
+      // とは別event——infrastructure/storage failure等でprovider result
+      // とRun resultが一致しない可能性があるため、別eventとして残す
+      // 価値がある、Step11)。
+      await deps.emitAuditEvent(
+        { workId, taskId, runId: run.id, category: "execution", eventType: "run.completed" },
+        userId,
+        accessToken
+      );
 
-    await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
+      await deps.updateTaskStatus(workId, userId, accessToken, taskId, "completed");
+
+      await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
+
+    } finally {
+
+      await completeRunsGovernanceBestEffort(
+        params.governanceContext,
+        { workId, taskId, runId: run.id, userId },
+        { status: "succeeded" },
+        deps
+      );
+
+    }
 
     return {
       status: "completed",
@@ -875,45 +1066,66 @@ async function executeIntegrationActionCore(
     accessToken
   );
 
-  await deps.failRun(workId, userId, accessToken, run.id, {
-    error: result.error.message,
-    externalRef,
-  });
+  // SOR-138 Slice 3A-3 ordering (review Sections 8/9/10): provider reality
+  // (a definite failure) is already known at this point, so the entire
+  // local Run/Task finalization sequence below — failRun() through
+  // reconciliation — is wrapped in try/finally. Runs Complete is attempted
+  // exactly once after this sequence, whether it completes normally or any
+  // step throws (e.g. failRun() itself); the original error still
+  // propagates unmasked, since completeRunsGovernanceBestEffort() never
+  // throws (see its own header comment).
+  try {
 
-  // Fast Port P4b(Step11): run.failedのcanonical emitter。
-  await deps.emitAuditEvent(
-    { workId, taskId, runId: run.id, category: "execution", eventType: "run.failed", reasonCode: result.error.code },
-    userId,
-    accessToken
-  );
+    await deps.failRun(workId, userId, accessToken, run.id, {
+      error: result.error.message,
+      externalRef,
+    });
 
-  // RUNS-P1b(Section6、Run failure → Task projection): result.error.
-  // retryable(Provider/Adapterが既に確定させたfailure、絶対条件Section7:
-  // 「requestが実際に届いたか不明」なambiguousなoutcomeはここに一切
-  // 到達しない——そちらはdeps.executeIntegrationAction()自身が例外を
-  // 投げるか、Runtime dispatch層(dispatchIntegrationReadToRuntime()の
-  // "ambiguous"分岐)で個別に扱われ、Runをrunningのまま維持する。この
-  // 分岐に到達した時点で「provider/adapterが明確にfailedを返した」
-  // ことが確定しているため、result.error.retryableをそのまま判断材料
-  // として使ってよい)を見て、Task.statusをterminal"failed"にするか
-  // non-terminal"waiting_for_retry"にするかを決める。
-  //
-  // 絶対条件(fail safe、Section6): retryable===trueが明示されている
-  // 場合のみwaiting_for_retryへ倒す。false・型不正な値のいずれも
-  // 安全側のfailed(既存の唯一の挙動)のまま——このcommit時点の実際の
-  // composio adapter(core/tact-integration/providers/composio/
-  // adapter.ts)は常にretryable:falseを返すため、既存の全production
-  // Taskの挙動はこのcommitで一切変わらない。
-  //
-  // IntegrationActionExecutionOutcome自体には新しいstatusを追加しない
-  // (このfile冒頭の既存絶対条件、dispatchIntegrationReadToRuntime()の
-  // コメント参照)——Run自体は変わらず"failed"、変わるのはTask.status
-  // だけである。
-  const nextTaskStatus: TaskStatus = result.error.retryable === true ? "waiting_for_retry" : "failed";
+    // Fast Port P4b(Step11): run.failedのcanonical emitter。
+    await deps.emitAuditEvent(
+      { workId, taskId, runId: run.id, category: "execution", eventType: "run.failed", reasonCode: result.error.code },
+      userId,
+      accessToken
+    );
 
-  await deps.updateTaskStatus(workId, userId, accessToken, taskId, nextTaskStatus);
+    // RUNS-P1b(Section6、Run failure → Task projection): result.error.
+    // retryable(Provider/Adapterが既に確定させたfailure、絶対条件Section7:
+    // 「requestが実際に届いたか不明」なambiguousなoutcomeはここに一切
+    // 到達しない——そちらはdeps.executeIntegrationAction()自身が例外を
+    // 投げるか、Runtime dispatch層(dispatchIntegrationReadToRuntime()の
+    // "ambiguous"分岐)で個別に扱われ、Runをrunningのまま維持する。この
+    // 分岐に到達した時点で「provider/adapterが明確にfailedを返した」
+    // ことが確定しているため、result.error.retryableをそのまま判断材料
+    // として使ってよい)を見て、Task.statusをterminal"failed"にするか
+    // non-terminal"waiting_for_retry"にするかを決める。
+    //
+    // 絶対条件(fail safe、Section6): retryable===trueが明示されている
+    // 場合のみwaiting_for_retryへ倒す。false・型不正な値のいずれも
+    // 安全側のfailed(既存の唯一の挙動)のまま——このcommit時点の実際の
+    // composio adapter(core/tact-integration/providers/composio/
+    // adapter.ts)は常にretryable:falseを返すため、既存の全production
+    // Taskの挙動はこのcommitで一切変わらない。
+    //
+    // IntegrationActionExecutionOutcome自体には新しいstatusを追加しない
+    // (このfile冒頭の既存絶対条件、dispatchIntegrationReadToRuntime()の
+    // コメント参照)——Run自体は変わらず"failed"、変わるのはTask.status
+    // だけである。
+    const nextTaskStatus: TaskStatus = result.error.retryable === true ? "waiting_for_retry" : "failed";
 
-  await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
+    await deps.updateTaskStatus(workId, userId, accessToken, taskId, nextTaskStatus);
+
+    await reconcileAfterTaskUpdate(deps, workId, userId, accessToken);
+
+  } finally {
+
+    await completeRunsGovernanceBestEffort(
+      params.governanceContext,
+      { workId, taskId, runId: run.id, userId },
+      { status: "failed", errorCode: result.error.code },
+      deps
+    );
+
+  }
 
   return {
     status: "failed",
@@ -1502,6 +1714,13 @@ export async function executeReadIntegrationAction(
   // 9-10. ALLOW + state unchanged: claim EXACTLY the planned attempt
   // (reusing `planned.plan`, never re-deriving a new one) and continue the
   // existing provider path.
+  //
+  // SOR-138 Slice 3A-3: this is the ONLY call site anywhere in this file
+  // that sets `governanceContext` — carrying the exact invocationId
+  // (already derived above for this planned attempt) and decisionId (from
+  // this same successful Preflight response) into executeIntegrationActionCore(),
+  // so Runs Complete (if reached) records against the SAME invocation/
+  // decision Preflight just allowed, never a re-derived identity.
   return executeIntegrationActionCore(
     {
       workId,
@@ -1512,6 +1731,10 @@ export async function executeReadIntegrationAction(
       action,
       plan: planned.plan,
       existingRunsForTask: revalidation.existingRuns,
+      governanceContext: {
+        invocationId,
+        decisionId: preflightResult.response.decisionId,
+      },
       // approvalIdなし(read実行はApprovalを一切経由しない、絶対条件)。
     },
     deps
