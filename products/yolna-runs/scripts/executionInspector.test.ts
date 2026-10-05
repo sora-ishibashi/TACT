@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { toExecutionInspectorViewModel } from "../lib/executionInspector";
+import { executionActionPresentation, toExecutionInspectorViewModel } from "../lib/executionInspector";
 import type { CanonicalExecution } from "@tact/runs-core/tact-execution";
 
 const execution = {
@@ -25,4 +25,5 @@ const humanModel = toExecutionInspectorViewModel({ ...execution, actorKind: "hum
 assert.equal(humanModel.summary.ai, null);
 assert.equal(humanModel.summary.actor, "\u4eba\uff08user-1\uff09");
 assert.ok(humanModel.summary.actionSentence.startsWith("\u4eba\uff08user-1\uff09"));
+assert.equal(executionActionPresentation("SEND_MESSAGE"), "メッセージを送信");
 console.log("PASS execution inspector projection");

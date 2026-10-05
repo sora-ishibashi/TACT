@@ -82,6 +82,7 @@ const knownActionLabels: Record<string, string> = {
   DELETE: "\u524a\u9664",
   DELETE_PAGE: "\u30da\u30fc\u30b8\u3092\u524a\u9664",
   SEND: "\u9001\u4fe1",
+  SEND_MESSAGE: "メッセージを送信",
   READ: "\u8aad\u307f\u53d6\u308a",
 };
 
