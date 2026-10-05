@@ -21,11 +21,11 @@ import { ActivityExplorer } from "./ActivityExplorer";
 import ActivityFilters from "./ActivityFilters";
 import AttentionInbox from "./AttentionInbox";
 import { PermissionSidebar } from "./PermissionSidebar";
-import { PermissionManagementView } from "./PermissionManagementView";
+import { PermissionManagementPeek, PermissionManagementView } from "./PermissionManagementView";
 import { AgentSidebar } from "./AgentSidebar";
-import { AgentManagementView } from "./AgentManagementView";
+import { AgentManagementPeek, AgentManagementView } from "./AgentManagementView";
 import { ConnectionObservationSidebar } from "./ConnectionObservationSidebar";
-import { ConnectionObservationView } from "./ConnectionObservationView";
+import { ConnectionObservationPeek, ConnectionObservationView } from "./ConnectionObservationView";
 import { HomeView } from "./HomeView";
 import { WorkSidebar, type WorkListItem } from "./WorkSidebar";
 import WorkDetailView from "./WorkDetailView";
@@ -543,7 +543,7 @@ export default function RunsSection() {
 
         {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (
           !selectedWorkId ? <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p> : workLoading ? <PresentationState kind="loading" /> : workError ? (workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />) : workHeader ? <WorkDetailView work={workHeader} items={workItems} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={setInspectedExecutionId} /> : <PresentationState kind="empty">Workが見つかりません。</PresentationState>
-        ) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} /> : section === "agent" ? <AgentManagementView items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} /> : section === "activity" ? (
+        ) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} /> : section === "agent" ? <AgentManagementView items={agentItems} state={agentLoading ? "loading" : agentError} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={coverageLoading ? "loading" : coverageError} /> : section === "activity" ? (
 
           activityLoading ? (
             <PresentationState kind="loading" />
@@ -583,6 +583,10 @@ export default function RunsSection() {
       )}
 
       {executionInspector}
+
+      {section === "agent" && selectedAgentId && <AgentManagementPeek items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onClose={() => setSelectedAgentId(null)} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} />}
+      {section === "permission" && selectedPermissionScopeKey && <PermissionManagementPeek scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onClose={() => setSelectedPermissionScopeKey(null)} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} />}
+      {section === "coverage" && selectedSurfaceId && <ConnectionObservationPeek details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} onClose={() => setSelectedSurfaceId(null)} />}
 
       </div>
     </div>
