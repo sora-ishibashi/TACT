@@ -34,6 +34,7 @@ import {
 import {
   callRunsGovernancePreflight,
   callRunsGovernanceComplete,
+  loadRunsGovernanceConfig,
   type RunsGovernanceClientDeps,
   type RunsGovernanceConfigResult,
 } from "../../../../core/tact-integration/runsGovernance";
@@ -132,6 +133,20 @@ function makeDeps(
       ...overrides,
     },
     calls,
+  };
+}
+
+// Spreads the real process.env (so ProcessEnv's required NODE_ENV etc. are
+// present, avoiding an unsafe cast) and overrides only the four governance
+// signer vars under test — real ambient env values never participate in
+// these tests' assertions.
+function makeConfigEnv(baseUrl: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    RUNS_GOVERNANCE_BASE_URL: baseUrl,
+    RUNS_GOVERNANCE_CALLER_ID: "yolna-root",
+    RUNS_GOVERNANCE_KEY_ID: "k1",
+    RUNS_GOVERNANCE_HMAC_KEY: HMAC_KEY.toString("base64"),
   };
 }
 
@@ -297,6 +312,131 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     const { deps, calls } = makeDeps({ throwError: new Error("network down") });
     await callRunsGovernancePreflight({ onBehalfOfUserId: "user-a", request: makePreflightRequest() }, deps);
     results.push(check("[15] the client makes exactly one fetch call per Preflight — no automatic retry", calls.length === 1));
+  }
+
+  // =========================
+  // Base URL normalization (SOR-138 Slice 3A-1 landing correction)
+  // =========================
+  //
+  // Covers the fix for a real bug: a trailing-slash base URL used to
+  // produce a double-slash request path while the signature was still
+  // computed over the single-slash pathname constant, so a correctly
+  // configured RUNS_GOVERNANCE_BASE_URL=https://runs.example/ silently
+  // broke HMAC verification. These tests exercise the full path —
+  // loadRunsGovernanceConfig's own parsing/validation AND the resulting
+  // request URL/signature — not just the parser in isolation.
+
+  // [base-1] no trailing slash
+  {
+    const { deps, calls } = makeDeps({ response: { status: 200, body: { success: true, decision: preflightResponseBody } } }, {
+      loadConfig: () => loadRunsGovernanceConfig(makeConfigEnv("https://runs.example")),
+    });
+    const result = await callRunsGovernancePreflight({ onBehalfOfUserId: "user-a", request: makePreflightRequest() }, deps);
+    results.push(check(
+      "[base-1] a base URL without a trailing slash produces the exact expected request URL",
+      result.status === "decided" && calls[0]?.url === "https://runs.example/api/tact/runs/governance/preflight"
+    ));
+  }
+
+  // [base-2] trailing slash normalizes identically — same request URL, and
+  // the signature independently verifies against that URL's actual
+  // (single-slash) pathname, proving no double slash leaked into either
+  // the request or the signed canonical string.
+  {
+    const { deps, calls } = makeDeps({ response: { status: 200, body: { success: true, decision: preflightResponseBody } } }, {
+      loadConfig: () => loadRunsGovernanceConfig(makeConfigEnv("https://runs.example/")),
+    });
+    const result = await callRunsGovernancePreflight({ onBehalfOfUserId: "user-a", request: makePreflightRequest() }, deps);
+
+    const actualUrl = new URL(calls[0].url);
+    const sentBody = calls[0].init.body as Buffer;
+    const headers = calls[0].init.headers as Record<string, string>;
+    const expected = expectedSignature("POST", actualUrl.pathname, sentBody, headers[GOVERNANCE_HEADER_TIMESTAMP]);
+
+    results.push(check(
+      "[base-2] a trailing-slash base URL produces the exact SAME request URL as no trailing slash (no double slash)",
+      result.status === "decided" && calls[0]?.url === "https://runs.example/api/tact/runs/governance/preflight"
+    ));
+    results.push(check(
+      "[base-2] the signed pathname matches the actual single-slash request path — signature verifies, no double slash",
+      actualUrl.pathname === "/api/tact/runs/governance/preflight" && headers[GOVERNANCE_HEADER_SIGNATURE] === expected.signature
+    ));
+  }
+
+  // [base-3] localhost http is allowed
+  {
+    const { deps, calls } = makeDeps({ response: { status: 200, body: { success: true, decision: preflightResponseBody } } }, {
+      loadConfig: () => loadRunsGovernanceConfig(makeConfigEnv("http://localhost:3000/")),
+    });
+    const result = await callRunsGovernancePreflight({ onBehalfOfUserId: "user-a", request: makePreflightRequest() }, deps);
+    results.push(check(
+      "[base-3] a localhost http:// base URL (with trailing slash) normalizes and is accepted",
+      result.status === "decided" && calls[0]?.url === "http://localhost:3000/api/tact/runs/governance/preflight"
+    ));
+  }
+
+  // [base-4]..[base-9]: rejected base URLs never reach fetch
+  const rejectedBaseUrls: Array<[string, string]> = [
+    ["base-4", "not-a-url"],
+    ["base-5", "ftp://runs.example"],
+    ["base-6", "https://user:pass@runs.example"],
+    ["base-7", "https://runs.example/?x=1"],
+    ["base-8", "https://runs.example/#x"],
+    ["base-9", "https://runs.example/base"],
+  ];
+
+  for (const [label, rawBaseUrl] of rejectedBaseUrls) {
+    const { deps, calls } = makeDeps({ response: { status: 200, body: { success: true, decision: preflightResponseBody } } }, {
+      loadConfig: () => loadRunsGovernanceConfig(makeConfigEnv(rawBaseUrl)),
+    });
+    const result = await callRunsGovernancePreflight({ onBehalfOfUserId: "user-a", request: makePreflightRequest() }, deps);
+    results.push(check(
+      `[${label}] "${rawBaseUrl}" is rejected as an invalid base URL: unconfigured, no fetch call`,
+      result.status === "unavailable" && result.reason === "unconfigured" && calls.length === 0
+    ));
+  }
+
+  // Direct unit coverage of the specific rejection reason, independent of
+  // the end-to-end client behavior proven above.
+  {
+    const r1 = loadRunsGovernanceConfig(makeConfigEnv("not-a-url"));
+    results.push(check("[base-4 reason] a malformed URL yields reason=invalid_base_url", !r1.ok && r1.reason === "invalid_base_url"));
+    const r2 = loadRunsGovernanceConfig(makeConfigEnv("ftp://runs.example"));
+    results.push(check("[base-5 reason] an unsupported protocol yields reason=invalid_base_url", !r2.ok && r2.reason === "invalid_base_url"));
+    const r3 = loadRunsGovernanceConfig(makeConfigEnv("https://user:pass@runs.example"));
+    results.push(check("[base-6 reason] embedded credentials yield reason=invalid_base_url", !r3.ok && r3.reason === "invalid_base_url"));
+    const r4 = loadRunsGovernanceConfig(makeConfigEnv("https://runs.example/?x=1"));
+    results.push(check("[base-7 reason] a query string yields reason=invalid_base_url", !r4.ok && r4.reason === "invalid_base_url"));
+    const r5 = loadRunsGovernanceConfig(makeConfigEnv("https://runs.example/#x"));
+    results.push(check("[base-8 reason] a fragment yields reason=invalid_base_url", !r5.ok && r5.reason === "invalid_base_url"));
+    const r6 = loadRunsGovernanceConfig(makeConfigEnv("https://runs.example/base"));
+    results.push(check("[base-9 reason] a non-root path prefix yields reason=invalid_base_url", !r6.ok && r6.reason === "invalid_base_url"));
+  }
+
+  // [base-10] the signer uses the ACTUAL target URL's pathname, not a
+  // separately-assumed constant — proven by independently recomputing the
+  // expected signature from the pathname of the URL actually passed to
+  // fetch and comparing it against the signature header actually sent.
+  // This is the direct regression proof for the bug this correction fixes.
+  {
+    const envelope: GovernancePreflightEnvelope = { onBehalfOfUserId: "user-a", request: makePreflightRequest() };
+    const { deps, calls } = makeDeps({ response: { status: 200, body: { success: true, decision: preflightResponseBody } } }, {
+      loadConfig: () => loadRunsGovernanceConfig(makeConfigEnv("https://runs.example/")),
+    });
+
+    await callRunsGovernancePreflight(envelope, deps);
+
+    const actualUrl = new URL(calls[0].url);
+    const sentBody = calls[0].init.body as Buffer;
+    const headers = calls[0].init.headers as Record<string, string>;
+    const timestamp = headers[GOVERNANCE_HEADER_TIMESTAMP];
+    const expectedFromActualUrl = expectedSignature("POST", actualUrl.pathname, sentBody, timestamp);
+
+    results.push(check(
+      "[base-10] the HMAC signature verifies against the pathname of the URL actually sent, not an assumed constant",
+      actualUrl.pathname === "/api/tact/runs/governance/preflight" &&
+      headers[GOVERNANCE_HEADER_SIGNATURE] === expectedFromActualUrl.signature
+    ));
   }
 
   return summarize("execution/governanceTransport/rootClient", results);

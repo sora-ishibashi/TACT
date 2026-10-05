@@ -81,19 +81,81 @@ export interface RunsGovernanceSigningConfig {
 
 export type RunsGovernanceConfigResult =
   | { ok: true; config: RunsGovernanceSigningConfig }
-  | { ok: false; reason: "missing_base_url" | "missing_caller_id" | "missing_key_id" | "missing_hmac_key" | "hmac_key_not_base64" | "hmac_key_too_short" };
+  | { ok: false; reason: "missing_base_url" | "invalid_base_url" | "missing_caller_id" | "missing_key_id" | "missing_hmac_key" | "hmac_key_not_base64" | "hmac_key_too_short" };
 
 const MIN_HMAC_KEY_BYTES = 32;
+
+// RUNS_GOVERNANCE_BASE_URL is treated as an ORIGIN only — never a path
+// prefix, credentials, query, or fragment. This is load-bearing, not
+// cosmetic: the HMAC signature covers only the request's pathname (see
+// buildGovernanceSignatureCanonicalString's own header comment on why
+// hostname is deliberately excluded from v1), so the pathname actually
+// sent over the wire and the pathname that gets signed must be derived
+// from the exact same URL object — see postSignedJson's use of
+// `new URL(pathname, \`${config.baseUrl}/\`)` below. If baseUrl carried a
+// path prefix, trailing slash inconsistency, or any other non-origin
+// component, the signed pathname and the transmitted pathname could
+// silently diverge (e.g. a trailing-slash base URL producing a
+// double-slash request path), and HMAC verification would fail closed on
+// the Runs side for what should have been a valid, correctly-configured
+// request. Returning `ok:false` here instead of silently normalizing a
+// path prefix away is deliberate: a configured path prefix is a sign the
+// deployer meant something this client does not support, not a typo to
+// paper over.
+function parseGovernanceBaseUrl(rawBaseUrl: string): string | null {
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawBaseUrl);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+
+  if (parsed.username !== "" || parsed.password !== "") {
+    return null;
+  }
+
+  if (parsed.search !== "" || parsed.hash !== "") {
+    return null;
+  }
+
+  // Accept only "/" or "" as the path component — anything else is a path
+  // prefix this client does not support (see header comment above).
+  if (parsed.pathname !== "/" && parsed.pathname !== "") {
+    return null;
+  }
+
+  // parsed.origin normalizes away any trailing slash and any accepted
+  // empty pathname — "https://runs.example/" and "https://runs.example"
+  // both become exactly "https://runs.example".
+  return parsed.origin;
+
+}
 
 // Reads RUNS_GOVERNANCE_BASE_URL / RUNS_GOVERNANCE_CALLER_ID /
 // RUNS_GOVERNANCE_KEY_ID / RUNS_GOVERNANCE_HMAC_KEY from process.env.
 // Never logs the decoded key, and never throws — every failure mode
 // returns a typed `ok: false` result so a caller can fail closed to an
 // "unconfigured" client result instead of crashing.
+//
+// Operational invariant: governance HMAC keys are environment-scoped. Do
+// not reuse a Production RUNS_GOVERNANCE_HMAC_KEY in Staging, Preview, or
+// Development, and vice versa — this module's signature format does not
+// bind the hostname/environment it was signed for (see
+// @tact/execution-contract's own header comment on this), so the key
+// material itself is the only thing that keeps a signed request scoped to
+// its intended deployment.
 export function loadRunsGovernanceConfig(env: NodeJS.ProcessEnv = process.env): RunsGovernanceConfigResult {
 
-  const baseUrl = env.RUNS_GOVERNANCE_BASE_URL;
-  if (!baseUrl) return { ok: false, reason: "missing_base_url" };
+  const rawBaseUrl = env.RUNS_GOVERNANCE_BASE_URL;
+  if (!rawBaseUrl) return { ok: false, reason: "missing_base_url" };
+
+  const baseUrl = parseGovernanceBaseUrl(rawBaseUrl);
+  if (!baseUrl) return { ok: false, reason: "invalid_base_url" };
 
   const callerId = env.RUNS_GOVERNANCE_CALLER_ID;
   if (!callerId) return { ok: false, reason: "missing_caller_id" };
@@ -302,14 +364,27 @@ async function postSignedJson(
   }
 
   const bodyBuffer = Buffer.from(JSON.stringify(bodyObject), "utf-8");
-  const headers = signGovernanceRequestBody(configResult.config, "POST", pathname, bodyBuffer, deps.now);
+
+  // baseUrl is already normalized to a bare origin (no trailing slash, no
+  // path) by parseGovernanceBaseUrl — the trailing "/" here is only so
+  // `new URL(pathname, base)` resolves pathname as a root-relative path
+  // rather than erroring on a base with no path segment at all. The
+  // resulting targetUrl.pathname is the single source of truth signed
+  // below AND the exact string sent over the wire — they can never
+  // diverge, because both come from this one URL object (Human Owner
+  // correction, SOR-138 Slice 3A-1 landing review: do not assume a
+  // separately-constructed string and the actual request URL stay in
+  // sync).
+  const targetUrl = new URL(pathname, `${configResult.config.baseUrl}/`);
+
+  const headers = signGovernanceRequestBody(configResult.config, "POST", targetUrl.pathname, bodyBuffer, deps.now);
 
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), deps.timeoutMs);
 
   let response: Response;
   try {
-    response = await deps.fetchImpl(`${configResult.config.baseUrl}${pathname}`, {
+    response = await deps.fetchImpl(targetUrl.toString(), {
       method: "POST",
       headers,
       body: bodyBuffer,

@@ -536,9 +536,25 @@ export interface GovernanceSignatureCanonicalInput {
 
   method: string;
 
-  // URL pathname only (e.g. "/api/tact/runs/governance/preflight") — never
-  // the full host/origin, so the signature cannot be replayed against a
-  // different deployment's hostname by construction.
+  // URL pathname only (e.g. "/api/tact/runs/governance/preflight"), never
+  // the full host/origin.
+  //
+  // Correction (SOR-138 Slice 3A-1 landing review): hostname/origin is
+  // DELIBERATELY not part of this v1 canonical string — this does NOT mean
+  // a signature cannot be replayed against a different deployment's
+  // hostname. It can: nothing here binds a signature to the host it was
+  // sent to, so a request signed for one deployment would verify
+  // successfully against any other deployment configured with the SAME
+  // callerId/keyId and the SAME HMAC key material. Cross-deployment /
+  // cross-environment isolation in v1 therefore relies entirely on
+  // deployment-scoped credentials, not on anything in this signature
+  // format: a given RUNS_GOVERNANCE_HMAC_KEY (root Yolna side) /
+  // RUNS_GOVERNANCE_HMAC_KEYS_JSON entry (standalone Runs side) must never
+  // be reused across independent trust domains or environments (e.g.
+  // Production vs. Staging vs. Preview vs. Development) where a replay
+  // across that boundary would matter. Adding host/origin binding to this
+  // wire contract is out of scope for this slice — do not add it without
+  // a deliberate, reviewed protocol version change.
   pathname: string;
 
   callerId: string;
