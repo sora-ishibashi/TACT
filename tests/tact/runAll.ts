@@ -250,9 +250,13 @@ import { run as runExecutionGovernanceApprovalRequestStore } from "./execution/g
 import { run as runExecutionGovernanceApprovalRequestContract } from "./execution/governance/approvalRequestContract.test";
 import { run as runExecutionGovernanceApprovalRequestConcurrency } from "./execution/governance/approvalRequestConcurrency.test";
 import { run as runExecutionGovernanceApprovalRequestImmutability } from "./execution/governance/approvalRequestImmutability.test";
+import { run as runExecutionGovernanceInvocationStore } from "./execution/governance/invocationStore.test";
 import { run as runExecutionGovernanceTransportCanonicalString } from "./execution/governanceTransport/canonicalString.test";
 import { run as runExecutionGovernanceTransportRootClient } from "./execution/governanceTransport/rootClient.test";
 import { run as runExecutionGovernanceTransportStructuralSecurity } from "./execution/governanceTransport/structuralSecurity.test";
+import { run as runExecutionGovernanceTransportInvocationIdentity } from "./execution/governanceTransport/invocationIdentity.test";
+import { run as runExecutionGovernanceTransportDirectExecutionGateStructural } from "./execution/governanceTransport/directExecutionGateStructural.test";
+import { run as runExecutionGovernanceTransportIntegrationReadRoutingDecision } from "./execution/governanceTransport/integrationReadRoutingDecision.test";
 import { run as runRunsViewGovernanceApprovalInbox } from "./runsView/governanceApprovalInbox.test";
 import { run as runRunsViewPermissionManagementProjection } from "./runsView/permissionManagementProjection.test";
 import { run as runRunsViewCoverageManagementProjection } from "./runsView/coverageManagementProjection.test";
@@ -484,9 +488,13 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/governance/approvalRequestContract", run: runExecutionGovernanceApprovalRequestContract },
   { name: "execution/governance/approvalRequestConcurrency", run: runExecutionGovernanceApprovalRequestConcurrency },
   { name: "execution/governance/approvalRequestImmutability", run: runExecutionGovernanceApprovalRequestImmutability },
+  { name: "execution/governance/invocationStore", run: runExecutionGovernanceInvocationStore },
   { name: "execution/governanceTransport/canonicalString", run: runExecutionGovernanceTransportCanonicalString },
   { name: "execution/governanceTransport/rootClient", run: runExecutionGovernanceTransportRootClient },
   { name: "execution/governanceTransport/structuralSecurity", run: runExecutionGovernanceTransportStructuralSecurity },
+  { name: "execution/governanceTransport/invocationIdentity", run: runExecutionGovernanceTransportInvocationIdentity },
+  { name: "execution/governanceTransport/directExecutionGateStructural", run: runExecutionGovernanceTransportDirectExecutionGateStructural },
+  { name: "execution/governanceTransport/integrationReadRoutingDecision", run: runExecutionGovernanceTransportIntegrationReadRoutingDecision },
   { name: "runsView/governanceApprovalInbox", run: runRunsViewGovernanceApprovalInbox },
   { name: "runsView/permissionManagementProjection", run: runRunsViewPermissionManagementProjection },
   { name: "runsView/coverageManagementProjection", run: runRunsViewCoverageManagementProjection },

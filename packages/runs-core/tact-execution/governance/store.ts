@@ -54,10 +54,34 @@ function normalizeInstantForComparison(value: string | null | undefined): string
   if (Number.isNaN(timestamp)) throw new Error("invalid timestamp reached governance idempotency comparison");
   return new Date(timestamp).toISOString();
 }
-const invocationComparablePayload = (i: GovernanceInvocationInput) => ({
-  ...invocationPayload(i),
-  attempted_at: normalizeInstantForComparison(i.attemptedAt),
-});
+// SOR-138 Slice 3A-2 correction: attemptedAt is deliberately EXCLUDED from
+// this comparison (it is the one field dropped from invocationPayload()'s
+// full set here, rather than normalized like the instant fields below).
+// attemptedAt is informational metadata captured from whichever request
+// first successfully claimed this invocationId — it is NOT part of
+// invocation identity and is NOT used by Permission Registry rule matching
+// or governance verdict computation (repository-audited fact, not an
+// assumption). A genuine retry of the same logical execution attempt
+// (same invocationId, same userId/organizationId/workspaceId/workId/
+// connectionId/actorKind/actorId/agentId/onBehalfOfActorKind/
+// onBehalfOfActorId/actionCategory/operation/resourceType/
+// resourceIdentifier/targetProvider) legitimately carries a different
+// attemptedAt timestamp than the original request did — comparing it would
+// make every such retry an `idempotency_conflict` instead of the intended
+// `already_exists`, which is actually impossible to recover from (the
+// caller cannot change history to make a later wall-clock read match an
+// earlier one). The originally-stored attemptedAt is never overwritten by
+// a retry — createGovernanceInvocation() below only ever INSERTs (never
+// UPDATEs), so a duplicate-PK retry's own attemptedAt value never reaches
+// the table; the function returns the pre-existing row's own original
+// value. Do NOT describe attemptedAt as transaction/time/state binding —
+// that remains SOR-164's future, unimplemented scope; this is honest
+// historical metadata only.
+const invocationComparablePayload = (i: GovernanceInvocationInput) => {
+  const { attempted_at: _attemptedAt, ...rest } = invocationPayload(i);
+  void _attemptedAt;
+  return rest;
+};
 const decisionPayload = (d: GovernanceDecisionInput) => ({ id:d.id,user_id:d.userId,invocation_id:d.invocationId,evaluated_at:d.evaluatedAt,actor_kind_snapshot:d.actorKindSnapshot,actor_id_snapshot:d.actorIdSnapshot,agent_id_snapshot:d.agentIdSnapshot,on_behalf_of_actor_kind_snapshot:d.onBehalfOfActorKindSnapshot,on_behalf_of_actor_id_snapshot:d.onBehalfOfActorIdSnapshot,action_category_snapshot:d.actionCategorySnapshot,operation_snapshot:d.operationSnapshot,resource_type_snapshot:d.resourceTypeSnapshot,resource_identifier_snapshot:d.resourceIdentifierSnapshot,target_provider_snapshot:d.targetProviderSnapshot,verdict:d.verdict,reason_code:d.reasonCode,evaluator_version:d.evaluatorVersion,decision_source:d.decisionSource,trust_level_snapshot:d.trustLevelSnapshot,policy_identifier_snapshot:d.policyIdentifierSnapshot,registry_rule_id_snapshot:d.registryRuleIdSnapshot,registry_rule_revision_snapshot:d.registryRuleRevisionSnapshot,runs_permission_snapshot:d.runsPermissionSnapshot,policy_set_fingerprint:d.policySetFingerprint,approval_id:d.approvalId,approval_status:d.approvalStatus,approver_kind:d.approverKind,approver_id:d.approverId,approved_at:d.approvedAt });
 const decisionComparablePayload = (d: GovernanceDecisionInput) => ({
   ...decisionPayload(d),

@@ -46,6 +46,13 @@ import type { SourceReferentSnapshot } from "../tact-referent/types";
 // 依存も生まれない)。
 import type { RuntimeAdapter, RuntimeError } from "../tact-runtime/types";
 import { toRunExternalRefFields } from "../tact-runtime/types";
+// SOR-138 Slice 3A-2: the only import of the Runs governance client this
+// file (or any file) needs. This is a sibling of ./gateway.ts, not a
+// dependency of it — the Composio provider adapter must remain unaware
+// that Runs governance exists at all (see runsGovernance.ts's own header
+// comment on dependency direction). Only the HTTP client/invocationId
+// helper is imported — never packages/runs-core or products/yolna-runs.
+import { callRunsGovernancePreflight, deriveGovernanceInvocationId } from "./runsGovernance";
 
 // =========================
 // TACT Integration — Execution Boundary
@@ -97,6 +104,37 @@ import { toRunExternalRefFields } from "../tact-runtime/types";
 // この境界自身も、Integration Gateway呼び出しの失敗に対して自動retry
 // を一切行わない(1回だけ呼ぶ)。失敗時は既存のRun.status="failed"へ
 // 落とすだけで、新しい"unknown"相当のstatusは追加しない。
+//
+// =========================
+// Runs Governance feature gate (SOR-138 Slice 3A-2)
+// =========================
+//
+// The ONLY governed action in this slice is service==="slack" &&
+// operation==="list_channels" — do not generalize this into "all reads"
+// or "all Slack operations" (absolute condition; a future action needs
+// its own deliberate review, not an accidental widening of this check).
+// Exact string match only: the env var must equal "true" literally for
+// the gate to be enabled; any other value (missing, "1", "TRUE",
+// whitespace, ...) means disabled. When disabled, executeReadIntegrationAction()
+// below takes the exact pre-3A-2 code path — no governance network call,
+// no routing change, no Run lifecycle change.
+export function isRunsGovernanceSlackListChannelsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED === "true";
+}
+
+// Narrow, intentionally not reusable for any other action — see the gate
+// comment above. core/tact-conversation/orchestration.ts's runtime-routing
+// wrapper also calls isRunsGovernanceSlackListChannelsEnabled() directly
+// (it already independently confirms service/operation via
+// isRuntimeEligibleIntegrationAction() before this would ever matter), so
+// this helper only needs to exist for this file's own internal branch.
+function shouldGovernDirectIntegrationAction(action: IntegrationAction): boolean {
+  return (
+    isRunsGovernanceSlackListChannelsEnabled() &&
+    action.service === "slack" &&
+    action.operation === "list_channels"
+  );
+}
 
 export interface ExecuteApprovedIntegrationActionDeps {
 
@@ -142,6 +180,15 @@ export interface ExecuteApprovedIntegrationActionDeps {
   // Run.externalRefへ保存するためだけに使う。Run statusは変更しない。
   attachRunExternalRef: typeof defaultAttachRunExternalRef;
 
+  // SOR-138 Slice 3A-2: DI seam for the Runs governance Preflight HTTP
+  // client — tests inject a fake matching this exact signature so no unit
+  // test ever performs a real HTTP request (this file must not duplicate
+  // runsGovernance.ts's own HMAC/transport logic; it only calls through
+  // this seam). Only consulted for the one governed action
+  // (shouldGovernDirectIntegrationAction() below) — every other action
+  // never reaches this dep.
+  runsGovernancePreflight: typeof callRunsGovernancePreflight;
+
 }
 
 const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
@@ -158,6 +205,7 @@ const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
   reconcileWorkCompletionStatus: defaultReconcileWorkCompletionStatus,
   emitAuditEvent: defaultEmitAuditSafely,
   attachRunExternalRef: defaultAttachRunExternalRef,
+  runsGovernancePreflight: callRunsGovernancePreflight,
 };
 
 // 絶対条件(Phase C2.1a指示、最重要): reconciliation自体が失敗しても、
@@ -416,34 +464,60 @@ interface ExecuteIntegrationActionCoreParams {
   // ——呼び出し元がdispatch時点で既にemit済み)。
   existingRun?: Run;
 
+  // SOR-138 Slice 3A-2: forwarded verbatim to prepareRunForExecution()
+  // below — see that function's own comment on why a pre-computed plan is
+  // trusted rather than re-derived.
+  plan?: RunExecutionPlan;
+
 }
 
-// Fast Port P5c(Step6/Step9切り出し): Task pending state確認・attempt
-// 採番・Task→running遷移・Run作成・run.created emissionという、Run
-// 準備までの共通シーケンス。既存executeIntegrationActionCore()の
-// direct provider dispatch pathと、新設dispatchIntegrationReadToRuntime()
-// (Runtime handoff path)の両方がこの関数を共有する(絶対条件Step6:
-// 既存provider dispatch/Run lifecycle logicを複製しない)。
-interface PrepareRunForExecutionParams {
+// =========================
+// planRunForExecution (SOR-138 Slice 3A-2: Plan / Claim split)
+// =========================
+//
+// Pure PLAN phase, split out of what used to be the start of
+// prepareRunForExecution() below (Fast Port P5c Step6/Step9's original
+// shared sequence) — Task lookup, Task status validation, existing-Run
+// lookup, the "no Run already running" guard, and attempt-number
+// computation. Absolute condition: this function creates no Run, mutates
+// no Task, emits no run.created event, and calls no provider — it only
+// answers "what WOULD the next attempt be, right now, if nothing else
+// claims it first." This is what lets SOR-138 governance ask Runs
+// Preflight about a specific, stable attempt identity BEFORE committing to
+// create that attempt (see executeReadIntegrationAction()'s governed
+// branch) — asking Preflight is itself side-effect-free from TACT's own
+// Work/Task/Run state's point of view, so it must not silently consume an
+// attempt number or create a Run on its own.
+//
+// The actual exclusion authority for two truly concurrent callers planning
+// the same attempt remains exactly where it already was: the DB unique
+// index (idx_tact_runs_task_id_attempt, supabase/migrations/
+// 20260905000000_create_tact_work_tables.sql) enforced at createRun() time
+// in prepareRunForExecution() below — this function does not add a lease,
+// lock, or advisory-lock table, and does not need to, since it never
+// claims anything itself.
+interface RunExecutionPlan {
+  nextAttempt: number;
+}
+
+interface PlanRunForExecutionParams {
   workId: string;
   userId: string;
   accessToken: string;
   taskId: string;
-  connection: Connection;
-  action: IntegrationAction;
   existingRunsForTask?: Run[];
 }
 
-type PrepareRunForExecutionResult =
-  | { ok: true; run: Run }
+type PlanRunForExecutionResult =
+  | { ok: true; plan: RunExecutionPlan }
   | { ok: false; outcome: IntegrationActionExecutionOutcome };
 
-async function prepareRunForExecution(
-  params: PrepareRunForExecutionParams,
+async function planRunForExecution(
+  params: PlanRunForExecutionParams,
   deps: ExecuteApprovedIntegrationActionDeps
-): Promise<PrepareRunForExecutionResult> {
+): Promise<PlanRunForExecutionResult> {
 
-  const { workId, userId, accessToken, taskId, connection, action } = params;
+  const { workId, userId, accessToken, taskId } = params;
 
   // Architecture Migration Phase C2.1c-a-fix(絶対条件、read/write共通):
   // 新規external executionを開始できるTask stateはpending、または
@@ -486,6 +560,71 @@ async function prepareRunForExecution(
   // 内容は一切変更せず、core/tact-work/taskRunReconciliation.tsの
   // 独立したtested pure functionへ切り出しただけ(挙動変更なし)。
   const nextAttempt = computeNextAttemptNumber(existingRuns);
+
+  return { ok: true, plan: { nextAttempt } };
+
+}
+
+// Fast Port P5c(Step6/Step9切り出し): Task pending state確認・attempt
+// 採番・Task→running遷移・Run作成・run.created emissionという、Run
+// 準備までの共通シーケンス。既存executeIntegrationActionCore()の
+// direct provider dispatch pathと、新設dispatchIntegrationReadToRuntime()
+// (Runtime handoff path)の両方がこの関数を共有する(絶対条件Step6:
+// 既存provider dispatch/Run lifecycle logicを複製しない)。
+//
+// SOR-138 Slice 3A-2: accepts an optional pre-computed `plan` (from
+// planRunForExecution() above). When given, this function trusts that
+// plan's nextAttempt verbatim instead of re-planning — it does NOT call
+// listTasksForWork()/listRunsForTask() again and does NOT silently
+// recompute a different attempt number. This is what lets governed
+// execution reuse the EXACT attempt identity Runs Preflight was asked
+// about; re-planning here could derive attempt+1 (e.g. if another caller
+// claimed the planned attempt in between) and claim a DIFFERENT attempt
+// than the one just governed — see executeReadIntegrationAction()'s
+// governed branch. Every other caller (write path, Runtime dispatch path)
+// omits `plan` and this function behaves exactly as it always has.
+interface PrepareRunForExecutionParams {
+  workId: string;
+  userId: string;
+  accessToken: string;
+  taskId: string;
+  connection: Connection;
+  action: IntegrationAction;
+  existingRunsForTask?: Run[];
+  plan?: RunExecutionPlan;
+}
+
+type PrepareRunForExecutionResult =
+  | { ok: true; run: Run }
+  | { ok: false; outcome: IntegrationActionExecutionOutcome };
+
+async function prepareRunForExecution(
+  params: PrepareRunForExecutionParams,
+  deps: ExecuteApprovedIntegrationActionDeps
+): Promise<PrepareRunForExecutionResult> {
+
+  const { workId, userId, accessToken, taskId, connection, action } = params;
+
+  let nextAttempt: number;
+
+  if (params.plan) {
+
+    nextAttempt = params.plan.nextAttempt;
+
+  } else {
+
+    const planned = await planRunForExecution(
+      { workId, userId, accessToken, taskId, existingRunsForTask: params.existingRunsForTask },
+      deps
+    );
+
+    if (!planned.ok) {
+      return planned;
+    }
+
+    nextAttempt = planned.plan.nextAttempt;
+
+  }
 
   // DUR-P1: 既存はTask→running projection更新(updateTaskStatus)を
   // 先に行い、その後でcreateRun()(atomic claim)を行っていた。この
@@ -576,7 +715,7 @@ async function executeIntegrationActionCore(
   } else {
 
     const prepared = await prepareRunForExecution(
-      { workId, userId, accessToken, taskId, connection, action, existingRunsForTask: params.existingRunsForTask },
+      { workId, userId, accessToken, taskId, connection, action, existingRunsForTask: params.existingRunsForTask, plan: params.plan },
       deps
     );
 
@@ -1119,6 +1258,130 @@ async function validateReadExecutionPreconditions(
 
 }
 
+// SOR-138 Slice 3A-2 (pre-commit correction, Section 3/4/5 of the review):
+// Runs Preflight is the one network round-trip this governed branch waits
+// on. TACT's own local Work/Connection/Task/Run state is mutable and can
+// change underneath that wait (the Task is cancelled/completed elsewhere,
+// the Work stops running, the Connection is revoked, a concurrent caller
+// claims a Run, or the planned attempt is no longer the next one). This
+// function re-reads that state AFTER Preflight returns ALLOW and BEFORE
+// createRun() is ever called — it never re-plans (never calls
+// planRunForExecution() again), never recomputes a different attempt, and
+// never re-asks Preflight. It only confirms the exact state
+// planRunForExecution() originally observed still holds; any drift fails
+// closed into an existing IntegrationActionExecutionOutcome status (never a
+// new governance-specific one), before any Run/Task/provider mutation.
+async function revalidateGovernedExecutionState(
+  params: {
+    workId: string;
+    userId: string;
+    accessToken: string;
+    taskId: string;
+    connectionId: string;
+    plannedNextAttempt: number;
+  },
+  deps: ExecuteApprovedIntegrationActionDeps
+): Promise<
+  | { ok: true; connection: Connection; existingRuns: Run[] }
+  | { ok: false; outcome: IntegrationActionExecutionOutcome }
+> {
+
+  const { workId, userId, accessToken, taskId, connectionId, plannedNextAttempt } = params;
+
+  const work = await deps.getWork(workId, userId, accessToken);
+
+  if (!work) {
+    return { ok: false, outcome: { status: "not_found" } };
+  }
+
+  if (work.status !== "running") {
+    return { ok: false, outcome: { status: "work_not_runnable", workStatus: work.status } };
+  }
+
+  // Re-validates the SAME connectionId Preflight was told about (this
+  // function's own caller passes preconditions.connection.id verbatim —
+  // never a re-derived id) — active/ownership can change in the Preflight
+  // wait just like any other local state.
+  const connectionValidation = await validateConnectionForExecution(connectionId, userId, accessToken, deps);
+
+  if (!connectionValidation.ok) {
+    return { ok: false, outcome: connectionValidation.outcome };
+  }
+
+  const tasksForWork = await deps.listTasksForWork(workId, userId, accessToken);
+  const task = tasksForWork.find((t) => t.id === taskId);
+
+  if (!task) {
+    return { ok: false, outcome: { status: "not_found" } };
+  }
+
+  if (task.status !== "pending" && task.status !== "waiting_for_retry") {
+    return { ok: false, outcome: { status: "task_not_executable", taskStatus: task.status } };
+  }
+
+  const existingRuns = await deps.listRunsForTask(workId, userId, accessToken, taskId);
+
+  if (existingRuns.some((run) => run.status === "running")) {
+    return { ok: false, outcome: { status: "task_not_executable", taskStatus: "running" } };
+  }
+
+  // The planned attempt must still be exactly the next one. If it is not
+  // (e.g. a concurrent caller's Run landed during the Preflight wait), this
+  // ALLOW no longer corresponds to the current attempt state — fail closed
+  // rather than silently claiming a different attempt under the old
+  // decision. The existing DB unique index (idx_tact_runs_task_id_attempt)
+  // remains the final concurrency boundary for two callers racing on the
+  // SAME attempt; this check only catches the case where this function can
+  // already see the attempt has moved on.
+  if (computeNextAttemptNumber(existingRuns) !== plannedNextAttempt) {
+    return { ok: false, outcome: { status: "task_not_executable", taskStatus: task.status } };
+  }
+
+  return { ok: true, connection: connectionValidation.connection, existingRuns };
+
+}
+
+// SOR-138 Slice 3A-2: the governed sequence below is the first real
+// Runs-mediated execution path. It fires ONLY for
+// shouldGovernDirectIntegrationAction(action) (today: slack.list_channels,
+// behind RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED==="true" exactly) and
+// only AFTER the existing preconditions (local policy recheck + emitted
+// policy.evaluated, Work ownership/status, Connection ownership/active)
+// have already passed — those are unconditional and unchanged for every
+// action, governed or not.
+//
+// Enforced order for the governed branch (do not reorder):
+//   1-4. validateReadExecutionPreconditions() above (existing, unchanged)
+//   5. planRunForExecution() — plan only, no Run created yet
+//   6. deriveGovernanceInvocationId() — identity for THIS planned attempt
+//   7. deps.runsGovernancePreflight() — the only new network call
+//   8. require status==="decided" && response.verdict==="ALLOW"; anything
+//      else blocks (DENY/UNKNOWN/APPROVAL_REQUIRED — even if
+//      approval.status==="approved", see below — unconfigured/timeout/
+//      network error/bad HTTP/409/malformed/invalid-shape, all alike)
+//   8.5. revalidateGovernedExecutionState() — re-reads Work/Connection/
+//        Task/Runs AFTER the Preflight wait and BEFORE createRun(); any
+//        drift fails closed (see that function's own header comment)
+//   9. executeIntegrationActionCore() reusing the SAME plan — createRun()
+//      claims EXACTLY the attempt Preflight was asked about, never a
+//      silently-reallocated attempt+1
+//   10. the existing provider dispatch path, unchanged
+//
+// Absolute condition (Human Owner instruction, "APPROVAL_REQUIRED"): even
+// a response shaped {verdict:"APPROVAL_REQUIRED", approval:{status:
+// "approved"}} does NOT execute. This slice has no transaction-bound
+// execution grant — a recorded human decision is not one (SOR-160/SOR-164/
+// SOR-169 remain the owners of that future work). The verdict check below
+// is the single, exhaustive gate; there is no secondary path that inspects
+// `approval` to override it.
+//
+// On any block: zero Run created, zero Task mutation, zero provider call —
+// structurally guaranteed by returning before executeIntegrationActionCore()
+// is ever reached, not by a status flag executeIntegrationActionCore()
+// itself has to honor. The existing local policy.evaluated event (emitted
+// by validateReadExecutionPreconditions(), which runs before any of this)
+// is truthful and unrelated — Yolna's own local policy is checked before
+// Runs is ever asked, so that event exists regardless of the Runs verdict.
 export async function executeReadIntegrationAction(
   params: ExecuteReadIntegrationActionParams,
   deps: ExecuteApprovedIntegrationActionDeps = defaultDeps
@@ -1135,14 +1398,120 @@ export async function executeReadIntegrationAction(
     return preconditions.outcome;
   }
 
+  if (!shouldGovernDirectIntegrationAction(action)) {
+
+    return executeIntegrationActionCore(
+      {
+        workId,
+        userId,
+        accessToken,
+        taskId,
+        connection: preconditions.connection,
+        action,
+        // approvalIdなし(read実行はApprovalを一切経由しない、絶対条件)。
+      },
+      deps
+    );
+
+  }
+
+  // 5. Plan only — no Run created, no Task mutated, no provider called.
+  const planned = await planRunForExecution(
+    { workId, userId, accessToken, taskId },
+    deps
+  );
+
+  if (!planned.ok) {
+    return planned.outcome;
+  }
+
+  // 6. Deterministic identity for exactly this planned attempt.
+  const invocationId = deriveGovernanceInvocationId({
+    userId,
+    workId,
+    taskId,
+    nextAttempt: planned.plan.nextAttempt,
+    connectionId: preconditions.connection.id,
+    service: action.service,
+    operation: action.operation,
+  });
+
+  // 7. The only new network call in this slice. Never carries
+  // providerConnectionRef, any credential, or raw provider payload — only
+  // the canonical governance metadata below (Section 14/15 of the SOR-138
+  // Slice 3A-2 instructions this implements).
+  const preflightResult = await deps.runsGovernancePreflight({
+    onBehalfOfUserId: userId,
+    request: {
+      invocationId,
+      workId,
+      connectionId: preconditions.connection.id,
+      actorKind: "ai_agent",
+      actorId: null,
+      agentId: null,
+      onBehalfOfActorKind: null,
+      onBehalfOfActorId: null,
+      actionCategory: "read",
+      operation: action.operation,
+      resourceType: null,
+      resourceIdentifier: null,
+      targetProvider: "slack",
+      attemptedAt: new Date().toISOString(),
+      // organizationId/workspaceId deliberately omitted — no already-
+      // existing trusted canonical value is available here without
+      // guessing (absolute condition: never invent one).
+    },
+  });
+
+  // 8. Only a validated, authenticated HTTP 200 decided ALLOW may proceed.
+  // Everything else — DENY, UNKNOWN, APPROVAL_REQUIRED (approved or not),
+  // unconfigured, network error, timeout, non-2xx (including 409), or a
+  // malformed/invalid-shape response — blocks here, before any Run exists.
+  // No policy/HMAC/approval/provider-credential detail is exposed in the
+  // safe internal reason below (it is never shown to an end user as-is —
+  // see core/tact-conversation/orchestration.ts's existing invalid_action
+  // collapsing).
+  if (preflightResult.status !== "decided" || preflightResult.response.verdict !== "ALLOW") {
+    return {
+      status: "invalid_action",
+      reason: "Runs governance preflight did not allow this action",
+    };
+  }
+
+  // 8.5. Re-validate mutable local state across the Preflight network wait
+  // — see revalidateGovernedExecutionState()'s own header comment. On any
+  // drift, stop here: zero Run created, zero Task mutation, zero provider
+  // call (structurally guaranteed by returning before
+  // executeIntegrationActionCore() is ever reached).
+  const revalidation = await revalidateGovernedExecutionState(
+    {
+      workId,
+      userId,
+      accessToken,
+      taskId,
+      connectionId: preconditions.connection.id,
+      plannedNextAttempt: planned.plan.nextAttempt,
+    },
+    deps
+  );
+
+  if (!revalidation.ok) {
+    return revalidation.outcome;
+  }
+
+  // 9-10. ALLOW + state unchanged: claim EXACTLY the planned attempt
+  // (reusing `planned.plan`, never re-deriving a new one) and continue the
+  // existing provider path.
   return executeIntegrationActionCore(
     {
       workId,
       userId,
       accessToken,
       taskId,
-      connection: preconditions.connection,
+      connection: revalidation.connection,
       action,
+      plan: planned.plan,
+      existingRunsForTask: revalidation.existingRuns,
       // approvalIdなし(read実行はApprovalを一切経由しない、絶対条件)。
     },
     deps

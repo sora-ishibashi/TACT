@@ -1,13 +1,45 @@
 // =========================
-// Root Yolna — Runs Governance HTTP Client (SOR-138 Slice 3A-1)
+// Root Yolna — Runs Governance HTTP Client (SOR-138 Slice 3A-1/3A-2)
 // =========================
 //
-// Transport/authentication foundation ONLY. This file is not called from
-// anywhere in the live Integration execution path yet (that is SOR-138
-// Slice 3A-2's job, wiring it into core/tact-integration/execution.ts's
-// validateReadExecutionPreconditions). Until then this module is dead,
-// unreferenced production infrastructure except through its own tests and
-// the standalone Runs HTTP routes it talks to.
+// SOR-138 Slice 3A-1 landed this as a transport/authentication foundation
+// with no live caller. SOR-138 Slice 3A-2 wires callRunsGovernancePreflight()
+// into core/tact-integration/execution.ts's executeReadIntegrationAction()
+// for exactly one governed action (slack.list_channels, behind
+// RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED) — see execution.ts's own
+// header comment for the enforced call sequence. callRunsGovernanceComplete()
+// remains unwired (Slice 3A-3).
+//
+// Operator reference (root-side), authoritative until a dedicated root
+// env/operator doc exists (no equivalent of products/yolna-runs/docs/
+// vercel-deployment.md exists on the root Yolna side yet — flagged as an
+// open Human Owner decision in both the Slice 3A-1 and 3A-2 reviews):
+//
+//   RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED — off by default (only the
+//     exact string "true" enables it; anything else, including unset,
+//     means disabled and preserves pre-3A-2 behavior exactly). Today this
+//     is the ONLY governed action — enabling it does not govern any other
+//     Slack operation or any other service.
+//   RUNS_GOVERNANCE_BASE_URL / RUNS_GOVERNANCE_CALLER_ID /
+//     RUNS_GOVERNANCE_KEY_ID / RUNS_GOVERNANCE_HMAC_KEY — see
+//     loadRunsGovernanceConfig()'s own comment below: base URL must be
+//     HTTPS for any non-loopback host (HTTP permitted only for exact
+//     localhost/127.0.0.1/[::1]); missing or invalid configuration while
+//     the gate is ON fails closed (the action is blocked, never silently
+//     allowed or silently routed around).
+//   While the gate is ON, core/tact-conversation/orchestration.ts's
+//     executeReadIntegrationActionWithRuntimeRouting() temporarily forces
+//     slack.list_channels through the direct execution path instead of
+//     Trigger.dev routing, even if Trigger.dev routing is itself enabled
+//     and correctly configured — this is intentional and temporary until
+//     Slice 3B propagates invocationId/decisionId through the runtime path.
+//   Governance HMAC keys are environment-scoped (see the "Correction"
+//     comment on GovernanceSignatureCanonicalInput.pathname in
+//     @tact/execution-contract) — never reuse the same
+//     RUNS_GOVERNANCE_HMAC_KEY value across Production/Staging/Preview/
+//     Development.
+//   No secret VALUES belong in any documentation, including this comment —
+//     only variable names and behavior are described here.
 //
 // Scope boundary (absolute condition, SOR-135): this file may import
 // @tact/execution-contract and Node crypto/fetch only. It must NOT import
@@ -480,5 +512,79 @@ export async function callRunsGovernanceComplete(
   }
 
   return { status: "completed", result: body.result };
+
+}
+
+// =========================
+// Governance execution-attempt identity (SOR-138 Slice 3A-2)
+// =========================
+//
+// Deterministic identity for a single governed execution ATTEMPT — the
+// value a caller uses as PreflightRequest.invocationId. Same exact attempt
+// identity (same user/work/task/attempt-number/connection/action) always
+// derives the same invocationId; a genuinely new attempt (a new nextAttempt
+// number, because a real Run now exists for the previous attempt) derives
+// a new one. This is intentional: Preflight's own idempotency is keyed on
+// invocationId (see packages/runs-core/tact-execution/governance/
+// contract.ts), so reusing the identical identity across a crash-and-retry
+// of the SAME attempt (no Run claimed yet) is what makes that retry safe
+// and idempotent, while a genuinely new attempt must be re-evaluated
+// against current policy, not silently inherit a stale decision.
+//
+// Format note (do not mislabel this): this is NOT UUIDv5 (RFC 4122 §4.3,
+// which hashes a namespace UUID + name with SHA-1 and sets version nibble
+// 5). This is a custom, SHA-256-based, version-8 "UUID-shaped" identifier
+// (RFC 4122 §4.4 reserves version 8 for implementation-specific formats)
+// — a fixed-order JSON array is hashed with SHA-256, the first 16 digest
+// bytes become the UUID's 128 bits, and only the version/variant nibbles
+// are overwritten to produce a syntactically valid, RFC-4122-shaped
+// identifier string. Call this "custom deterministic UUIDv8-style Runs
+// Governance Invocation identity" — never UUIDv5 — in any future reference
+// to this function.
+
+export interface GovernanceInvocationIdentityInput {
+  userId: string;
+  workId: string;
+  taskId: string;
+  nextAttempt: number;
+  connectionId: string;
+  service: string;
+  operation: string;
+}
+
+const GOVERNANCE_INVOCATION_ID_FORMAT_TAG = "tact-governance-invocation-v1";
+
+export function deriveGovernanceInvocationId(input: GovernanceInvocationIdentityInput): string {
+
+  // A fixed-order JSON array, not an object: JSON.stringify's per-element
+  // quoting/escaping already makes each field unambiguous relative to its
+  // neighbors (no hand-rolled delimiter that a field value could itself
+  // contain), and an array has no key-ordering question to get wrong in
+  // the first place — unlike an object, whose otherwise-stable V8
+  // insertion-order behavior is not something this identity should have
+  // to depend on being preserved forever.
+  const canonical = JSON.stringify([
+    GOVERNANCE_INVOCATION_ID_FORMAT_TAG,
+    input.userId,
+    input.workId,
+    input.taskId,
+    input.nextAttempt,
+    input.connectionId,
+    input.service,
+    input.operation,
+  ]);
+
+  const digest = createHash("sha256").update(canonical, "utf8").digest();
+  const bytes = Buffer.from(digest.subarray(0, 16));
+
+  // RFC 4122 version nibble = 8 (implementation-specific, §4.4) — NOT 5.
+  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  // RFC 4122 variant bits (10xx), same as every other deterministic id in
+  // this codebase (see governance/contract.ts's deterministicFirstDecisionId()).
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = bytes.toString("hex");
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 
 }
