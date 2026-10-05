@@ -259,6 +259,98 @@ export async function run(): Promise<{ pass: number; fail: number }> {
 
   });
 
+  // =========================
+  // follow-up fix: snapshotAt must be captured BEFORE the canonical
+  // listConnectionsForUser() read, not after — otherwise a producer call
+  // whose DB read is slow can finish (and stamp now()) after a later,
+  // faster producer call for the same user, handing the OLDER content a
+  // NEWER snapshotAt and letting it defeat Runs' own stale-snapshot guard
+  // (p_snapshot_at <= last_snapshot_at -> stale_ignored).
+  // =========================
+  await withEnv({ RUNS_PROJECTION_BASE_URL: "https://runs.example.com", RUNS_PROJECTION_INGESTION_TOKEN: "test-token" }, async () => {
+
+    const callOrder: string[] = [];
+
+    const deps: SendConnectionProjectionSnapshotDeps = {
+      listConnectionsForUser: async () => { callOrder.push("listConnectionsForUser"); return [makeConnection()]; },
+      now: () => { callOrder.push("now"); return "2027-02-01T00:00:00.000Z"; },
+      fetchImpl: (async () => new Response("{}", { status: 200 })) as typeof fetch,
+    };
+
+    await sendConnectionProjectionSnapshotBestEffort({ userId: "user-1", accessToken: "token-1" }, deps);
+
+    results.push(check(
+      "[producer] now() (snapshotAt capture) is called BEFORE listConnectionsForUser(), not after",
+      callOrder[0] === "now" && callOrder[1] === "listConnectionsForUser"
+    ));
+
+  });
+
+  // Causal ordering under concurrency: producer A starts first but its
+  // canonical DB read is slow; producer B starts later (after A already
+  // began) and its read finishes first. A's snapshotAt must still be
+  // strictly earlier than B's, because snapshotAt reflects START order
+  // (when the canonical read began, i.e. the content's actual freshness
+  // floor), never COMPLETION order.
+  //
+  // Managed directly rather than via withEnv() above: withEnv()'s
+  // try/finally restores process.env synchronously right after invoking
+  // its (async) callback, i.e. as soon as that callback suspends on its
+  // FIRST await — not once it actually settles. That is harmless for the
+  // other blocks in this file (their awaits resolve promptly), but this
+  // block spans real setTimeout-based delays, so env would be torn down
+  // mid-flight (producer B would see an unconfigured env and skip).
+  {
+    const originalBaseUrl = process.env.RUNS_PROJECTION_BASE_URL;
+    const originalToken = process.env.RUNS_PROJECTION_INGESTION_TOKEN;
+    process.env.RUNS_PROJECTION_BASE_URL = "https://runs.example.com";
+    process.env.RUNS_PROJECTION_INGESTION_TOKEN = "test-token";
+
+    try {
+
+      const capturedSnapshotAts: Record<string, string> = {};
+
+      function makeDeps(label: "A" | "B", resolveListAfterMs: number): SendConnectionProjectionSnapshotDeps {
+        return {
+          listConnectionsForUser: async () => {
+            await new Promise((resolve) => setTimeout(resolve, resolveListAfterMs));
+            return [makeConnection()];
+          },
+          now: () => {
+            const at = new Date().toISOString();
+            capturedSnapshotAts[label] = at;
+            return at;
+          },
+          fetchImpl: (async () => new Response("{}", { status: 200 })) as typeof fetch,
+        };
+      }
+
+      // A starts first, with a slow DB read.
+      const aPromise = sendConnectionProjectionSnapshotBestEffort({ userId: "user-1", accessToken: "token-1" }, makeDeps("A", 30));
+
+      // B starts after A has already begun (and already captured its
+      // snapshotAt), but B's own read is fast — B finishes first.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const bPromise = sendConnectionProjectionSnapshotBestEffort({ userId: "user-1", accessToken: "token-1" }, makeDeps("B", 0));
+
+      await Promise.all([aPromise, bPromise]);
+
+      const snapshotAtA = mustHaveCaptured<string>(capturedSnapshotAts.A ?? null, "[causal order] producer A snapshotAt");
+      const snapshotAtB = mustHaveCaptured<string>(capturedSnapshotAts.B ?? null, "[causal order] producer B snapshotAt");
+
+      results.push(check(
+        "[producer] A (started first, slow read, finishes LAST) still has an EARLIER snapshotAt than B (started later, fast read, finishes FIRST)",
+        snapshotAtA < snapshotAtB
+      ));
+
+    } finally {
+      if (originalBaseUrl === undefined) delete process.env.RUNS_PROJECTION_BASE_URL;
+      else process.env.RUNS_PROJECTION_BASE_URL = originalBaseUrl;
+      if (originalToken === undefined) delete process.env.RUNS_PROJECTION_INGESTION_TOKEN;
+      else process.env.RUNS_PROJECTION_INGESTION_TOKEN = originalToken;
+    }
+  }
+
   return summarize("integration/connectionProjectionProducer", results);
 
 }

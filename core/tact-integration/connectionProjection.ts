@@ -118,6 +118,18 @@ export async function sendConnectionProjectionSnapshotBestEffort(
 
   }
 
+  // SOR-212(follow-up fix、絶対条件): snapshotAtはcanonical list read
+  // (listConnectionsForUser())より前に確定させる——Runs側のstale
+  // snapshot guard(p_snapshot_at <= last_snapshot_atならstale_ignored)
+  // は「snapshotAtの大小 = 内容の新しさ」を前提にしている。read後に
+  // now()を呼ぶと、DB readが遅延した古いproducer呼び出しが、より新しい
+  // canonical operationの後に完了した場合、古い内容なのに新しい
+  // snapshotAtを持ってしまい、そのguardを突破して新しいsnapshotを
+  // 古い内容で上書きできてしまう。読み取り開始前の時刻を使うことで、
+  // snapshotAtの順序が実際のcanonical読み取り開始順序と一致する
+  // (読み取り完了順序ではない)ようにする。
+  const snapshotAt = deps.now();
+
   let connections: Connection[];
 
   try {
@@ -138,7 +150,7 @@ export async function sendConnectionProjectionSnapshotBestEffort(
 
   const snapshot: ConnectionProjectionSnapshotInput = {
     userId: params.userId,
-    snapshotAt: deps.now(),
+    snapshotAt,
     connections: connections.map(toConnectionProjectionItem),
   };
 
