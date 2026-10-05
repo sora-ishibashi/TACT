@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   createIntegrationConnectionLink,
   listConnectionsForUser,
+  sendConnectionProjectionSnapshotBestEffort,
 } from "@/core/tact-integration";
 import type { Connection } from "@/core/tact-integration";
 
@@ -221,6 +222,14 @@ export async function POST(
       );
 
     }
+
+    // SOR-212(section9A): best-effort, never affects this response —
+    // snapshot pending connections too (not just active ones), full list
+    // re-read inside sendConnectionProjectionSnapshotBestEffort() itself.
+    await sendConnectionProjectionSnapshotBestEffort({
+      userId: authenticatedUserId,
+      accessToken,
+    });
 
     return NextResponse.json({
       success: true,

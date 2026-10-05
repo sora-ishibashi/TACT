@@ -22,6 +22,7 @@
 //   /api/tact/runs/work/[workId]                        (route)
 //   /api/tact/runs/ingest/work                          (route, SOR-135 Phase 4A)
 //   /api/tact/runs/ingest/conversation-link              (route, SOR-135 Phase 4A)
+//   /api/tact/runs/ingest/connections                    (route, SOR-212)
 //   /api/tact/runs/coverage                              (route, SOR-136)
 //   /api/tact/runs/permission-management                 (route, SOR-187)
 //
@@ -50,6 +51,7 @@ const ALLOWED_ROUTES = new Set([
   "/api/tact/runs/ingest/work",
   "/api/tact/runs/ingest/conversation-link",
   "/api/tact/runs/ingest/execution",
+  "/api/tact/runs/ingest/connections",
   "/api/tact/runs/coverage",
   "/api/tact/runs/permission-management",
 ]);

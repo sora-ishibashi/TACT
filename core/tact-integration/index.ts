@@ -41,3 +41,10 @@ export * from "./capability";
 // 本体。app/api/tact/connections/配下のAPI Routeだけがこのexportを
 // 使う想定(既存executeApprovedIntegrationAction()等と同じ配線パターン)。
 export * from "./provisioning";
+// SOR-212: Connection Projection Producer(sendConnectionProjectionSnapshotBestEffort()、
+// Yolna -> Runsのbest-effort full-snapshot送信)。app/api/tact/
+// connections/配下の3 route(create/confirm/disconnect)が、canonical
+// provisioning操作の成功後にだけ呼ぶ想定——provisioning.ts自身や
+// provider adapter/core/tact-integration/connection.tsのstore functions
+// からは一切呼ばない(絶対条件、connectionProjection.tsヘッダー参照)。
+export * from "./connectionProjection";

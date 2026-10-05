@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { refreshIntegrationConnectionStatus } from "@/core/tact-integration";
+import {
+  refreshIntegrationConnectionStatus,
+  sendConnectionProjectionSnapshotBestEffort,
+} from "@/core/tact-integration";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
@@ -101,6 +104,17 @@ export async function POST(
       );
 
     }
+
+    // SOR-212(section9B、絶対条件): outcome.connectionだけをsnapshot
+    // しない——finalizeConnectionReplacement()がこのrefresh内部で古い
+    // activeな兄弟Connectionをrevokedへ進める可能性があるため、
+    // sendConnectionProjectionSnapshotBestEffort()自身がこの時点の
+    // FULL LISTを再取得する(new active + old revokedの両方を同じ
+    // snapshotへ含めるため)。best-effort、この応答には影響しない。
+    await sendConnectionProjectionSnapshotBestEffort({
+      userId: authenticatedUserId,
+      accessToken,
+    });
 
     // 絶対条件(Connected Account IDを露出しない): providerConnectionRef
     // をレスポンスへ含めない、canonical statusのみ返す。

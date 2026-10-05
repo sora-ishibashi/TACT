@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { disconnectIntegrationConnection } from "@/core/tact-integration";
+import {
+  disconnectIntegrationConnection,
+  sendConnectionProjectionSnapshotBestEffort,
+  type DisconnectIntegrationConnectionOutcome,
+} from "@/core/tact-integration";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
@@ -35,6 +39,18 @@ function unauthorizedResponse() {
     }
   );
 
+}
+
+// SOR-212(fix#3, repair path, 純粋関数・DI不要): disconnect
+// Outcome.statusのうち、projection snapshotをbest-effortで再送する
+// べき値を判定する。"unsupported_service"だけが対象外——
+// "disconnected"(今回revoke)・"not_connected"(既にcanonical側で
+// 解除済み)の両方で再送する。理由はこのfileのPOST内コメント参照
+// (projection側のnetwork failureをdisconnect retryで自己修復させる)。
+export function shouldSendDisconnectProjectionSnapshot(
+  status: DisconnectIntegrationConnectionOutcome["status"]
+): boolean {
+  return status !== "unsupported_service";
 }
 
 export type ParsedDisconnectRequestBody =
@@ -110,6 +126,20 @@ export async function POST(
         }
       );
 
+    }
+
+    // SOR-212(fix#3, repair path): "disconnected"(今回revokeが起きた)
+    // だけでなく"not_connected"(既にcanonical側では解除済み)でも
+    // snapshotをbest-effortで再送する。理由——projection送信がnetwork
+    // failureで失敗した場合、Runsのprojectionにはstaleなactiveなど
+    // 古いsnapshotが残り得る。userがdisconnectをretryした時点では
+    // canonicalは既に"not_connected"を返すため、ここをスキップすると
+    // そのstale projectionが永久に自己修復できない。
+    if (shouldSendDisconnectProjectionSnapshot(outcome.status)) {
+      await sendConnectionProjectionSnapshotBestEffort({
+        userId: authenticatedUserId,
+        accessToken,
+      });
     }
 
     // "not_connected"も"disconnected"も、呼び出し元(UI)から見れば
