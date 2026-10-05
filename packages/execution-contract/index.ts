@@ -464,3 +464,141 @@ export interface CompleteResult {
   reason?: string;
 
 }
+
+// =========================
+// Connection Projection Contract (SOR-212)
+// =========================
+//
+// The write/read-side counterpart, for Connection, to
+// WorkProjectionWriter/WorkProjectionRepository above — but a FULL
+// SNAPSHOT projection, not an event-only upsert, for a reason specific to
+// Connection: a projection table that has never received anything and a
+// projection table whose canonical source genuinely has zero Connections
+// must be distinguishable from each other. An event-only upsert stream
+// cannot express "I checked, and there are truly none" — only a full
+// snapshot (plus an explicit "has at least one snapshot ever completed"
+// marker, see ConnectionProjectionSnapshotState below) can. This is the
+// same "Never Guess Rule" this package applies everywhere else, applied to
+// the read-side's own initialization state rather than to a single field.
+//
+// Canonical source: root Yolna's core/tact-integration/connection.ts
+// (Connection, core/tact-integration/types.ts) and its tact_connections
+// table. Runs (both the embedded app/api/tact/runs/** under the root app
+// and the standalone products/yolna-runs deployment) must never import
+// core/tact-integration or query tact_connections directly — this contract
+// is the only sanctioned crossing point, exactly like the Work/
+// ConversationLink contract above.
+//
+// Absolute condition — FORBIDDEN fields (never add any of these to any
+// type in this section; doing so is a visible, reviewable change to this
+// file, not a silent runtime decision, same discipline as the rest of this
+// file):
+//   providerConnectionRef, metadata, providerStatusRaw, token,
+//   accessToken, refreshToken, credential, secret, redirectUrl, and any
+//   Composio Connected Account ID. None of these ever cross this contract
+//   in either direction.
+
+// Mirrors core/tact-integration/types.ts's ConnectionStatus exactly.
+// Declared independently here (this package's own established
+// convention — see e.g. this file's actor/action/provider vocabulary
+// comments above) rather than imported, so this package keeps zero
+// runtime/type dependency on root Yolna's source tree.
+export type ConnectionProjectionStatus = "pending" | "active" | "failed" | "revoked";
+
+export const CONNECTION_PROJECTION_STATUSES: readonly ConnectionProjectionStatus[] = [
+  "pending",
+  "active",
+  "failed",
+  "revoked",
+];
+
+// One Connection, reduced to the minimum shape Runs may ever see. `service`
+// and `provider` are plain strings (not imported closed unions), the same
+// "Runs Core stays Yolna-vocabulary-free" reasoning as WorkReference.status
+// above — a reader renders an unrecognized value as itself, never guesses
+// or throws.
+export interface ConnectionProjectionItem {
+
+  // = canonical Connection.id (root Yolna). Named externalConnectionId
+  // here (not id) for the same reason WorkProjectionUpsertInput uses
+  // externalWorkId — this value is an opaque foreign reference from Runs'
+  // point of view, not a Runs-owned primary key semantic.
+  externalConnectionId: string;
+
+  service: string;
+
+  status: ConnectionProjectionStatus;
+
+  provider: string;
+
+  createdAt: string;
+
+  updatedAt: string;
+
+}
+
+export interface ConnectionProjectionSnapshotInput {
+
+  userId: string;
+
+  // When this snapshot was taken (producer-asserted, server-side — see
+  // core/tact-integration/connectionProjection.ts). Distinct from any
+  // per-row createdAt/updatedAt, which describe the underlying Connection
+  // rows, not the act of snapshotting them.
+  snapshotAt: string;
+
+  // The FULL current list for this user, not a delta. A Connection that
+  // existed in a previous snapshot but is absent here is understood by the
+  // writer to no longer exist in this snapshot (see
+  // ConnectionProjectionWriter.replaceSnapshot's own comment) — but
+  // canonical Connection rows are never physically deleted (status
+  // transitions to "revoked" instead), so in practice this list's size is
+  // monotonically non-decreasing for a healthy producer.
+  connections: ConnectionProjectionItem[];
+
+}
+
+// Absolute condition (this section's whole reason for existing): a reader
+// MUST be able to tell "no snapshot has ever completed for this user" apart
+// from "the latest completed snapshot legitimately contained zero
+// Connections". "unavailable" is the former; "available" is the latter
+// (including the empty-list case) — never derived from
+// `connections.length === 0` alone.
+export type ConnectionProjectionReadState = "unavailable" | "available";
+
+export interface ConnectionProjectionSnapshotState {
+
+  readState: ConnectionProjectionReadState;
+
+  // null when readState === "unavailable". Otherwise the snapshotAt value
+  // from the most recently successfully completed snapshot (see
+  // ConnectionProjectionWriter.replaceSnapshot's ordering guarantee).
+  lastSnapshotAt: string | null;
+
+}
+
+export interface ConnectionProjectionRepository {
+
+  getSnapshotState(userId: string): Promise<ConnectionProjectionSnapshotState>;
+
+  // Only meaningful once getSnapshotState(userId).readState === "available"
+  // — a caller that has not checked readState first must not treat this
+  // return value as authoritative (an implementation may return [] either
+  // way rather than throwing; the caller owns the readState check, exactly
+  // like every other "unknown vs. empty" boundary in this package).
+  listConnectionsForUser(userId: string): Promise<ConnectionProjectionItem[]>;
+
+}
+
+export interface ConnectionProjectionWriter {
+
+  // Full-snapshot replace, not an incremental upsert (see this section's
+  // header comment for why Connection differs from Work/ConversationLink
+  // above). An implementation MUST only advance the readable snapshot
+  // state (what getSnapshotState/listConnectionsForUser report) after the
+  // full replace has itself succeeded — a partially-written snapshot must
+  // never become visible, and a failed snapshot must never retire the
+  // previous successful one (fail-closed, not fail-forward).
+  replaceSnapshot(input: ConnectionProjectionSnapshotInput): Promise<void>;
+
+}

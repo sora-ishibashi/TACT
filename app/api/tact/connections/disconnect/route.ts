@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { disconnectIntegrationConnection } from "@/core/tact-integration";
+import {
+  disconnectIntegrationConnection,
+  sendConnectionProjectionSnapshotBestEffort,
+} from "@/core/tact-integration";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
 
@@ -110,6 +113,17 @@ export async function POST(
         }
       );
 
+    }
+
+    // SOR-212(section9C): statusが実際に変化した(revokeが起きた)場合
+    // のみsnapshotする——"not_connected"(既に解除済み、何も変わって
+    // いない)ではbest-effort呼び出し自体を省く(絶対条件にする必要は
+    // 無いが、何も変わっていない時にnetwork呼び出しを増やさない)。
+    if (outcome.status === "disconnected") {
+      await sendConnectionProjectionSnapshotBestEffort({
+        userId: authenticatedUserId,
+        accessToken,
+      });
     }
 
     // "not_connected"も"disconnected"も、呼び出し元(UI)から見れば

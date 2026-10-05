@@ -18,9 +18,14 @@
 import type {
   WorkProjectionUpsertInput,
   ConversationLinkProjectionUpsertInput,
+  ConnectionProjectionItem,
+  ConnectionProjectionSnapshotInput,
+  ConnectionProjectionStatus,
 } from "@tact/execution-contract";
+import { CONNECTION_PROJECTION_STATUSES } from "@tact/execution-contract";
 
 const MAX_STRING_LENGTH = 2048;
+const MAX_CONNECTIONS_PER_SNAPSHOT = 500;
 
 export interface ValidationFailure {
   field: string;
@@ -141,6 +146,133 @@ export function validateConversationLinkProjectionUpsertInput(
       externalConversationId: record.externalConversationId as string,
       externalThreadId: record.externalThreadId as string | undefined,
       conversationReference: record.conversationReference as string,
+    },
+  };
+
+}
+
+// =========================
+// Connection Projection snapshot (SOR-212)
+// =========================
+//
+// Same allowlist-extraction discipline as the two validators above: each
+// connection item is read field-by-field into a fresh object literal, so
+// an extra property in the request body (providerConnectionRef, metadata,
+// token, secret, ...) can never reach
+// ConnectionProjectionWriter.replaceSnapshot() regardless of what the
+// caller sends — see @tact/execution-contract's Connection Projection
+// Contract header comment for the authoritative forbidden-field list this
+// validator never reads.
+
+function isValidTimestamp(value: unknown): value is string {
+  return isNonEmptyString(value) && !Number.isNaN(Date.parse(value));
+}
+
+function isConnectionProjectionStatus(value: unknown): value is ConnectionProjectionStatus {
+  return typeof value === "string" && (CONNECTION_PROJECTION_STATUSES as readonly string[]).includes(value);
+}
+
+function validateConnectionProjectionItem(value: unknown, index: number): { item?: ConnectionProjectionItem; errors: ValidationFailure[] } {
+
+  if (typeof value !== "object" || value === null) {
+    return { errors: [{ field: `connections[${index}]`, reason: "must be a JSON object" }] };
+  }
+
+  const record = value as Record<string, unknown>;
+  const errors: ValidationFailure[] = [];
+
+  if (!isNonEmptyString(record.externalConnectionId)) {
+    errors.push({ field: `connections[${index}].externalConnectionId`, reason: "required non-empty string" });
+  }
+
+  if (!isNonEmptyString(record.service)) {
+    errors.push({ field: `connections[${index}].service`, reason: "required non-empty string" });
+  }
+
+  if (!isConnectionProjectionStatus(record.status)) {
+    errors.push({ field: `connections[${index}].status`, reason: `must be one of: ${CONNECTION_PROJECTION_STATUSES.join(", ")}` });
+  }
+
+  if (!isNonEmptyString(record.provider)) {
+    errors.push({ field: `connections[${index}].provider`, reason: "required non-empty string" });
+  }
+
+  if (!isValidTimestamp(record.createdAt)) {
+    errors.push({ field: `connections[${index}].createdAt`, reason: "required ISO timestamp string" });
+  }
+
+  if (!isValidTimestamp(record.updatedAt)) {
+    errors.push({ field: `connections[${index}].updatedAt`, reason: "required ISO timestamp string" });
+  }
+
+  if (errors.length > 0) {
+    return { errors };
+  }
+
+  return {
+    item: {
+      externalConnectionId: record.externalConnectionId as string,
+      service: record.service as string,
+      status: record.status as ConnectionProjectionStatus,
+      provider: record.provider as string,
+      createdAt: record.createdAt as string,
+      updatedAt: record.updatedAt as string,
+    },
+    errors: [],
+  };
+
+}
+
+export function validateConnectionProjectionSnapshotInput(body: unknown): ValidationResult<ConnectionProjectionSnapshotInput> {
+
+  if (typeof body !== "object" || body === null) {
+    return { ok: false, errors: [{ field: "(body)", reason: "must be a JSON object" }] };
+  }
+
+  const record = body as Record<string, unknown>;
+  const errors: ValidationFailure[] = [];
+
+  if (!isNonEmptyString(record.userId)) {
+    errors.push({ field: "userId", reason: "required non-empty string" });
+  }
+
+  if (!isValidTimestamp(record.snapshotAt)) {
+    errors.push({ field: "snapshotAt", reason: "required ISO timestamp string" });
+  }
+
+  if (!Array.isArray(record.connections)) {
+    errors.push({ field: "connections", reason: "required array" });
+  } else if (record.connections.length > MAX_CONNECTIONS_PER_SNAPSHOT) {
+    errors.push({ field: "connections", reason: `must not exceed ${MAX_CONNECTIONS_PER_SNAPSHOT} items` });
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  // 空配列は正当な入力(絶対条件: 「このuserのcanonical Connectionは
+  // 本当に0件」を表現できる唯一の方法——拒否しない)。
+  const items: ConnectionProjectionItem[] = [];
+  const itemErrors: ValidationFailure[] = [];
+
+  (record.connections as unknown[]).forEach((raw, index) => {
+    const { item, errors: oneItemErrors } = validateConnectionProjectionItem(raw, index);
+    if (item) {
+      items.push(item);
+    }
+    itemErrors.push(...oneItemErrors);
+  });
+
+  if (itemErrors.length > 0) {
+    return { ok: false, errors: itemErrors };
+  }
+
+  return {
+    ok: true,
+    value: {
+      userId: record.userId as string,
+      snapshotAt: record.snapshotAt as string,
+      connections: items,
     },
   };
 
