@@ -390,8 +390,9 @@ export default function RunsSection() {
 
   const handleSelectWork = useCallback((workId: string) => {
     setSelectedWorkId(workId);
+    setSection("work");
     loadWork(workId);
-  }, [loadWork]);
+  }, [loadWork, setSection]);
 
   // SOR-48(Attention Lifecycle): 状態機械・冪等性・所有権の判定は一切
   // ここに無い(PATCH /api/tact/runs/attention/[attentionId]、および
