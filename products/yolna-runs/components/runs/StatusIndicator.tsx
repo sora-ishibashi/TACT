@@ -1,4 +1,5 @@
 import type { ExecutionStatus } from "@tact/runs-core/tact-execution/types";
+export { summarizeActivityStatuses } from "@/lib/statusPresentation";
 
 export type StatusPresentation = { label: string; symbol: string; className: string };
 
@@ -18,13 +19,4 @@ export function StatusIndicator({ status, className = "" }: { status: ExecutionS
 
 export function AttentionIndicator({ danger = false, label }: { danger?: boolean; label: string }) {
   return <span className={`inline-flex items-center gap-1.5 ${danger ? "text-[#C53F4B]" : "text-[#B7791F]"}`} title={label}><span aria-hidden="true" className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-current text-[10px] font-bold">!</span><span className="sr-only">要確認: </span><span>{label}</span></span>;
-}
-
-export function summarizeActivityStatuses(items: readonly { executionStatus: ExecutionStatus }[]) {
-  return items.reduce((summary, item) => {
-    if (item.executionStatus === "failed") summary.failed += 1;
-    if (item.executionStatus === "running") summary.running += 1;
-    if (item.executionStatus === "succeeded") summary.succeeded += 1;
-    return summary;
-  }, { failed: 0, running: 0, succeeded: 0 });
 }

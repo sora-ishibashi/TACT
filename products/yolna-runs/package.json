@@ -19,6 +19,7 @@
     "test:env": "tsx scripts/testEnvBoundary.ts",
     "test:execution-inspector": "tsx scripts/executionInspector.test.ts",
     "test:connection-projection": "tsx scripts/connectionProjection.test.ts",
+    "test:status-presentation": "tsx scripts/statusPresentation.test.ts",
     "test:sor8a-security": "tsx scripts/sor8aTelemetrySecurityTest.ts",
     "test:sor8b-governance": "tsx scripts/sor8bGovernanceTest.ts",
     "test:sor8b-governance-db": "tsx scripts/sor8bGovernanceDbAcceptance.ts",

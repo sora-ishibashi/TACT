@@ -35,7 +35,7 @@ import { useRunsShell } from "@/components/shell/AppShell";
 import { SecondarySidebar } from "@/components/shell/SecondarySidebar";
 import { PresentationState, presentationStateForHttp, type PresentationStateKind } from "@/components/shell/PresentationState";
 import { PageHeader } from "@/components/shell/ShellContainers";
-import { summarizeActivityStatuses } from "./StatusIndicator";
+import { summarizeActivityStatuses } from "@/lib/statusPresentation";
 import {
   filterActivityItems,
   distinctActivityFilterOptions,
@@ -581,7 +581,7 @@ export default function RunsSection() {
       {section === "coverage" && <ConnectionObservationSidebar details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} onSelect={setSelectedSurfaceId} />}
       {(section === "activity" || section === "attention") && <SecondarySidebar title={section === "attention" ? "要確認" : "実行記録のフィルタ"}>
         {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
-        {section === "attention" ? <div className="flex flex-col gap-0.5"><p className="mb-1 px-2 text-[10px] font-semibold tracking-wide text-[#8A8A8A]">状態</p><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className={`rounded px-2 py-1.5 text-left text-[12px] ${attentionCategory === null ? "bg-[#F2F4FB] font-semibold text-[#171717]" : "text-[#626161] hover:bg-[#F7F7F7]"}`}>すべて <span className="float-right tabular-nums">{attentionItems.length}</span></button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className={`rounded px-2 py-1.5 text-left text-[12px] ${attentionCategory === category.id ? "bg-[#F2F4FB] font-semibold text-[#171717]" : "text-[#626161] hover:bg-[#F7F7F7]"}`}>{category.label}<span className="float-right tabular-nums">{category.count}</span></button>)}</div> : null}
+        {section === "attention" ? <div className="flex flex-col gap-0.5"><p className="mb-1 px-2 text-[10px] font-semibold tracking-wide text-[#8A8A8A]">理由</p><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className={`rounded px-2 py-1.5 text-left text-[12px] ${attentionCategory === null ? "bg-[#F2F4FB] font-semibold text-[#171717]" : "text-[#626161] hover:bg-[#F7F7F7]"}`}>すべて <span className="float-right tabular-nums">{attentionItems.length}</span></button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className={`rounded px-2 py-1.5 text-left text-[12px] ${attentionCategory === category.id ? "bg-[#F2F4FB] font-semibold text-[#171717]" : "text-[#626161] hover:bg-[#F7F7F7]"}`}>{category.label}<span className="float-right tabular-nums">{category.count}</span></button>)}</div> : null}
       </SecondarySidebar>}
       <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 lg:px-6">
       <PageHeader title={unavailableTitle ?? (section === "home" ? "ホーム" : section === "attention" ? "要確認" : section === "activity" ? "実行記録" : section === "permission" ? "権限" : section === "agent" ? "AI" : "接続・観測")} />
