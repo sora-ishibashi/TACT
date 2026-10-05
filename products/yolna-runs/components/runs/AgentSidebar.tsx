@@ -20,6 +20,7 @@ import { PresentationState, type PresentationStateKind } from "@/components/shel
 import {
   filterAgentManagementItems,
   summarizeAgentManagementByTargetSystem,
+  summarizeAgentManagementEvidence,
   type AgentIdentityEvidence,
   type AgentManagementItemView,
 } from "@tact/runs-core/tact-runs-view/agentManagement";
@@ -56,14 +57,7 @@ export function AgentSidebar({ items, state, selectedAgentId, onSelect }: {
   const [category, setCategory] = useState<CategoryFilter>({ kind: "all" });
 
   const targetSystemOptions = useMemo(() => summarizeAgentManagementByTargetSystem(items), [items]);
-  const executionObservedCount = useMemo(
-    () => items.filter((item) => item.identityEvidence.includes("execution_observed")).length,
-    [items]
-  );
-  const permissionScopedCount = useMemo(
-    () => items.filter((item) => item.identityEvidence.includes("permission_scoped")).length,
-    [items]
-  );
+  const evidenceSummary = useMemo(() => summarizeAgentManagementEvidence(items), [items]);
 
   const visible = useMemo(() => filterAgentManagementItems(items, {
     search,
@@ -88,10 +82,10 @@ export function AgentSidebar({ items, state, selectedAgentId, onSelect }: {
             すべて ({items.length})
           </button>
           <button type="button" onClick={() => setCategory({ kind: "evidence", evidence: "execution_observed" })} aria-pressed={category.kind === "evidence" && category.evidence === "execution_observed"} className="rounded px-2 py-1 text-[#112278]">
-            実行記録あり ({executionObservedCount})
+            実行記録あり ({evidenceSummary.executionObservedCount})
           </button>
           <button type="button" onClick={() => setCategory({ kind: "evidence", evidence: "permission_scoped" })} aria-pressed={category.kind === "evidence" && category.evidence === "permission_scoped"} className="rounded px-2 py-1 text-[#112278]">
-            権限設定あり ({permissionScopedCount})
+            権限設定あり ({evidenceSummary.permissionScopedCount})
           </button>
         </div>
 

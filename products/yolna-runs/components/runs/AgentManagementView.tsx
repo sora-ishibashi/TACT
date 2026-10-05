@@ -24,6 +24,12 @@ import { PresentationState, type PresentationStateKind } from "@/components/shel
 import { PermissionBadge, ResultBadge, AttentionReasonBadge } from "./badges";
 
 const UNCONFIRMED = "確認できません";
+// SOR-186 source review fix#1: raw workId must never surface as the
+// primary human-facing label when workTitle is missing (SOR-181 absolute
+// condition "raw UUIDをprimary UIにしない"). workId itself still drives
+// onSelectWork(work.workId) as the click identity — only the label shown
+// to a human changes.
+const WORK_TITLE_UNCONFIRMED = "仕事タイトルを確認できません";
 
 function formatDateTime(value: string | null): string {
   return value ? new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : UNCONFIRMED;
@@ -94,7 +100,7 @@ export function AgentManagementView({
 
       {/* 2. Identity Source */}
       <section aria-labelledby="agent-identity-source-heading" className="rounded-xl border border-[#D9D9D9] bg-white p-4">
-        <h3 id="agent-identity-source-heading" className="text-[13px] font-medium text-[#112278]">2. Identity Source</h3>
+        <h3 id="agent-identity-source-heading" className="text-[13px] font-medium text-[#112278]">2. 確認元</h3>
         <ul className="mt-2 flex flex-col gap-1 text-[13px] text-[#112278]">
           {detail.identityEvidence.map((evidence) => (
             <li key={evidence}>・{identityEvidenceLabel(evidence)}</li>
@@ -164,7 +170,7 @@ export function AgentManagementView({
 
       {/* 5. Connection evidence */}
       <section aria-labelledby="agent-connection-heading" className="rounded-xl border border-[#D9D9D9] bg-white p-4">
-        <h3 id="agent-connection-heading" className="text-[13px] font-medium text-[#112278]">5. 接続（Connection）</h3>
+        <h3 id="agent-connection-heading" className="text-[13px] font-medium text-[#112278]">5. 接続情報</h3>
         {detail.connectionEvidence.connections.length === 0 ? (
           <p className="mt-2 text-[13px] text-[#626161]">{detail.connectionEvidence.unavailableMessage}</p>
         ) : (
@@ -257,9 +263,9 @@ export function AgentManagementView({
                     <td className="py-2 pr-4 text-[#112278]">
                       {onSelectWork ? (
                         <button type="button" onClick={() => onSelectWork(work.workId)} className="text-[#172E95] underline-offset-2 hover:underline">
-                          {work.workTitle ?? work.workId}
+                          {work.workTitle ?? WORK_TITLE_UNCONFIRMED}
                         </button>
-                      ) : (work.workTitle ?? work.workId)}
+                      ) : (work.workTitle ?? WORK_TITLE_UNCONFIRMED)}
                     </td>
                     <td className="py-2 pr-4"><ResultBadge status={work.latestExecutionStatus} /></td>
                     <td className="py-2 pr-4 text-[#626161]">{work.executionCount}</td>

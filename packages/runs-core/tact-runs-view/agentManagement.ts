@@ -250,6 +250,34 @@ export function buildAgentManagementInventory(
 // array the caller already loaded.
 // =========================
 
+export interface AgentManagementEvidenceSummary {
+  executionObservedCount: number;
+  permissionScopedCount: number;
+}
+
+// SOR-186 source review fix#3: the sidebar's "実行記録あり"/"権限設定あり"
+// counts must be derived here, not via a `.filter(...).length` written
+// directly in AgentSidebar — same delegation as summarizeAgentManagement
+// ByTargetSystem()/filterAgentManagementItems() below. Counts are always
+// mechanically derived from the actual items array; never a fixed/guessed
+// value, and an item with both evidence sources is counted in both buckets
+// (identityEvidence is not exclusive).
+export function summarizeAgentManagementEvidence(
+  items: readonly AgentManagementItemView[]
+): AgentManagementEvidenceSummary {
+
+  let executionObservedCount = 0;
+  let permissionScopedCount = 0;
+
+  for (const item of items) {
+    if (item.identityEvidence.includes("execution_observed")) executionObservedCount += 1;
+    if (item.identityEvidence.includes("permission_scoped")) permissionScopedCount += 1;
+  }
+
+  return { executionObservedCount, permissionScopedCount };
+
+}
+
 export interface AgentManagementTargetSystemFilterOption {
   label: string;
   count: number;

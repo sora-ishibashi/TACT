@@ -12,6 +12,7 @@ import {
   buildAgentManagementDetail,
   filterAgentManagementItems,
   summarizeAgentManagementByTargetSystem,
+  summarizeAgentManagementEvidence,
 } from "@tact/runs-core/tact-runs-view/agentManagement";
 import type { CanonicalExecution } from "@tact/runs-core/tact-execution/types";
 import type { PermissionRegistryRule } from "@tact/runs-core/tact-execution/permission/types";
@@ -611,6 +612,54 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       bySearch.length === 1 && bySearch[0].agentId === "agent-alpha" &&
       byEvidence.length === 1 && byEvidence[0].agentId === "agent-gamma" &&
       byTargetSystem.length === 1 && byTargetSystem[0].agentId === "agent-beta"
+    ));
+  }
+
+  // =========================
+  // 28. summarizeAgentManagementEvidence(): execution_observedのみ /
+  // permission_scopedのみ / 両方を持つitem / 実件数からの正しいcount /
+  // 重複・fake countなし (SOR-186 source review fix#3)
+  // =========================
+  {
+    const items = buildAgentManagementInventory({
+      executions: [
+        // agent-exec-only: execution evidenceのみ
+        baseExecution({ id: "exec-1", agentId: "agent-exec-only" }),
+        // agent-both: execution + permission rule両方
+        baseExecution({ id: "exec-2", agentId: "agent-both" }),
+      ],
+      rules: [
+        // agent-rule-only: permission evidenceのみ
+        baseRule({ id: "rule-1", agentId: "agent-rule-only" }),
+        baseRule({ id: "rule-2", agentId: "agent-both" }),
+      ],
+      attentions: [],
+    });
+
+    results.push(check(
+      "[28] inventoryにexecution_observedのみ/permission_scopedのみ/両方を持つitemがそれぞれ存在する(fixtureの前提確認)",
+      items.length === 3 &&
+      items.some((item) => item.agentId === "agent-exec-only" && item.identityEvidence.length === 1 && item.identityEvidence[0] === "execution_observed") &&
+      items.some((item) => item.agentId === "agent-rule-only" && item.identityEvidence.length === 1 && item.identityEvidence[0] === "permission_scoped") &&
+      items.some((item) => item.agentId === "agent-both" && item.identityEvidence.includes("execution_observed") && item.identityEvidence.includes("permission_scoped"))
+    ));
+
+    const summary = summarizeAgentManagementEvidence(items);
+
+    results.push(check(
+      "[28] executionObservedCountは実行記録を持つitem数(agent-exec-only + agent-both = 2件)を機械的に数えた値——固定値でも重複数えでもない",
+      summary.executionObservedCount === 2
+    ));
+
+    results.push(check(
+      "[28] permissionScopedCountは権限設定を持つitem数(agent-rule-only + agent-both = 2件)を機械的に数えた値",
+      summary.permissionScopedCount === 2
+    ));
+
+    results.push(check(
+      "[28] 空のitems配列ではcountが両方0になる(fake countが残らない)",
+      summarizeAgentManagementEvidence([]).executionObservedCount === 0 &&
+      summarizeAgentManagementEvidence([]).permissionScopedCount === 0
     ));
   }
 
