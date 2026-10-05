@@ -75,6 +75,7 @@ export default function RunsSection() {
   // One shared selection boundary: Work/Attention/other screens can pass an
   // execution id here without owning a second detail implementation.
   const [inspectedExecutionId, setInspectedExecutionId] = useState<string | null>(null);
+  const [managementDetailPeek, setManagementDetailPeek] = useState<"agent" | "permission" | "coverage" | null>(null);
   // SOR-23(OBS-UX-P1 Priority 3/4): filter判定はcore/tact-runs-view側の
   // pure関数(filterActivityItems())に完全委譲——ここはcontrolled state
   // を持つだけ。新しいAPI/queryは追加しない(既に読み込み済みの
@@ -388,11 +389,26 @@ export default function RunsSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  useEffect(() => {
+    // A detail surface belongs to the section that opened it. Selection and
+    // filter state remain intact, but overlays never cross a primary-nav boundary.
+    queueMicrotask(() => {
+      setInspectedExecutionId(null);
+      setReviewingExecutionId(null);
+      setManagementDetailPeek(null);
+    });
+  }, [section]);
+
   const handleSelectWork = useCallback((workId: string) => {
     setSelectedWorkId(workId);
     setSection("work");
     loadWork(workId);
   }, [loadWork, setSection]);
+
+  const handleSelectExecution = useCallback((executionId: string) => {
+    setManagementDetailPeek(null);
+    setInspectedExecutionId(executionId);
+  }, []);
 
   // SOR-48(Attention Lifecycle): 状態機械・冪等性・所有権の判定は一切
   // ここに無い(PATCH /api/tact/runs/attention/[attentionId]、および
@@ -502,8 +518,6 @@ export default function RunsSection() {
     () => buildCoverageServiceDetails({ surfaces: coverage.surfaces, gaps: coverage.gaps, connectionReadState: coverage.connectionReadState, connections: coverage.connections }),
     [coverage.surfaces, coverage.gaps, coverage.connectionReadState, coverage.connections]
   );
-  const unavailableTitle = section === "work" ? "仕事" : null;
-
   // One SOR-185 inspector instance is shared by Activity and Work Timeline.
   const executionInspector = (
     <ExecutionInspector
@@ -533,17 +547,17 @@ export default function RunsSection() {
       {section === "coverage" && <ConnectionObservationSidebar details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} onSelect={setSelectedSurfaceId} />}
       {(section === "activity" || section === "attention") && <SecondarySidebar title={section === "attention" ? "要確認" : "実行記録のフィルタ"}>
         {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
-        {section === "attention" ? <div className="flex flex-col gap-0.5"><p className="mb-1 px-2 text-[10px] font-semibold tracking-wide text-[#8A8A8A]">理由</p><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className={`rounded px-2 py-1.5 text-left text-[12px] ${attentionCategory === null ? "bg-[#F2F4FB] font-semibold text-[#171717]" : "text-[#626161] hover:bg-[#F7F7F7]"}`}>すべて <span className="float-right tabular-nums">{attentionItems.length}</span></button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className={`rounded px-2 py-1.5 text-left text-[12px] ${attentionCategory === category.id ? "bg-[#F2F4FB] font-semibold text-[#171717]" : "text-[#626161] hover:bg-[#F7F7F7]"}`}>{category.label}<span className="float-right tabular-nums">{category.count}</span></button>)}</div> : null}
+        {section === "attention" ? <div className="flex flex-col gap-0.5"><p className="mb-1 px-2 text-[10px] font-semibold tracking-wide text-[#8A8A8A]">理由</p><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className={`border-l-2 px-2 py-1.5 text-left text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#18B5A6] ${attentionCategory === null ? "border-[#172E95] bg-[#E6F2F2] font-semibold text-[#171717]" : "border-transparent text-[#626161] hover:bg-[#F7F7F7]"}`}>すべて <span className="float-right tabular-nums">{attentionItems.length}</span></button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className={`border-l-2 px-2 py-1.5 text-left text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#18B5A6] ${attentionCategory === category.id ? "border-[#172E95] bg-[#E6F2F2] font-semibold text-[#171717]" : "border-transparent text-[#626161] hover:bg-[#F7F7F7]"}`}>{category.label}<span className="float-right tabular-nums">{category.count}</span></button>)}</div> : null}
       </SecondarySidebar>}
-      <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 lg:px-6">
-      <PageHeader title={unavailableTitle ?? (section === "home" ? "ホーム" : section === "attention" ? "要確認" : section === "activity" ? "実行記録" : section === "permission" ? "権限" : section === "agent" ? "AI" : "接続・観測")} />
+      <div className="tact-scrollbar min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 lg:px-6">
+      {(section === "home" || section === "attention" || section === "activity") && <PageHeader title={section === "home" ? "ホーム" : section === "attention" ? "要確認" : "実行記録"} />}
 
       {/* Keeps all list variants shrinkable within the main scroll region. */}
-      <div className="mt-4 min-w-0">
+      <div className={`${section === "home" || section === "attention" || section === "activity" ? "mt-4" : ""} min-w-0`}>
 
         {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (
-          !selectedWorkId ? <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p> : workLoading ? <PresentationState kind="loading" /> : workError ? (workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />) : workHeader ? <WorkDetailView work={workHeader} items={workItems} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={setInspectedExecutionId} /> : <PresentationState kind="empty">Workが見つかりません。</PresentationState>
-        ) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} /> : section === "agent" ? <AgentManagementView items={agentItems} state={agentLoading ? "loading" : agentError} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={coverageLoading ? "loading" : coverageError} /> : section === "activity" ? (
+          !selectedWorkId ? <p className="text-[13px] text-[#626161]">左の一覧からWorkを選択してください。</p> : workLoading ? <PresentationState kind="loading" /> : workError ? (workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />) : workHeader ? <WorkDetailView work={workHeader} items={workItems} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={handleSelectExecution} /> : <PresentationState kind="empty">Workが見つかりません。</PresentationState>
+        ) : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onOpenDetails={() => setManagementDetailPeek("permission")} onSelectExecution={handleSelectExecution} onSelectWork={handleSelectWork} /> : section === "agent" ? <AgentManagementView items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onOpenDetails={() => setManagementDetailPeek("agent")} onSelectWork={handleSelectWork} onSelectExecution={handleSelectExecution} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} onOpenDetails={() => setManagementDetailPeek("coverage")} /> : section === "activity" ? (
 
           activityLoading ? (
             <PresentationState kind="loading" />
@@ -554,7 +568,7 @@ export default function RunsSection() {
               {activityItems.length > 0 && filteredActivityItems.length === 0 ? (
                 <PresentationState kind="empty" />
               ) : (
-                <ActivityExplorer items={filteredActivityItems} attentionExecutionIds={attentionExecutionIds} selectedExecutionId={inspectedExecutionId} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={setInspectedExecutionId} />
+                <ActivityExplorer items={filteredActivityItems} attentionExecutionIds={attentionExecutionIds} selectedExecutionId={inspectedExecutionId} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={handleSelectExecution} />
               )}
             </div>
           )
@@ -566,7 +580,7 @@ export default function RunsSection() {
           ) : attentionError ? (
             <PresentationState kind={attentionError} />
           ) : (
-            filteredAttentionItems.length === 0 ? <PresentationState kind="empty" /> : <AttentionInbox items={filteredAttentionItems} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermissionSettings={() => setSection("permission")} onTransition={handleAttentionTransition} />
+            filteredAttentionItems.length === 0 ? <PresentationState kind="empty" /> : <AttentionInbox items={filteredAttentionItems} onSelectWork={handleSelectWork} onSelectExecution={handleSelectExecution} onOpenPermissionSettings={() => setSection("permission")} onTransition={handleAttentionTransition} />
           )
 
         )}
@@ -584,9 +598,9 @@ export default function RunsSection() {
 
       {executionInspector}
 
-      {section === "agent" && selectedAgentId && !inspectedExecutionId && <AgentManagementPeek items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onClose={() => setSelectedAgentId(null)} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} />}
-      {section === "permission" && selectedPermissionScopeKey && !inspectedExecutionId && <PermissionManagementPeek scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onClose={() => setSelectedPermissionScopeKey(null)} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} />}
-      {section === "coverage" && selectedSurfaceId && <ConnectionObservationPeek details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} onClose={() => setSelectedSurfaceId(null)} />}
+      {section === "agent" && managementDetailPeek === "agent" && selectedAgentId && !inspectedExecutionId && <AgentManagementPeek items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onClose={() => setManagementDetailPeek(null)} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} />}
+      {section === "permission" && managementDetailPeek === "permission" && selectedPermissionScopeKey && !inspectedExecutionId && <PermissionManagementPeek scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onClose={() => setManagementDetailPeek(null)} onSelectExecution={handleSelectExecution} onSelectWork={handleSelectWork} />}
+      {section === "coverage" && managementDetailPeek === "coverage" && selectedSurfaceId && <ConnectionObservationPeek details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} onClose={() => setManagementDetailPeek(null)} />}
 
       </div>
     </div>

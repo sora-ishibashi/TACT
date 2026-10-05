@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { CorrelationReviewView } from "@tact/runs-core/tact-runs-view";
+import { CloseIcon } from "@/components/icons/RunsIcons";
 
 interface CorrelationReviewModalProps {
 
@@ -202,13 +203,15 @@ export default function CorrelationReviewModal({
             type="button"
             onClick={onClose}
             disabled={submit.pending}
-            className="text-[13px] text-[#626161] transition duration-150 ease-out hover:text-[#112278] disabled:opacity-50"
+            aria-label="Work確認を閉じる"
+            title="Work確認を閉じる"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[#626161] outline-none transition duration-150 ease-out hover:bg-[#F7F7F7] hover:text-[#171717] focus-visible:ring-2 focus-visible:ring-[#18B5A6] disabled:opacity-50"
           >
-            閉じる
+            <CloseIcon />
           </button>
         </div>
 
-        <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
+        <div className="tact-scrollbar mt-4 min-h-0 flex-1 overflow-y-auto">
 
           {load.status === "loading" ? (
 

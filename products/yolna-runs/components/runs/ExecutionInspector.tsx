@@ -6,36 +6,18 @@ import { PresentationState, presentationStateForHttp, type PresentationStateKind
 import type { CorrelationReviewView } from "@tact/runs-core/tact-runs-view";
 import type { ExecutionInspectorViewModel } from "@/lib/executionInspector";
 
-export type ExecutionInspectorProps = {
-  executionId: string | null;
-  accessToken: string | null;
-  onClose: () => void;
-};
+export type ExecutionInspectorProps = { executionId: string | null; accessToken: string | null; onClose: () => void };
 
-const unavailable = "\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093";
+const unavailable = "確認できません";
 const formatTime = (value: string | null) => value ? new Date(value).toLocaleString() : unavailable;
-const Field = ({ label, value }: { label: string; value: string | null }) => <div className="min-w-0"><dt className="text-[11px] text-[#626161]">{label}</dt><dd className="mt-0.5 break-words text-[13px] text-[#112278]">{value ?? unavailable}</dd></div>;
-const correlationStatusLabel: Record<CorrelationReviewView["currentStatus"], string> = {
-  CORRELATED: "\u7d10\u3065\u3044\u3066\u3044\u307e\u3059",
-  AMBIGUOUS: "\u5019\u88dc\u304c\u8907\u6570\u3042\u308a\u307e\u3059",
-  UNASSIGNED: "\u7d10\u3065\u3051\u3066\u3044\u307e\u305b\u3093",
-};
-const correlationMethodLabel: Record<string, string> = {
-  Explicit: "\u660e\u793a", "Structural match": "\u6587\u8108\u304b\u3089\u5224\u65ad", "Recent activity": "\u6700\u8fd1\u306e\u6d3b\u52d5\u304b\u3089\u5224\u65ad", "AI-assisted": "AI\u306e\u88dc\u52a9", "Manual correction": "\u4eba\u304c\u8a2d\u5b9a",
-};
+const Field = ({ label, value, strong = false }: { label: string; value: string | null; strong?: boolean }) => <div className="min-w-0"><dt className="text-[11px] text-[#626161]">{label}</dt><dd className={`mt-0.5 break-words text-[13px] ${strong ? "font-semibold" : ""} text-[#171717]`}>{value ?? unavailable}</dd></div>;
+const correlationStatusLabel: Record<CorrelationReviewView["currentStatus"], string> = { CORRELATED: "紐づけ済み", AMBIGUOUS: "判断が必要", UNASSIGNED: "未割り当て" };
+const correlationMethodLabel: Record<string, string> = { Explicit: "明示", "Structural match": "文脈から判断", "Recent activity": "最近の活動から判断", "AI-assisted": "AIの補助", "Manual correction": "人が設定" };
 
 /** Shared Execution Inspector contract. Mount it from any screen and call its onSelectExecution boundary with an execution id. */
 export function ExecutionInspector({ executionId, accessToken, onClose }: ExecutionInspectorProps) {
-  // Opaque identity that changes whenever accessToken changes; the raw token is never stored.
   const authIdentity = useMemo(() => (accessToken ? {} : null), [accessToken]);
-
-  const [response, setResponse] = useState<{
-    executionId: string;
-    authIdentity: object;
-    model: ExecutionInspectorViewModel | null;
-    correlation: CorrelationReviewView | null;
-    state: PresentationStateKind | null;
-  } | null>(null);
+  const [response, setResponse] = useState<{ executionId: string; authIdentity: object; model: ExecutionInspectorViewModel | null; correlation: CorrelationReviewView | null; state: PresentationStateKind | null } | null>(null);
 
   useEffect(() => {
     if (!executionId || !accessToken || !authIdentity) return;
@@ -52,13 +34,7 @@ export function ExecutionInspector({ executionId, accessToken, onClose }: Execut
         setResponse({ executionId, authIdentity: requestAuthIdentity, model: null, correlation: null, state: presentationStateForHttp(detail.status) });
         return;
       }
-      setResponse({
-        executionId,
-        authIdentity: requestAuthIdentity,
-        model: detailBody.inspector as ExecutionInspectorViewModel,
-        correlation: correlationResponse.ok && correlationBody?.success ? correlationBody.correlation as CorrelationReviewView : null,
-        state: null,
-      });
+      setResponse({ executionId, authIdentity: requestAuthIdentity, model: detailBody.inspector as ExecutionInspectorViewModel, correlation: correlationResponse.ok && correlationBody?.success ? correlationBody.correlation as CorrelationReviewView : null, state: null });
     }).catch(() => { if (!cancelled) setResponse({ executionId, authIdentity: requestAuthIdentity, model: null, correlation: null, state: "error" }); });
     return () => { cancelled = true; };
   }, [executionId, accessToken, authIdentity]);
@@ -68,15 +44,20 @@ export function ExecutionInspector({ executionId, accessToken, onClose }: Execut
   const model = currentResponse?.model ?? null;
   const correlation = currentResponse?.correlation ?? null;
   const state = !accessToken ? "unavailable" : currentResponse ? currentResponse.state : "loading";
-  const jp = {
-    title: "\u5b9f\u884c\u306e\u8a73\u7d30", close: "\u9589\u3058\u308b", overview: "\u6982\u8981", actor: "\u5b9f\u884c\u4e3b\u4f53", principal: "\u4f9d\u983c\u5143", service: "\u30b5\u30fc\u30d3\u30b9", action: "\u64cd\u4f5c", target: "\u5bfe\u8c61", result: "\u7d50\u679c", outcome: "\u7d50\u679c\u306e\u72b6\u614b", occurred: "\u767a\u751f\u6642\u523b", observed: "\u89b3\u6e2c\u6642\u523b", work: "\u4ed5\u4e8b", correlation: "\u4ed5\u4e8b\u3078\u306e\u7d10\u3065\u3051", permission: "\u6a29\u9650", evidence: "\u5224\u5b9a\u6839\u62e0", technical: "\u6280\u8853\u60c5\u5831",
-  };
-  return <DetailPeek title={jp.title} onClose={onClose}><div className="min-w-0">
-    {state ? <div className="mt-5"><PresentationState kind={state} /></div> : model && <div className="mt-5 min-w-0 space-y-6">
-      <section className="min-w-0"><h3 className="text-[13px] font-medium text-[#112278]">{jp.overview}</h3><p className="mt-2 min-w-0 break-words text-[14px] leading-6 text-[#112278]">{model.summary.actionSentence}</p><dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3"><Field label={jp.actor} value={model.summary.actor}/><Field label="AI" value={model.summary.ai}/><Field label={jp.principal} value={model.summary.principal}/><Field label={jp.service} value={model.summary.provider}/><Field label={jp.action} value={model.summary.action}/><Field label={jp.target} value={model.summary.resource}/><Field label={jp.result} value={model.summary.result}/>{model.summary.outcome && <Field label={jp.outcome} value={model.summary.outcome}/>}<Field label={jp.occurred} value={formatTime(model.summary.occurredAt)}/><Field label={jp.observed} value={formatTime(model.summary.observedAt)}/><Field label={jp.work} value={correlation?.currentWorkTitle ?? (model.summary.workId ? "\u4ed5\u4e8b\u540d\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093" : "\u7d10\u3065\u3044\u3066\u3044\u307e\u305b\u3093")}/></dl></section>
-      <section className="min-w-0"><h3 className="text-[13px] font-medium text-[#112278]">{jp.correlation}</h3>{correlation ? <><dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3"><Field label="状態" value={correlationStatusLabel[correlation.currentStatus]}/><Field label="方法" value={correlation.methodLabel ? correlationMethodLabel[correlation.methodLabel] ?? correlation.methodLabel : null}/><Field label="信頼度" value={correlation.confidence === null ? null : String(correlation.confidence)}/>{correlation.correction && <Field label="訂正履歴" value={correlation.correction.correlatedAt}/>}</dl>{correlation.reasonCode && <p className="mt-2 min-w-0 break-words text-[12px] text-[#626161]">{`\u5224\u5b9a\u7406\u7531\u30b3\u30fc\u30c9: ${correlation.reasonCode}`}</p>}</> : <p className="mt-2 text-[13px] text-[#626161]">\u3053\u306e\u4ed5\u4e8b\u3078\u306e\u7d10\u3065\u3051\u306f\u73fe\u5728\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093\u3002</p>}<p className="mt-3 text-[12px] text-[#626161]">\u8a02\u6b63\u306f\u65e2\u5b58\u306eSOR-77 \u76f8\u95a2\u30ec\u30d3\u30e5\u30fc\u304b\u3089\u884c\u3044\u307e\u3059\u3002</p></section>
-      <section className="min-w-0"><h3 className="text-[13px] font-medium text-[#112278]">{jp.permission}</h3><dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3"><Field label="権限判定" value={model.permission.evaluation}/></dl><p className="mt-3 min-w-0 break-words text-[12px] text-[#626161]">{model.permission.downstream.length === 0 ? "\u4e0b\u6d41\u306e\u6a29\u9650\u8a3c\u8de1\u306f\u3042\u308a\u307e\u305b\u3093\u3002\u3053\u308c\u306f\u62d2\u5426\u3092\u610f\u5473\u3057\u307e\u305b\u3093\u3002" : `\u4e0b\u6d41\u306e\u6a29\u9650\u8a3c\u8de1: ${model.permission.downstream.map((item) => `${item.state} (${item.authority})`).join(", ")}`}</p><p className="mt-2 min-w-0 break-words text-[12px] text-[#626161]">{model.permission.decisions.some((decision) => decision.ruleId) ? `\u767b\u9332\u30eb\u30fc\u30eb: ${model.permission.decisions.filter((decision) => decision.ruleId).map((decision) => `${decision.ruleId} / v${decision.revision ?? "?"}`).join(", ")}` : "\u767b\u9332\u30eb\u30fc\u30eb\u306e\u8a73\u7d30\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093"}</p></section>
-      <section className="min-w-0"><h3 className="text-[13px] font-medium text-[#112278]">{jp.evidence}</h3><p className="mt-2 text-[13px] text-[#626161]">\u3053\u306e\u5224\u5b9a\u6839\u62e0\u306f\u73fe\u5728\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093\u3002</p></section>
-      <details className="min-w-0"><summary className="cursor-pointer text-[13px] font-medium text-[#112278]">{jp.technical}</summary><dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3"><Field label="観測方法" value={model.technical.observationMode}/><Field label="観測元" value={model.technical.sourceType}/><Field label="権限判定理由コード" value={model.permission.reasonCode}/><Field label="executionId" value={model.executionId}/><Field label="invocationId" value={model.technical.invocationId}/><Field label="traceId" value={model.technical.traceId}/><Field label="spanId" value={model.technical.spanId}/><Field label="raw observation reference" value={model.technical.rawObservationReference}/></dl></details>
-    </div>}</div></DetailPeek>;
+  const workTitle = correlation?.currentWorkTitle ?? (model?.summary.workId ? "Work名を確認できません" : "未割り当て");
+  const title = model ? `${model.summary.provider} · ${model.summary.action}` : "実行の詳細";
+
+  return <DetailPeek title={title} onClose={onClose}><div className="min-w-0">
+    {state ? <PresentationState kind={state} /> : model && <div className="min-w-0 space-y-5">
+      <section className="min-w-0 border-b border-[#E5E5E5] pb-5"><p className="min-w-0 break-words text-[14px] leading-6 text-[#171717]">{model.summary.actionSentence}</p><dl className="mt-4 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-x-4 gap-y-3"><Field label="AI" value={model.summary.ai}/><Field label="結果" value={model.summary.result} strong/><Field label="Work" value={workTitle}/><Field label="時刻" value={formatTime(model.summary.occurredAt ?? model.summary.observedAt)}/></dl></section>
+
+      <section className="min-w-0 border-b border-[#E5E5E5] pb-5"><h3 className="text-[12px] font-semibold text-[#626161]">対象</h3><dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-x-4 gap-y-3"><Field label="サービス" value={model.summary.provider}/><Field label="操作" value={model.summary.action}/>{model.summary.resource && <Field label="対象" value={model.summary.resource}/>}<Field label="依頼元" value={model.summary.principal}/>{model.summary.outcome && <Field label="結果の状態" value={model.summary.outcome}/>}</dl></section>
+
+      <section className="min-w-0 border-b border-[#E5E5E5] pb-5"><h3 className="text-[12px] font-semibold text-[#626161]">Work</h3><dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3"><Field label="Work" value={workTitle}/><Field label="状態" value={correlation ? correlationStatusLabel[correlation.currentStatus] : unavailable}/></dl></section>
+
+      <details className="min-w-0 border-b border-[#E5E5E5] pb-5"><summary className="cursor-pointer text-[12px] font-semibold text-[#626161] outline-none focus-visible:ring-2 focus-visible:ring-[#18B5A6]">権限・監査情報</summary><div className="mt-3 space-y-4"><Field label="権限判定" value={model.permission.evaluation}/><div><p className="text-[11px] text-[#626161]">接続先で観測された権限</p><p className="mt-1 break-words text-[12px] text-[#171717]">{model.permission.downstream.length === 0 ? "証跡はありません。これは拒否を意味しません。" : model.permission.downstream.map((item) => `${item.state} (${item.authority})`).join("、")}</p></div><div><p className="text-[11px] text-[#626161]">登録ルール</p><p className="mt-1 break-words text-[12px] text-[#171717]">{model.permission.decisions.some((decision) => decision.ruleId) ? model.permission.decisions.filter((decision) => decision.ruleId).map((decision) => `${decision.ruleId} / revision ${decision.revision ?? "?"}`).join("、") : unavailable}</p></div></div></details>
+
+      <details className="min-w-0"><summary className="cursor-pointer text-[12px] font-semibold text-[#626161] outline-none focus-visible:ring-2 focus-visible:ring-[#18B5A6]">技術情報</summary><dl className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3"><Field label="相関方法" value={correlation?.methodLabel ? correlationMethodLabel[correlation.methodLabel] ?? correlation.methodLabel : null}/><Field label="信頼度" value={correlation?.confidence === null || correlation?.confidence === undefined ? null : String(correlation.confidence)}/><Field label="相関理由コード" value={correlation?.reasonCode ?? null}/><Field label="訂正履歴" value={correlation?.correction?.correlatedAt ?? null}/><Field label="観測方法" value={model.technical.observationMode}/><Field label="観測元" value={model.technical.sourceType}/><Field label="権限判定理由コード" value={model.permission.reasonCode}/><Field label="executionId" value={model.executionId}/><Field label="invocationId" value={model.technical.invocationId}/><Field label="traceId" value={model.technical.traceId}/><Field label="spanId" value={model.technical.spanId}/><Field label="raw observation reference" value={model.technical.rawObservationReference}/></dl></details>
+    </div>}
+  </div></DetailPeek>;
 }

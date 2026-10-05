@@ -10,7 +10,7 @@ const PERMISSION_OPTIONS: CanonicalPermissionResult[] = ["MATCH", "MISMATCH", "A
 const EXECUTION_STATUS_OPTIONS: ExecutionStatus[] = ["observed", "running", "succeeded", "failed", "cancelled", "unknown"];
 const CORRELATION_STATUS_OPTIONS: CanonicalCorrelationResult[] = ["CORRELATED", "AMBIGUOUS", "UNASSIGNED"];
 type FilterField = "correlationStatus" | "agentLabel" | "principalLabel" | "providerLabel" | "permissionEvaluation" | "executionStatus" | "observedFrom" | "observedTo";
-const labels: Record<FilterField, string> = { correlationStatus: "仕事への関連付け", agentLabel: "AI", principalLabel: "依頼元", providerLabel: "サービス", permissionEvaluation: "権限", executionStatus: "結果", observedFrom: "期間（開始）", observedTo: "期間（終了）" };
+const labels: Record<FilterField, string> = { correlationStatus: "Workへの関連付け", agentLabel: "AI", principalLabel: "依頼元", providerLabel: "サービス", permissionEvaluation: "権限", executionStatus: "結果", observedFrom: "期間（開始）", observedTo: "期間（終了）" };
 function statusLabel(status: ExecutionStatus): string { switch (status) { case "observed": return "観測済み"; case "running": return "実行中"; case "succeeded": return "完了"; case "failed": return "失敗"; case "cancelled": return "取り消し"; case "unknown": return "判定できません"; default: return String(status); } }
 function FilterSelect({ field, value, onChange, children }: { field: FilterField; value: string; onChange: (value: string) => void; children: ReactNode }) {
   return <label className="text-[11px] font-medium text-[#626161]">{labels[field]}<select className={SELECT_CLASS} value={value} onChange={(event) => onChange(event.target.value)}>{children}</select></label>;

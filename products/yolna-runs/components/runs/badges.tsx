@@ -4,9 +4,9 @@
 // Runs UI — shared badges/labels (SOR-54)
 // =========================
 //
-// docs/ui-design-rules.md準拠: 定義済みcolor tokenのみ使用
-// (Mint=#18B5A6 成功、Error/Warning=#C53F4B、Sub text=#626161、
-// Disabled=#8A8A8A背景#F2F2F2)。状態は色だけで表現しない——必ず
+// Runsの状態体系に合わせ、成功=Mint、warning=#B7791F、hard failure=
+// #C53F4B、Sub text=#626161、Disabled=#8A8A8A背景#F2F2F2を使用。
+// 状態は色だけで表現しない——必ず
 // text labelを併記する(絶対条件、Design Rules Section7/13、SOR-54
 // 指示section「Accessibility」)。
 
@@ -26,7 +26,7 @@ type BadgeTone = "success" | "error" | "warning" | "neutral" | "muted";
 const TONE_STYLES: Record<BadgeTone, string> = {
   success: "bg-[#E6F2F2] text-[#18B5A6]",
   error: "bg-[#C53F4B]/10 text-[#C53F4B]",
-  warning: "bg-[#C53F4B]/10 text-[#C53F4B]",
+  warning: "bg-[#B7791F]/10 text-[#B7791F]",
   neutral: "bg-[#F2F2F2] text-[#112278]",
   muted: "bg-[#F2F2F2] text-[#8A8A8A]",
 };
