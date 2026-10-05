@@ -15,10 +15,10 @@ export function attentionDecisionPhase(item: Pick<AttentionCardView, "executionS
 
 export function attentionReasonJapanese(reason: AttentionCardView["attentionReason"]): string {
   switch (reason) {
-    case "approval_required": return "確認が必要";
+    case "approval_required": return "承認要件あり";
     case "permission_mismatch": return "登録ルールと不一致";
     case "permission_unknown": return "権限を確認できません";
-    case "downstream_permission_conflict": return "登録ルールと不一致";
+    case "downstream_permission_conflict": return "接続先権限";
   }
 }
 
@@ -60,7 +60,7 @@ export function permissionJapanese(result: AttentionCardView["permissionEvaluati
   switch (result) {
     case "MATCH": return "登録ルールに一致";
     case "MISMATCH": return "登録ルールと不一致";
-    case "APPROVAL_REQUIRED": return "承認待ち";
+    case "APPROVAL_REQUIRED": return "承認要件あり";
     case "UNKNOWN": return "判定できません";
   }
 }
