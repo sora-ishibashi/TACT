@@ -11,6 +11,7 @@
 
 import type { ActivityItemView } from "@tact/runs-core/tact-runs-view";
 import { PermissionBadge, ResultBadge, WorkReference } from "./badges";
+import { AttentionIndicator } from "./StatusIndicator";
 import { executionActionPresentation } from "@/lib/executionInspector";
 
 function formatTimestamp(iso: string): string {
@@ -69,7 +70,7 @@ export default function ActivityTable({
 
     <div className="min-w-0 overflow-x-auto rounded-xl border border-[#D9D9D9]">
 
-      <table className="w-full min-w-[880px] border-collapse text-left text-[13px] leading-[18px] text-[#112278]">
+      <table className="w-full min-w-[880px] border-collapse text-left text-[13px] leading-[18px] text-[#171717]">
 
         <thead>
           <tr className="border-b border-[#D9D9D9] bg-[#F2F2F2]/60 text-[12px] font-medium text-[#626161]">
@@ -89,7 +90,7 @@ export default function ActivityTable({
         <tbody>
           {items.map((item) => (
 
-            <tr key={item.executionId} className="border-b border-[#D9D9D9] last:border-b-0 hover:bg-[#E6F2F2]/40">
+            <tr key={item.executionId} className="border-b border-[#E5E5E5] last:border-b-0 hover:bg-[#FAFAFA]">
 
               <td className="whitespace-nowrap px-4 py-2.5 text-[#626161]">{formatTimestamp(item.observedAt)}</td>
               <td className="px-4 py-2.5">{item.agentLabel}</td>
@@ -114,7 +115,7 @@ export default function ActivityTable({
                 />
               </td>
               <td className="px-4 py-2.5 text-center" aria-label={attentionExecutionIds.has(item.executionId) ? labels.attention : undefined}>
-                {attentionExecutionIds.has(item.executionId) ? <span className="text-[#C53F4B]">!</span> : null}
+                {attentionExecutionIds.has(item.executionId) ? <AttentionIndicator label={labels.attention} /> : null}
               </td>
               <td className="px-4 py-2.5">
                 <button type="button" onClick={() => onSelectExecution(item.executionId)} className="text-[12px] text-[#172E95] underline-offset-2 hover:underline">{labels.detail}</button>
