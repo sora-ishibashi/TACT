@@ -586,11 +586,7 @@ export default function RunsSection() {
       <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 lg:px-6">
       <PageHeader title={unavailableTitle ?? (section === "home" ? "ホーム" : section === "attention" ? "要確認" : section === "activity" ? "実行記録" : section === "permission" ? "権限" : section === "agent" ? "AI" : "接続・観測")} />
 
-      {/* SOR-23 compact-width fix: this div is a flex item of the root
-          (flex flex-col above) — same min-width:auto default as any other
-          flex item. Without min-w-0 here, the 880px ActivityTable several
-          levels below still forces this (and everything above it) wider
-          than the viewport, even after fixing TactShell alone. */}
+      {/* Keeps all list variants shrinkable within the main scroll region. */}
       <div className="mt-4 min-w-0">
 
         {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : workListError ? <PresentationState kind={workListError} /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} /> : section === "agent" ? <AgentManagementView items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} /> : section === "activity" ? (
