@@ -253,6 +253,7 @@ import { run as runExecutionGovernanceApprovalRequestImmutability } from "./exec
 import { run as runRunsViewGovernanceApprovalInbox } from "./runsView/governanceApprovalInbox.test";
 import { run as runRunsViewPermissionManagementProjection } from "./runsView/permissionManagementProjection.test";
 import { run as runRunsViewCoverageManagementProjection } from "./runsView/coverageManagementProjection.test";
+import { run as runRunsViewAgentManagementProjection } from "./runsView/agentManagementProjection.test";
 import { run as runIntegrationConnectionProjectionContract } from "./integration/connectionProjectionContract.test";
 import { run as runIntegrationConnectionProjectionProducer } from "./integration/connectionProjectionProducer.test";
 
@@ -483,6 +484,7 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "runsView/governanceApprovalInbox", run: runRunsViewGovernanceApprovalInbox },
   { name: "runsView/permissionManagementProjection", run: runRunsViewPermissionManagementProjection },
   { name: "runsView/coverageManagementProjection", run: runRunsViewCoverageManagementProjection },
+  { name: "runsView/agentManagementProjection", run: runRunsViewAgentManagementProjection },
   { name: "integration/connectionProjectionContract", run: runIntegrationConnectionProjectionContract },
   { name: "integration/connectionProjectionProducer", run: runIntegrationConnectionProjectionProducer },
 ];
