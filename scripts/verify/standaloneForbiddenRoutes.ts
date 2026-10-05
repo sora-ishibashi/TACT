@@ -25,6 +25,7 @@
 //   /api/tact/runs/ingest/connections                    (route, SOR-212)
 //   /api/tact/runs/coverage                              (route, SOR-136)
 //   /api/tact/runs/permission-management                 (route, SOR-187)
+//   /api/tact/runs/agent-management                       (route, SOR-186)
 //
 // 禁止route prefix(section8指示、明示的に列挙): chat, research,
 // orchestrate, code, runtime, bot, artifacts, attachments, connections,
@@ -54,6 +55,7 @@ const ALLOWED_ROUTES = new Set([
   "/api/tact/runs/ingest/connections",
   "/api/tact/runs/coverage",
   "/api/tact/runs/permission-management",
+  "/api/tact/runs/agent-management",
 ]);
 
 function findRoutes(dir: string, routePath: string, out: string[]): void {
