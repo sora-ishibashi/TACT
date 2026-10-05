@@ -6,6 +6,7 @@ import ActivityTable from "./ActivityTable";
 export type ActivityExplorerProps = {
   items: ActivityItemView[];
   attentionExecutionIds: ReadonlySet<string>;
+  selectedExecutionId: string | null;
   onSelectExecution: (executionId: string) => void;
   onSelectWork: (workId: string) => void;
   onReviewCorrelation: (executionId: string) => void;

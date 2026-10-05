@@ -1,135 +1,41 @@
 "use client";
 
-// =========================
-// ActivityTable (SOR-54 Screen 1: Activity)
-// =========================
-//
-// 全Executionのnewest-first一覧。business logic(permission判定・
-// correlation判定)は一切持たない——受け取ったActivityItemView[]を
-// そのまま描画するだけ(絶対条件、SOR-54指示「No business logic in
-// React」)。
-
+import type { KeyboardEvent } from "react";
 import type { ActivityItemView } from "@tact/runs-core/tact-runs-view";
 import { PermissionBadge, ResultBadge, WorkReference } from "./badges";
 import { AttentionIndicator } from "./StatusIndicator";
 import { executionActionPresentation } from "@/lib/executionInspector";
 
 function formatTimestamp(iso: string): string {
-
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
-
+  try { return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch { return iso; }
 }
 
-export default function ActivityTable({
-  items,
-  onSelectWork,
-  onReviewCorrelation,
-  onSelectExecution,
-  attentionExecutionIds = new Set<string>(),
-}: {
+export default function ActivityTable({ items, onSelectWork, onReviewCorrelation, onSelectExecution, attentionExecutionIds = new Set<string>(), selectedExecutionId }: {
   items: ActivityItemView[];
   onSelectWork: (workId: string) => void;
-  /** Shared boundary for the SOR-185 Execution Inspector. */
   onSelectExecution: (executionId: string) => void;
   attentionExecutionIds?: ReadonlySet<string>;
-  // SOR-77(加算的prop): 省略時は既存どおりReview actionを出さない。
+  selectedExecutionId: string | null;
   onReviewCorrelation?: (executionId: string) => void;
 }) {
+  if (items.length === 0) return <p className="text-[13px] leading-[18px] text-[#626161]">まだ記録された実行はありません。</p>;
 
-  const labels = {
-    time: "\u6642\u523b", ai: "AI", principal: "\u4f9d\u983c\u5143", service: "\u30b5\u30fc\u30d3\u30b9", action: "\u64cd\u4f5c", result: "\u7d50\u679c", permission: "\u6a29\u9650", work: "\u4ed5\u4e8b", attention: "\u8981\u78ba\u8a8d", detail: "\u8a73\u7d30",
+  const onRowKeyDown = (event: KeyboardEvent<HTMLElement>, executionId: string) => {
+    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    onSelectExecution(executionId);
   };
 
-  if (items.length === 0) {
-
-    return (
-      <p className="text-[13px] leading-[18px] text-[#626161]">
-        まだ観測されたExecutionはありません。
-      </p>
-    );
-
-  }
-
-  // SOR-23 compact-width fix: as a flex item of RunsSection's wrapper,
-  // this scroll container itself defaults to min-width:auto — without
-  // min-w-0 it refuses to shrink below the 880px table's width, so its
-  // own overflow-x-auto never gets the chance to activate and the
-  // overflow leaks to the page instead. The table's min-width itself is
-  // intentionally left alone (columns must stay legible; scrolling is
-  // meant to be contained right here, one level up).
-  return (
-
-    <div className="min-w-0 overflow-x-auto rounded-xl border border-[#D9D9D9]">
-
-      <table className="w-full min-w-[880px] border-collapse text-left text-[13px] leading-[18px] text-[#171717]">
-
-        <thead>
-          <tr className="border-b border-[#D9D9D9] bg-[#F2F2F2]/60 text-[12px] font-medium text-[#626161]">
-            <th scope="col" className="px-4 py-2.5">{labels.time}</th>
-            <th scope="col" className="px-4 py-2.5">{labels.ai}</th>
-            <th scope="col" className="px-4 py-2.5">{labels.principal}</th>
-            <th scope="col" className="px-4 py-2.5">{labels.service}</th>
-            <th scope="col" className="px-4 py-2.5">{labels.action}</th>
-            <th scope="col" className="px-4 py-2.5">{labels.result}</th>
-            <th scope="col" className="px-4 py-2.5">{labels.permission}</th>
-            <th scope="col" className="px-4 py-2.5">{labels.work}</th>
-            <th scope="col" className="px-4 py-2.5">{labels.attention}</th>
-            <th scope="col" className="px-4 py-2.5"><span className="sr-only">{labels.detail}</span></th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {items.map((item) => (
-
-            <tr key={item.executionId} className="border-b border-[#E5E5E5] last:border-b-0 hover:bg-[#FAFAFA]">
-
-              <td className="whitespace-nowrap px-4 py-2.5 text-[#626161]">{formatTimestamp(item.observedAt)}</td>
-              <td className="px-4 py-2.5">{item.agentLabel}</td>
-              <td className="px-4 py-2.5">{item.principalLabel}</td>
-              <td className="px-4 py-2.5">
-                <span>{item.targetSystem.label}</span>
-                {item.targetSystem.subLabel && (
-                  <span className="ml-1 text-[10px] text-[#8A8A8A]">{item.targetSystem.subLabel}</span>
-                )}
-              </td>
-              <td className="whitespace-nowrap px-4 py-2.5 font-medium">{executionActionPresentation(item.action)}</td>
-              <td className="px-4 py-2.5"><ResultBadge status={item.executionStatus} /></td>
-              <td className="px-4 py-2.5"><PermissionBadge result={item.permissionEvaluation} /></td>
-              <td className="px-4 py-2.5">
-                <WorkReference
-                  workId={item.workId}
-                  label={item.workTitle ?? (item.workId ? "\u4ed5\u4e8b\u540d\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093" : undefined)}
-                  correlationStatus={item.correlationStatus}
-                  onSelectWork={(workId) => { onSelectWork(workId); }}
-                  onReview={onReviewCorrelation ? () => onReviewCorrelation(item.executionId) : undefined}
-                  isHumanCorrected={item.isHumanCorrected}
-                />
-              </td>
-              <td className="px-4 py-2.5 text-center" aria-label={attentionExecutionIds.has(item.executionId) ? labels.attention : undefined}>
-                {attentionExecutionIds.has(item.executionId) ? <AttentionIndicator label={labels.attention} /> : null}
-              </td>
-              <td className="px-4 py-2.5">
-                <button type="button" onClick={() => onSelectExecution(item.executionId)} className="text-[12px] text-[#172E95] underline-offset-2 hover:underline">{labels.detail}</button>
-              </td>
-
-            </tr>
-
-          ))}
-        </tbody>
-
-      </table>
-
-    </div>
-
-  );
-
+  return <div className="min-w-0 divide-y divide-[#E5E5E5] border-y border-[#E5E5E5]">
+    {items.map((item) => {
+      const needsAttention = attentionExecutionIds.has(item.executionId);
+      return <article key={item.executionId} role="button" tabIndex={0} onClick={() => onSelectExecution(item.executionId)} onKeyDown={(event) => onRowKeyDown(event, item.executionId)} aria-label={`${item.targetSystem.label} ${executionActionPresentation(item.action)} の詳細を開く`} className={`grid min-w-0 cursor-pointer gap-x-4 gap-y-2 px-1 py-3 outline-none transition hover:bg-[#FAFAFA] focus-visible:bg-[#F7F8FC] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#172E95] lg:grid-cols-[minmax(0,1.5fr)_minmax(110px,0.8fr)_minmax(84px,0.55fr)_minmax(0,1fr)_auto] lg:items-center lg:gap-y-1 lg:px-3 ${item.executionId === selectedExecutionId ? "bg-[#F7F8FC]" : ""}`}>
+        <div className="min-w-0"><div className="flex min-w-0 items-center gap-2"><ResultBadge status={item.executionStatus} />{needsAttention && <AttentionIndicator label="要確認" />}</div><p className="mt-1 truncate text-[13px] font-medium text-[#171717]">{item.targetSystem.label}{item.targetSystem.subLabel && <span className="ml-1 text-[11px] font-normal text-[#8A8A8A]">{item.targetSystem.subLabel}</span>} ・ {executionActionPresentation(item.action)}</p></div>
+        <div className="min-w-0"><p className="truncate text-[12px] text-[#626161]">{item.workTitle ?? "関連する仕事なし"}</p><div className="mt-1" onClick={(event) => event.stopPropagation()}><WorkReference workId={item.workId} label={item.workTitle ?? (item.workId ? "仕事名を確認できません" : undefined)} correlationStatus={item.correlationStatus} onSelectWork={onSelectWork} onReview={onReviewCorrelation ? () => onReviewCorrelation(item.executionId) : undefined} isHumanCorrected={item.isHumanCorrected} /></div></div>
+        <p className="truncate text-[12px] text-[#626161]">{item.agentLabel}</p>
+        <div className="flex min-w-0 items-center gap-2"><PermissionBadge result={item.permissionEvaluation} /><span className="truncate text-[12px] text-[#626161]">{item.principalLabel}</span></div>
+        <div className="flex items-center justify-between gap-3 lg:justify-end"><time className="whitespace-nowrap text-[12px] text-[#626161]">{formatTimestamp(item.observedAt)}</time><span aria-hidden="true" className="text-[#626161]">›</span></div>
+      </article>;
+    })}
+  </div>;
 }
