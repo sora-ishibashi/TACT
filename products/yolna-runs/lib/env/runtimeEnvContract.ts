@@ -73,6 +73,18 @@ export const RUNS_ENV_CONTRACT: readonly EnvContractEntry[] = [
     required: false,
     description: "Runs-owned HMAC verification keys for signed inbound execution telemetry; never a downstream capability credential.",
   },
+  {
+    name: "RUNS_GOVERNANCE_HMAC_KEYS_JSON",
+    visibility: "server-only",
+    required: false,
+    description:
+      "Runs-owned HMAC verification keys for POST /api/tact/runs/governance/{preflight,complete} " +
+      "(SOR-138 Slice 3A-1), shaped as { \"<callerId>:<keyId>\": \"<base64-key>\" }. A distinct " +
+      "credential from RUNS_TELEMETRY_HMAC_KEYS_JSON: a governance caller acts on behalf of many " +
+      "tenant userIds per request (carried inside the signed body), unlike a telemetry source, which " +
+      "is bound to exactly one user_id. Never a downstream capability credential. Unset means both " +
+      "governance routes reject every request (fail-closed).",
+  },
 
 ];
 

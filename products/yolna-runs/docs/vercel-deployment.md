@@ -72,8 +72,14 @@ running canonical `verify` and `security` in the isolated tree.
 
 ## Staging environment scope
 
-Set only these application variables, matching `lib/env/runtimeEnvContract.ts`
-and `.env.example`. Never copy credentials from Yolna's project.
+Set only application variables from the current allowlist,
+`lib/env/runtimeEnvContract.ts` (also mirrored in `.env.example`). Never copy
+credentials from Yolna's project.
+
+**Historical note (2026-10-02 closeout audit):** at that time the allowlist
+had exactly four names, and the read-only audit found exactly those four
+configured in Preview/Development, with no Production env entries and no
+Yolna-only, LLM, Composio, or customer SaaS credential names:
 
 | Variable | Visibility | Authorized Vercel targets |
 |---|---|---|
@@ -82,10 +88,26 @@ and `.env.example`. Never copy credentials from Yolna's project.
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only, sensitive | Preview, Development |
 | `RUNS_PROJECTION_INGESTION_TOKEN` | Server-only, sensitive | Preview, Development |
 
-The read-only audit found exactly these four names in each target and no
-Production env entries. It found no Yolna-only, LLM, Composio, or customer
-SaaS credential names. Never place a service-role or ingestion credential
-in a `NEXT_PUBLIC_` variable or commit local env/CLI state.
+**Current allowlist additions (SOR-138 Slice 3A-1, not yet audited in Cloud):**
+two more optional, server-only inbound verification keyrings were added to
+`lib/env/runtimeEnvContract.ts` after the closeout audit above. Neither has
+been set in any Vercel target by this change — this section only documents
+that the application code is now permitted to read them, the same way the
+closeout audit above only recorded what was observed at that time.
+
+| Variable | Visibility | Purpose |
+|---|---|---|
+| `RUNS_TELEMETRY_HMAC_KEYS_JSON` | Server-only, sensitive, optional | Inbound HMAC verification keys for signed execution telemetry (`POST /api/tact/runs/ingest/execution`). Unset means that endpoint rejects every request (fail-closed). |
+| `RUNS_GOVERNANCE_HMAC_KEYS_JSON` | Server-only, sensitive, optional | Inbound HMAC verification keys for the governance S2S boundary (`POST /api/tact/runs/governance/{preflight,complete}`, SOR-138 Slice 3A-1 — transport/auth foundation only, no live caller wired yet). Unset means both governance routes reject every request (fail-closed). A distinct credential from `RUNS_TELEMETRY_HMAC_KEYS_JSON` — see `lib/governance/runsGovernanceAuth.ts`'s header comment. |
+
+Never place a service-role, ingestion, or HMAC-keyring credential in a
+`NEXT_PUBLIC_` variable or commit local env/CLI state. The four root-side
+`RUNS_GOVERNANCE_*` signer variables (`RUNS_GOVERNANCE_BASE_URL`,
+`RUNS_GOVERNANCE_CALLER_ID`, `RUNS_GOVERNANCE_KEY_ID`,
+`RUNS_GOVERNANCE_HMAC_KEY`) belong to the root Yolna deployment, not this
+Staging project, and are out of scope for this runbook; root
+deployment/operator documentation for them is deferred to before Slice
+3A-2 live enablement.
 
 `npm run verify:env -- --mode=production|development` loads the same env-file
 set and precedence as Next.js through `@next/env`, then checks the combined
