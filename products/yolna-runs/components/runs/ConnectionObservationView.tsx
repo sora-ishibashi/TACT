@@ -34,6 +34,13 @@ export function ConnectionObservationView({ details, state, selectedSurfaceId }:
     return <PresentationState kind={state} />;
   }
 
+  // SOR-187 review: successでsurfaceが0件(empty)と、surfaceは存在するが
+  // まだ選択されていない(unselected)は別の事実——どちらも「detailが
+  // 見つからない」ように見えるが混同しない。
+  if (details.length === 0) {
+    return <PresentationState kind="empty" />;
+  }
+
   const detail = details.find((item) => item.surfaceId === selectedSurfaceId) ?? null;
 
   if (!detail) {

@@ -8,22 +8,40 @@
 // COVERED/OUTAGE/etc, and never infers "healthy" beyond what
 // classifyObservationCoverage() below makes explicit.
 //
-// Connection (SOR-187 scope note): the standalone products/yolna-runs
-// application has no reachable Connection data source today — Yolna's
-// core/tact-integration/connection.ts (and its tact_connections table) is
-// outside products/yolna-runs' import/DB boundary (see
-// scripts/verify/standaloneForbiddenImports.ts and the "Cross-product FK
-// removal" comment in
+// Connection (SOR-187 scope note, refined by SOR-187 review): the
+// standalone products/yolna-runs application has no reachable Connection
+// data source today — Yolna's core/tact-integration/connection.ts (and its
+// tact_connections table) is outside products/yolna-runs' import/DB
+// boundary (see scripts/verify/standaloneForbiddenImports.ts and the
+// "Cross-product FK removal" comment in
 // products/yolna-runs/supabase/migrations/20270101000003_...sql — there is
 // no FK, and nothing in Runs Core resolves Connection details). Per Human
 // Owner direction (SOR-187 implementation), this file still defines the
 // join/label contract against a minimal, independently-declared
 // PublicConnection shape (same small-vocabulary-per-module convention as
 // downstreamPermission/types.ts) so the UI and this module are ready for a
-// real Connection projection later — callers pass an empty array today.
-// This is NOT a fabricated capability: zero connections in means zero
-// connections out, and the UI must render that as "connection unavailable",
-// never as an invented status.
+// real Connection projection later (SOR-212's responsibility — this file
+// never imports core/tact-integration and never gains real Connection data
+// of its own).
+//
+// Absolute condition (SOR-187 review): a caller passing `connections: []`
+// is NOT, by itself, "zero Connections exist". It could equally mean "the
+// read capability for Connections does not exist in this deployment at
+// all" — and those are two different facts a consumer must be able to
+// tell apart. `connectionReadState` is the explicit, projection-level
+// (not a new domain enum) signal for that distinction:
+//   - "unavailable": there is no Connection read capability at all (today,
+//     always this — see above). The join is never attempted; every
+//     surface's connection view carries CONNECTION_READ_UNAVAILABLE_MESSAGE
+//     ("接続情報は現在利用できません"), regardless of connectionRef or the
+//     (always-empty) connections array.
+//   - "available": a real read capability exists (future SOR-212) and
+//     `connections` reflects its actual result (possibly legitimately
+//     empty). Only then does resolveConnectionForSurface()'s exact-id join
+//     run; a surface whose connectionRef doesn't resolve gets
+//     CONNECTION_JOIN_UNAVAILABLE_MESSAGE ("接続との紐づきを確認できません")
+//     instead — a different fact (join failed) from read-unavailable
+//     (nothing to join against in the first place).
 
 import type {
   CaptureGap,
@@ -41,6 +59,12 @@ import { targetSystemLabel } from "./index";
 // =========================
 
 export type PublicConnectionStatus = "pending" | "active" | "failed" | "revoked";
+
+// projection-level state only (not a tact_execution_coverage domain enum):
+// whether this deployment has any Connection read capability at all. See
+// the header comment above for why this must stay distinct from "the
+// connections array happens to be empty".
+export type ConnectionReadState = "available" | "unavailable";
 
 export interface PublicConnection {
   id: string;
@@ -167,6 +191,12 @@ function toCoverageGapView(gap: CaptureGap): CoverageGapView {
 
 export interface CoverageConnectionView {
   joined: boolean;
+  // SOR-187 review: この2つは別の事実——connectionReadStateそのものが
+  // "unavailable"(read capability自体が無い)な場合と、
+  // "available"だがこのsurfaceのconnectionRefがどのConnectionにも
+  // 一致しなかった場合(join失敗)を、unavailableMessageの文面で区別する
+  // (推測で片方へ丸めない)。
+  readState: ConnectionReadState;
   service: string | null;
   provider: string | null;
   statusLabel: string | null;
@@ -193,24 +223,41 @@ export interface CoverageServiceDetailView {
   activeGap: CoverageGapView | null;
 }
 
-const CONNECTION_UNAVAILABLE_MESSAGE = "接続との紐づきを確認できません";
+// read capability自体が無い(connectionReadState==="unavailable")場合。
+const CONNECTION_READ_UNAVAILABLE_MESSAGE = "接続情報は現在利用できません";
 
-function toConnectionView(connection: PublicConnection | null): CoverageConnectionView {
-  if (!connection) {
-    return { joined: false, service: null, provider: null, statusLabel: null, unavailableMessage: CONNECTION_UNAVAILABLE_MESSAGE };
+// read capabilityはある(connectionReadState==="available")がjoinが
+// 一致しなかった場合。CONNECTION_READ_UNAVAILABLE_MESSAGEとは別の事実。
+const CONNECTION_JOIN_UNAVAILABLE_MESSAGE = "接続との紐づきを確認できません";
+
+function toConnectionView(
+  connectionReadState: ConnectionReadState,
+  connection: PublicConnection | null
+): CoverageConnectionView {
+
+  if (connectionReadState === "unavailable") {
+    return { joined: false, readState: "unavailable", service: null, provider: null, statusLabel: null, unavailableMessage: CONNECTION_READ_UNAVAILABLE_MESSAGE };
   }
+
+  if (!connection) {
+    return { joined: false, readState: "available", service: null, provider: null, statusLabel: null, unavailableMessage: CONNECTION_JOIN_UNAVAILABLE_MESSAGE };
+  }
+
   return {
     joined: true,
+    readState: "available",
     service: connection.service,
     provider: connection.provider,
     statusLabel: connectionStatusJapanese(connection.status),
     unavailableMessage: null,
   };
+
 }
 
 export interface BuildCoverageManagementViewInput {
   surfaces: readonly ObservationSurface[];
   gaps: readonly CaptureGap[];
+  connectionReadState: ConnectionReadState;
   connections: readonly PublicConnection[];
 }
 
@@ -227,6 +274,14 @@ export function buildCoverageServiceDetails(
     const activeGap = surfaceGaps.find((gap) => gap.isActive) ?? null;
     const classification = classifyObservationCoverage(surface, activeGap !== null);
 
+    // 絶対条件(SOR-187 review): connectionReadState==="unavailable"の
+    // 場合、joinそのものを一切試みない(呼び出すとjoinを試みたかのような
+    // 誤った印象を残しうる、resolveConnectionForSurface()はread
+    // capabilityが実在する時だけ呼ぶ)。
+    const resolvedConnection = input.connectionReadState === "available"
+      ? resolveConnectionForSurface(surface, input.connections)
+      : null;
+
     return {
       surfaceId: surface.surfaceId,
       source: surface.source,
@@ -241,7 +296,7 @@ export function buildCoverageServiceDetails(
       identityTransport: surface.identityTransport,
       workContextTransport: surface.workContextTransport,
       permissionPrecheckAvailable: surface.permissionPrecheckAvailable,
-      connection: toConnectionView(resolveConnectionForSurface(surface, input.connections)),
+      connection: toConnectionView(input.connectionReadState, resolvedConnection),
       gaps: surfaceGaps,
       activeGap,
     };

@@ -47,8 +47,12 @@ import { attentionReasonJapanese } from "@tact/runs-core/tact-runs-view/attentio
 import type { PermissionScopeView } from "@tact/runs-core/tact-runs-view/permissionManagement";
 import {
   buildCoverageServiceDetails,
+  type ConnectionReadState,
   type PublicConnection,
 } from "@tact/runs-core/tact-runs-view/coverageManagement";
+
+const EMPTY_COVERAGE: { surfaces: ObservationSurface[]; gaps: CaptureGap[]; connectionReadState: ConnectionReadState; connections: PublicConnection[] } =
+  { surfaces: [], gaps: [], connectionReadState: "unavailable", connections: [] };
 
 export default function RunsSection() {
 
@@ -80,7 +84,9 @@ export default function RunsSection() {
   const [attentionItems, setAttentionItems] = useState<AttentionCardView[]>([]);
   const [attentionLoading, setAttentionLoading] = useState(true);
   const [attentionError, setAttentionError] = useState<PresentationStateKind | null>(null);
-  const [coverage, setCoverage] = useState<{ surfaces: ObservationSurface[]; gaps: CaptureGap[]; connections: PublicConnection[] }>({ surfaces: [], gaps: [], connections: [] });
+  const [coverage, setCoverage] = useState(EMPTY_COVERAGE);
+  const [coverageLoading, setCoverageLoading] = useState(true);
+  const [coverageError, setCoverageError] = useState<PresentationStateKind | null>(null);
   const [permissionScopes, setPermissionScopes] = useState<PermissionScopeView[]>([]);
   const [permissionLoading, setPermissionLoading] = useState(true);
   const [permissionError, setPermissionError] = useState<PresentationStateKind | null>(null);
@@ -156,17 +162,48 @@ export default function RunsSection() {
   }, [getAccessToken]);
 
   const loadCoverage = useCallback(async () => {
+
     const accessToken = getAccessToken();
-    if (!accessToken) { setCoverage({ surfaces: [], gaps: [], connections: [] }); return; }
+
+    if (!accessToken) {
+      setCoverage(EMPTY_COVERAGE);
+      setCoverageError("permission-denied");
+      setCoverageLoading(false);
+      return;
+    }
+
+    setCoverageLoading(true);
+    setCoverageError(null);
+
     try {
+
       const response = await fetch("/api/tact/runs/coverage", { headers: { Authorization: `Bearer ${accessToken}` } });
       const body = await response.json().catch(() => null);
-      if (response.ok && body?.success) setCoverage({
+
+      if (!response.ok || !body?.success) {
+        setCoverageError(presentationStateForHttp(response.status));
+        setCoverage(EMPTY_COVERAGE);
+        return;
+      }
+
+      setCoverage({
         surfaces: Array.isArray(body.surfaces) ? body.surfaces : [],
         gaps: Array.isArray(body.gaps) ? body.gaps : [],
+        connectionReadState: body.connectionReadState === "available" ? "available" : "unavailable",
         connections: Array.isArray(body.connections) ? body.connections : [],
       });
-    } catch { setCoverage({ surfaces: [], gaps: [], connections: [] }); }
+
+    } catch {
+
+      setCoverageError("error");
+      setCoverage(EMPTY_COVERAGE);
+
+    } finally {
+
+      setCoverageLoading(false);
+
+    }
+
   }, [getAccessToken]);
 
   const loadPermissionManagement = useCallback(async () => {
@@ -425,8 +462,8 @@ export default function RunsSection() {
   // SOR-187: pure projection (coverageManagement.ts) — classification/
   // join判定は一切ここに無い、既存surfaces/gaps/connectionsをそのまま渡す。
   const coverageDetails = useMemo(
-    () => buildCoverageServiceDetails({ surfaces: coverage.surfaces, gaps: coverage.gaps, connections: coverage.connections }),
-    [coverage.surfaces, coverage.gaps, coverage.connections]
+    () => buildCoverageServiceDetails({ surfaces: coverage.surfaces, gaps: coverage.gaps, connectionReadState: coverage.connectionReadState, connections: coverage.connections }),
+    [coverage.surfaces, coverage.gaps, coverage.connectionReadState, coverage.connections]
   );
   const unavailableTitle = section === "work" ? "仕事" : section === "agent" ? "AI" : null;
 
@@ -497,7 +534,7 @@ export default function RunsSection() {
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       {section === "work" && <WorkSidebar items={workList} state={workListLoading ? "loading" : workListError} selectedWorkId={selectedWorkId} search={workSearch} onSearch={setWorkSearch} onSelect={handleSelectWork} />}
       {section === "permission" && <PermissionSidebar scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelect={setSelectedPermissionScopeKey} />}
-      {section === "coverage" && <ConnectionObservationSidebar details={coverageDetails} state={null} selectedSurfaceId={selectedSurfaceId} onSelect={setSelectedSurfaceId} />}
+      {section === "coverage" && <ConnectionObservationSidebar details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} onSelect={setSelectedSurfaceId} />}
       {(section === "activity" || section === "attention") && <SecondarySidebar title={section === "attention" ? "要確認" : "実行記録のフィルタ"}>
         {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
         {section === "attention" ? <div className="flex flex-col gap-1"><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">すべて ({attentionItems.length})</button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className="rounded px-2 py-2 text-left text-[12px] text-[#112278]">{category.label} ({category.count})</button>)}</div> : null}
@@ -512,7 +549,7 @@ export default function RunsSection() {
           than the viewport, even after fixing TactShell alone. */}
       <div className="mt-4 min-w-0">
 
-        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : workListError ? <PresentationState kind={workListError} /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={null} selectedSurfaceId={selectedSurfaceId} /> : section === "activity" ? (
+        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : workListError ? <PresentationState kind={workListError} /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} /> : section === "activity" ? (
 
           activityLoading ? (
             <PresentationState kind="loading" />

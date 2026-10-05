@@ -128,7 +128,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     const surface = baseSurface();
     const activeGap = baseGap({ status: "GAP_DETECTED" });
-    const details = buildCoverageServiceDetails({ surfaces: [surface], gaps: [activeGap], connections: [] });
+    const details = buildCoverageServiceDetails({ surfaces: [surface], gaps: [activeGap], connectionReadState: "unavailable", connections: [] });
     results.push(check(
       "[SOR-187] buildCoverageServiceDetails never reports HEALTHY while an active gap exists for that surface",
       details[0].classification !== "HEALTHY" && details[0].activeGap !== null
@@ -141,7 +141,7 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     const surface = baseSurface();
     const resolvedGap = baseGap({ status: "RESOLVED", resolvedAt: "2026-09-25T00:00:00.000Z" });
-    const details = buildCoverageServiceDetails({ surfaces: [surface], gaps: [resolvedGap], connections: [] });
+    const details = buildCoverageServiceDetails({ surfaces: [surface], gaps: [resolvedGap], connectionReadState: "unavailable", connections: [] });
     results.push(check(
       "[SOR-187] a RESOLVED-only gap history does not block HEALTHY; canonical health/coverageStatus decide",
       details[0].classification === "HEALTHY" && details[0].activeGap === null && details[0].gaps.length === 1 && details[0].gaps[0].isActive === false
@@ -177,10 +177,60 @@ export async function run(): Promise<{ pass: number; fail: number }> {
   {
     const surface = baseSurface({ connectionRef: null });
     const connection = baseConnection({ id: "connection-1" });
-    const details = buildCoverageServiceDetails({ surfaces: [surface], gaps: [], connections: [connection] });
+    const details = buildCoverageServiceDetails({ surfaces: [surface], gaps: [], connectionReadState: "available", connections: [connection] });
     results.push(check(
-      "[SOR-187] a surface with no connectionRef renders as connection-unavailable, never guessed",
-      details[0].connection.joined === false && details[0].connection.unavailableMessage === "接続との紐づきを確認できません"
+      "[SOR-187] with connectionReadState=available, a surface with no connectionRef renders as join-unavailable, never guessed",
+      details[0].connection.joined === false &&
+      details[0].connection.readState === "available" &&
+      details[0].connection.unavailableMessage === "接続との紐づきを確認できません"
+    ));
+  }
+
+  // =========================
+  // connectionReadState: read capability自体が無い(unavailable)場合、
+  // join failureのmessageとは別の文言になり、joinそのものを試みない
+  // (connections配列にconnectionRefと一致する行があっても無視する)。
+  // =========================
+  {
+    const surface = baseSurface({ connectionRef: "connection-1" });
+    const connection = baseConnection({ id: "connection-1" });
+    const details = buildCoverageServiceDetails({ surfaces: [surface], gaps: [], connectionReadState: "unavailable", connections: [connection] });
+    results.push(check(
+      "[SOR-187] connectionReadState=unavailable never attempts the join, even with a matching connectionRef present",
+      details[0].connection.joined === false &&
+      details[0].connection.readState === "unavailable" &&
+      details[0].connection.unavailableMessage === "接続情報は現在利用できません"
+    ));
+  }
+
+  // =========================
+  // connections: [] 単体を「0件」と解釈しない — read-unavailableと
+  // join-unavailableは別のmessageになることを明示的に区別する。
+  // =========================
+  {
+    const surface = baseSurface({ connectionRef: "connection-does-not-exist" });
+    const unavailableDetails = buildCoverageServiceDetails({ surfaces: [surface], gaps: [], connectionReadState: "unavailable", connections: [] });
+    const availableDetails = buildCoverageServiceDetails({ surfaces: [surface], gaps: [], connectionReadState: "available", connections: [] });
+    results.push(check(
+      "[SOR-187] an empty connections array means two different things depending on connectionReadState, and the UI message reflects which",
+      unavailableDetails[0].connection.unavailableMessage !== availableDetails[0].connection.unavailableMessage &&
+      unavailableDetails[0].connection.unavailableMessage === "接続情報は現在利用できません" &&
+      availableDetails[0].connection.unavailableMessage === "接続との紐づきを確認できません"
+    ));
+  }
+
+  // =========================
+  // connectionRef exact matchだけjoin(connectionReadState=available時)
+  // =========================
+  {
+    const surface = baseSurface({ connectionRef: "connection-1" });
+    const connection = baseConnection({ id: "connection-1" });
+    const details = buildCoverageServiceDetails({ surfaces: [surface], gaps: [], connectionReadState: "available", connections: [connection] });
+    results.push(check(
+      "[SOR-187] connectionReadState=available with an exact connectionRef===id match joins successfully",
+      details[0].connection.joined === true &&
+      details[0].connection.service === "notion" &&
+      details[0].connection.unavailableMessage === null
     ));
   }
 
