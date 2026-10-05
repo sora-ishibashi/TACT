@@ -583,14 +583,10 @@ export default function RunsSection() {
         {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
         {section === "attention" ? <div className="flex flex-col gap-0.5"><p className="mb-1 px-2 text-[10px] font-semibold tracking-wide text-[#8A8A8A]">理由</p><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className={`rounded px-2 py-1.5 text-left text-[12px] ${attentionCategory === null ? "bg-[#F2F4FB] font-semibold text-[#171717]" : "text-[#626161] hover:bg-[#F7F7F7]"}`}>すべて <span className="float-right tabular-nums">{attentionItems.length}</span></button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className={`rounded px-2 py-1.5 text-left text-[12px] ${attentionCategory === category.id ? "bg-[#F2F4FB] font-semibold text-[#171717]" : "text-[#626161] hover:bg-[#F7F7F7]"}`}>{category.label}<span className="float-right tabular-nums">{category.count}</span></button>)}</div> : null}
       </SecondarySidebar>}
-      <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 lg:px-6">
+      <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 lg:px-6">
       <PageHeader title={unavailableTitle ?? (section === "home" ? "ホーム" : section === "attention" ? "要確認" : section === "activity" ? "実行記録" : section === "permission" ? "権限" : section === "agent" ? "AI" : "接続・観測")} />
 
-      {/* SOR-23 compact-width fix: this div is a flex item of the root
-          (flex flex-col above) — same min-width:auto default as any other
-          flex item. Without min-w-0 here, the 880px ActivityTable several
-          levels below still forces this (and everything above it) wider
-          than the viewport, even after fixing TactShell alone. */}
+      {/* Keeps all list variants shrinkable within the main scroll region. */}
       <div className="mt-4 min-w-0">
 
         {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : workListError ? <PresentationState kind={workListError} /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} /> : section === "agent" ? <AgentManagementView items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} /> : section === "activity" ? (
@@ -604,7 +600,7 @@ export default function RunsSection() {
               {activityItems.length > 0 && filteredActivityItems.length === 0 ? (
                 <PresentationState kind="empty" />
               ) : (
-                <ActivityExplorer items={filteredActivityItems} attentionExecutionIds={attentionExecutionIds} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={setInspectedExecutionId} />
+                <ActivityExplorer items={filteredActivityItems} attentionExecutionIds={attentionExecutionIds} selectedExecutionId={inspectedExecutionId} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={setInspectedExecutionId} />
               )}
             </div>
           )
