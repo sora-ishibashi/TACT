@@ -50,10 +50,21 @@ function canonicalJson(value: unknown): string {
 // evaluatedAt/approvedAt instant-rendering differences — here there is no
 // instant-rendering difference (everything stays as the caller's own ISO
 // string), so a plain field-drop is enough.
-function sameExcludingCreatedAt(a: unknown, b: unknown): boolean {
+//
+// SOR-138 Slice 3A-2 correction: also excludes attemptedAt, mirroring the
+// real governance/store.ts's own invocationComparablePayload() fix — a
+// GovernanceInvocation retry with the same invocationId and otherwise
+// identical fields legitimately carries a different attemptedAt (it is
+// informational metadata about the first accepted claim, not part of
+// invocation identity or authorization — see that file's own comment).
+// This key is simply absent on GovernanceDecision objects, so stripping it
+// here is a no-op for appendGovernanceDecision()'s own use of this same
+// helper.
+function sameExcludingVolatileFields(a: unknown, b: unknown): boolean {
   const strip = (value: unknown) => {
     const record = { ...(value as Record<string, unknown>) };
     delete record.createdAt;
+    delete record.attemptedAt;
     return record;
   };
   return canonicalJson(strip(a)) === canonicalJson(strip(b));
@@ -158,7 +169,7 @@ export function makeFakeGovernanceStore(options: FakeGovernanceStoreOptions = {}
       return { status: "error", message: "duplicate claim could not be read" };
     }
 
-    return sameExcludingCreatedAt(existing, input)
+    return sameExcludingVolatileFields(existing, input)
       ? { status: "already_exists", invocation: existing }
       : { status: "idempotency_conflict" };
 
@@ -176,7 +187,7 @@ export function makeFakeGovernanceStore(options: FakeGovernanceStoreOptions = {}
       return { status: "created", decision };
     }
 
-    return sameExcludingCreatedAt(existing, input)
+    return sameExcludingVolatileFields(existing, input)
       ? { status: "already_exists", decision: existing }
       : { status: "idempotency_conflict" };
 

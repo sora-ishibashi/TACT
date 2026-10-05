@@ -200,6 +200,11 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
     // run.completed」等のtimelineをdeps境界だけから直接確認できる
     // ようにするため)。
     callOrder: [] as string[],
+    // SOR-138 Slice 3A-2: distinct from emitAuditEventCalls/callOrder —
+    // counts actual Preflight network-seam invocations. Legacy (ungoverned)
+    // tests never override runsGovernancePreflight and must never trigger
+    // this default fake at all (see its own throw below).
+    runsGovernancePreflightCalls: 0,
   };
 
   const deps: ExecuteApprovedIntegrationActionDeps = {
@@ -276,6 +281,21 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
         details: request.details ?? null,
       });
       calls.callOrder.push(`audit:${request.eventType}`);
+    },
+
+    // SOR-138 Slice 3A-2: the default fake deliberately throws — every
+    // existing (ungoverned) test in this file relies on
+    // RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED being unset/non-"true"
+    // in the test environment, so this dep must never be reached by them.
+    // Governed-path tests always override this explicitly.
+    runsGovernancePreflight: async () => {
+      calls.runsGovernancePreflightCalls += 1;
+      calls.callOrder.push("runsGovernancePreflight");
+      throw new Error(
+        "runsGovernancePreflight default fake invoked — a test reached the governed branch " +
+        "without overriding this dep. Either the test enabled the governance flag unintentionally, " +
+        "or shouldGovernDirectIntegrationAction() regressed to govern an action it should not."
+      );
     },
 
     ...overrides,
@@ -2940,6 +2960,457 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     );
   }
 
+  // =========================
+  // SOR-138 Slice 3A-2 — governed executeReadIntegrationAction()
+  // (slack.list_channels, RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED)
+  // =========================
+  //
+  // All governance-related assertions below use the fully-DI'd
+  // runsGovernancePreflight dep — never a real HTTP request (see
+  // ExecuteApprovedIntegrationActionDeps's own comment on this seam).
+  await withGovernanceEnabled(async () => {
+
+    const GOVERNED_ACTION = { service: "slack" as const, operation: "list_channels", input: {} };
+
+    async function runGoverned(preflightFake: ExecuteApprovedIntegrationActionDeps["runsGovernancePreflight"], overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {}) {
+      const { deps, calls } = makeDeps(overrides);
+      // Wrap the test's fake so makeDeps()'s own call counter (normally
+      // only incremented by the default throwing stub) still counts
+      // invocations — set after construction, since `calls` does not
+      // exist yet at the point an override would otherwise be supplied.
+      deps.runsGovernancePreflight = (async (...args: Parameters<typeof preflightFake>) => {
+        calls.runsGovernancePreflightCalls += 1;
+        calls.callOrder.push("runsGovernancePreflight");
+        return preflightFake(...args);
+      }) as ExecuteApprovedIntegrationActionDeps["runsGovernancePreflight"];
+      const outcome = await executeReadIntegrationAction(
+        { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: GOVERNED_ACTION },
+        deps
+      );
+      return { outcome, calls };
+    }
+
+    function decided(verdict: "ALLOW" | "DENY" | "UNKNOWN" | "APPROVAL_REQUIRED", approvalStatus: "approved" | "rejected" | null = null) {
+      return async () => ({
+        status: "decided" as const,
+        response: {
+          decisionId: "dec-1",
+          invocationId: "inv-1",
+          verdict,
+          reasonCode: "test",
+          evaluatorVersion: "v1",
+          policyVersion: "a".repeat(64),
+          matchedRuleIdentifier: null,
+          approval: { approvalId: verdict === "APPROVAL_REQUIRED" ? "apr-1" : null, status: approvalStatus },
+        },
+      });
+    }
+
+    function unavailable(reason: "unconfigured" | "network_error" | "timeout" | "malformed_response" | "invalid_response_shape" | "non_2xx") {
+      return async () => ({ status: "unavailable" as const, reason });
+    }
+
+    // ---- ALLOW ----
+    {
+      const { outcome, calls } = await runGoverned(decided("ALLOW"));
+      results.push(check(
+        "[SOR-138/ALLOW] governed slack.list_channels with verdict=ALLOW completes: Preflight exactly once, Run exactly once, provider exactly once",
+        outcome.status === "completed" &&
+        calls.runsGovernancePreflightCalls === 1 &&
+        calls.createRunCalls === 1 &&
+        calls.executeIntegrationActionCalls === 1
+      ));
+      results.push(check(
+        "[SOR-138/ALLOW ordering] policy.evaluated -> runsGovernancePreflight -> createRun -> run.created -> updateTaskStatus(running, implicit) -> provider.called -> executeIntegrationAction -> provider.completed -> completeRun -> run.completed",
+        (() => {
+          const order = calls.callOrder;
+          const idx = (name: string) => order.indexOf(name);
+          return (
+            idx("audit:policy.evaluated") >= 0 &&
+            idx("audit:policy.evaluated") < idx("runsGovernancePreflight") &&
+            idx("runsGovernancePreflight") < idx("createRun") &&
+            idx("createRun") < idx("audit:run.created") &&
+            idx("audit:run.created") < idx("audit:provider.called") &&
+            idx("audit:provider.called") < idx("executeIntegrationAction") &&
+            idx("executeIntegrationAction") < idx("audit:provider.completed") &&
+            idx("audit:provider.completed") < idx("completeRun") &&
+            idx("completeRun") < idx("audit:run.completed")
+          );
+        })()
+      ));
+    }
+
+    // =========================
+    // SOR-138 Slice 3A-2 pre-commit correction — post-ALLOW revalidation
+    // (stale-state tests A-H, review Section 6)
+    // =========================
+    //
+    // Each override below observes a mutable `stateChanged` flag that the
+    // Preflight fake flips just before returning ALLOW.
+    // planRunForExecution() (runs BEFORE Preflight, inside
+    // executeReadIntegrationAction()) always observes the flag as false —
+    // only revalidateGovernedExecutionState() (runs AFTER Preflight
+    // returns) observes it flipped. This models TACT's own local state
+    // changing during the Preflight network wait without needing any real
+    // concurrency.
+    function allowThatChangesStateAfter(
+      setStateChanged: () => void
+    ): ExecuteApprovedIntegrationActionDeps["runsGovernancePreflight"] {
+      return async () => {
+        setStateChanged();
+        return {
+          status: "decided",
+          response: {
+            decisionId: "dec-1",
+            invocationId: "inv-1",
+            verdict: "ALLOW",
+            reasonCode: "test",
+            evaluatorVersion: "v1",
+            policyVersion: "a".repeat(64),
+            matchedRuleIdentifier: null,
+            approval: { approvalId: null, status: null },
+          },
+        };
+      };
+    }
+
+    // ---- A. ALLOW, then Task becomes cancelled before revalidation ----
+    {
+      let stateChanged = false;
+      const { outcome, calls } = await runGoverned(
+        allowThatChangesStateAfter(() => { stateChanged = true; }),
+        { listTasksForWork: async () => [makeTask({ status: stateChanged ? "cancelled" : "pending" })] }
+      );
+      results.push(check(
+        "[SOR-138/stale-A] ALLOW, then Task becomes cancelled before revalidation: blocks task_not_executable, Run 0, provider 0",
+        outcome.status === "task_not_executable" &&
+        (outcome as { taskStatus: string }).taskStatus === "cancelled" &&
+        calls.createRunCalls === 0 &&
+        calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- B. ALLOW, then Task becomes completed before revalidation ----
+    {
+      let stateChanged = false;
+      const { outcome, calls } = await runGoverned(
+        allowThatChangesStateAfter(() => { stateChanged = true; }),
+        { listTasksForWork: async () => [makeTask({ status: stateChanged ? "completed" : "pending" })] }
+      );
+      results.push(check(
+        "[SOR-138/stale-B] ALLOW, then Task becomes completed before revalidation: blocks task_not_executable, Run 0, provider 0",
+        outcome.status === "task_not_executable" &&
+        (outcome as { taskStatus: string }).taskStatus === "completed" &&
+        calls.createRunCalls === 0 &&
+        calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- C. ALLOW, then Work is no longer running before revalidation ----
+    {
+      let stateChanged = false;
+      const { outcome, calls } = await runGoverned(
+        allowThatChangesStateAfter(() => { stateChanged = true; }),
+        {
+          getWork: async (workId, userId) =>
+            userId === OWNER_USER_ID
+              ? makeWork({ id: workId, status: stateChanged ? "completed" : "running" })
+              : undefined,
+        }
+      );
+      results.push(check(
+        "[SOR-138/stale-C] ALLOW, then Work is no longer running before revalidation: blocks work_not_runnable, Run 0, provider 0",
+        outcome.status === "work_not_runnable" &&
+        calls.createRunCalls === 0 &&
+        calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- D. ALLOW, then Connection becomes inactive before revalidation ----
+    {
+      let stateChanged = false;
+      const { outcome, calls } = await runGoverned(
+        allowThatChangesStateAfter(() => { stateChanged = true; }),
+        {
+          getConnection: async (connectionId, userId) =>
+            userId === OWNER_USER_ID
+              ? makeConnection({ id: connectionId, status: stateChanged ? "revoked" : "active" })
+              : undefined,
+        }
+      );
+      results.push(check(
+        "[SOR-138/stale-D] ALLOW, then Connection becomes inactive before revalidation: blocks connection_unavailable, Run 0, provider 0",
+        outcome.status === "connection_unavailable" &&
+        calls.createRunCalls === 0 &&
+        calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- E. ALLOW, then a running Run appears before revalidation ----
+    {
+      let stateChanged = false;
+      const { outcome, calls } = await runGoverned(
+        allowThatChangesStateAfter(() => { stateChanged = true; }),
+        { listRunsForTask: async () => (stateChanged ? [makeRun({ status: "running" })] : []) }
+      );
+      results.push(check(
+        "[SOR-138/stale-E] ALLOW, then a running Run appears before revalidation: blocks task_not_executable, Run 0, provider 0",
+        outcome.status === "task_not_executable" &&
+        (outcome as { taskStatus: string }).taskStatus === "running" &&
+        calls.createRunCalls === 0 &&
+        calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- F/H. ALLOW planned attempt 1, then a real Run for attempt 1
+    // lands before revalidation (current nextAttempt is now 2, no longer
+    // matching planned.nextAttempt) — must block, and must NEVER silently
+    // claim attempt+1 under the ALLOW that was granted for attempt 1. ----
+    {
+      let stateChanged = false;
+      const { outcome, calls } = await runGoverned(
+        allowThatChangesStateAfter(() => { stateChanged = true; }),
+        { listRunsForTask: async () => (stateChanged ? [makeRun({ attempt: 1, status: "completed" })] : []) }
+      );
+      results.push(check(
+        "[SOR-138/stale-F,H] ALLOW planned attempt 1, then current nextAttempt advances to 2 before revalidation: blocks task_not_executable, Run 0, provider 0 — never silently claims attempt+1 under the stale ALLOW",
+        outcome.status === "task_not_executable" &&
+        calls.createRunCalls === 0 &&
+        calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- G. unchanged state: exactly planned.nextAttempt(=1) is claimed,
+    // provider executes once ----
+    {
+      const { outcome, calls } = await runGoverned(decided("ALLOW"));
+      results.push(check(
+        "[SOR-138/stale-G] unchanged state: completes claiming exactly planned.nextAttempt(=1), Run exactly once, provider exactly once",
+        outcome.status === "completed" &&
+        calls.createRunCalls === 1 &&
+        calls.executeIntegrationActionCalls === 1 &&
+        (outcome as { run: Run }).run.attempt === 1
+      ));
+    }
+
+    // ---- DENY ----
+    {
+      const { outcome, calls } = await runGoverned(decided("DENY"));
+      results.push(check(
+        "[SOR-138/DENY] blocks: invalid_action, Run 0, provider 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+      ));
+      results.push(check(
+        "[SOR-138/DENY] no run.created, no provider.called emitted",
+        !calls.emitAuditEventCalls.some((e) => e.eventType === "run.created" || e.eventType === "provider.called")
+      ));
+    }
+
+    // ---- UNKNOWN ----
+    {
+      const { outcome, calls } = await runGoverned(decided("UNKNOWN"));
+      results.push(check(
+        "[SOR-138/UNKNOWN] blocks: invalid_action, Run 0, provider 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- APPROVAL_REQUIRED, pending ----
+    {
+      const { outcome, calls } = await runGoverned(decided("APPROVAL_REQUIRED", null));
+      results.push(check(
+        "[SOR-138/APPROVAL_REQUIRED pending] blocks: invalid_action, Run 0, provider 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- APPROVAL_REQUIRED, approved (absolute condition: still blocked) ----
+    {
+      const { outcome, calls } = await runGoverned(decided("APPROVAL_REQUIRED", "approved"));
+      results.push(check(
+        "[SOR-138/APPROVAL_REQUIRED approved] an approved ApprovalRequest does NOT authorize execution — still blocks: invalid_action, Run 0, provider 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- transport unavailable (unconfigured) ----
+    {
+      const { outcome, calls } = await runGoverned(unavailable("unconfigured"));
+      results.push(check(
+        "[SOR-138/unconfigured] blocks: invalid_action, Run 0, provider 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- timeout ----
+    {
+      const { outcome, calls } = await runGoverned(unavailable("timeout"));
+      results.push(check(
+        "[SOR-138/timeout] blocks: invalid_action, Run 0, provider 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- network error / non-2xx / malformed / invalid shape ----
+    for (const reason of ["network_error", "non_2xx", "malformed_response", "invalid_response_shape"] as const) {
+      const { outcome, calls } = await runGoverned(unavailable(reason));
+      results.push(check(
+        `[SOR-138/${reason}] blocks: invalid_action, Run 0, provider 0`,
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- 409 invocation conflict surfaces through the client as unavailable/non_2xx (see runsGovernance.ts) ----
+    {
+      const { outcome, calls } = await runGoverned(unavailable("non_2xx"));
+      results.push(check(
+        "[SOR-138/409-shaped non_2xx] blocks: invalid_action, Run 0, provider 0",
+        outcome.status === "invalid_action" && calls.createRunCalls === 0 && calls.executeIntegrationActionCalls === 0
+      ));
+    }
+
+    // ---- feature disabled: exact legacy path, Preflight never called ----
+    {
+      const originalFlag = process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED;
+      delete process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED;
+      try {
+        const { deps, calls } = makeDeps();
+        const outcome = await executeReadIntegrationAction(
+          { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: GOVERNED_ACTION },
+          deps
+        );
+        results.push(check(
+          "[SOR-138/feature-disabled] exact legacy execution path: Preflight never called, completes via existing provider dispatch",
+          outcome.status === "completed" && calls.runsGovernancePreflightCalls === 0 && calls.executeIntegrationActionCalls === 1
+        ));
+      } finally {
+        if (originalFlag === undefined) delete process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED;
+        else process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED = originalFlag;
+      }
+    }
+
+    // ---- non-slack / non-list_channels read: Preflight 0, existing behavior ----
+    {
+      const { deps, calls } = makeDeps();
+      const outcome = await executeReadIntegrationAction(
+        { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: { service: "gmail", operation: "search_messages", input: {} } },
+        deps
+      );
+      results.push(check(
+        "[SOR-138/non-governed action] gmail.search_messages is never governed even with the flag on: Preflight 0, existing behavior unaffected",
+        calls.runsGovernancePreflightCalls === 0
+      ));
+      void outcome;
+    }
+
+    // ---- exact string match only: "TRUE" / "1" / whitespace do not enable governance ----
+    {
+      const originalFlag = process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED;
+      for (const notEnabled of ["TRUE", "1", " true", "true "]) {
+        process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED = notEnabled;
+        const { deps, calls } = makeDeps();
+        await executeReadIntegrationAction(
+          { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: GOVERNED_ACTION },
+          deps
+        );
+        results.push(check(
+          `[SOR-138/exact-match] RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED=${JSON.stringify(notEnabled)} does not enable governance`,
+          calls.runsGovernancePreflightCalls === 0
+        ));
+      }
+      if (originalFlag === undefined) delete process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED;
+      else process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED = originalFlag;
+    }
+
+    // ---- concurrency: two independent planning calls over the same empty
+    // Task state derive the SAME nextAttempt (and therefore would derive
+    // the same invocationId, asking Runs about the same GovernanceInvocation)
+    // — proven here via two full runGoverned() calls sharing a fresh
+    // listRunsForTask fake that always reports zero existing runs (as if
+    // neither caller's createRun() had landed yet), each independently
+    // computing its own plan. The actual exclusion authority for a REAL
+    // simultaneous claim remains the DB's own idx_tact_runs_task_id_attempt
+    // unique index at createRun() time, unchanged by this slice.
+    {
+      const seenInvocationIds: string[] = [];
+      const preflightSpy = async (envelope: { request: { invocationId: string } }) => {
+        seenInvocationIds.push(envelope.request.invocationId);
+        return { status: "decided" as const, response: { decisionId: "dec-1", invocationId: envelope.request.invocationId, verdict: "DENY" as const, reasonCode: "test", evaluatorVersion: "v1", policyVersion: "a".repeat(64), matchedRuleIdentifier: null, approval: { approvalId: null, status: null } } };
+      };
+
+      await runGoverned(preflightSpy, { listRunsForTask: async () => [] });
+      await runGoverned(preflightSpy, { listRunsForTask: async () => [] });
+
+      results.push(check(
+        "[SOR-138/concurrency] two independent planning calls over the same empty Task state derive the SAME invocationId",
+        seenInvocationIds.length === 2 && seenInvocationIds[0] === seenInvocationIds[1]
+      ));
+    }
+
+    // ---- crash/retry semantics: a genuinely new attempt (a real Run now
+    // exists for attempt 1) derives a DIFFERENT invocationId than the
+    // first, never-claimed attempt did — proving a retry after a real
+    // attempt exists is re-evaluated, not silently reusing the stale
+    // decision identity.
+    {
+      const seenInvocationIds: string[] = [];
+      const preflightSpy = async (envelope: { request: { invocationId: string } }) => {
+        seenInvocationIds.push(envelope.request.invocationId);
+        return { status: "decided" as const, response: { decisionId: "dec-1", invocationId: envelope.request.invocationId, verdict: "DENY" as const, reasonCode: "test", evaluatorVersion: "v1", policyVersion: "a".repeat(64), matchedRuleIdentifier: null, approval: { approvalId: null, status: null } } };
+      };
+
+      // "Call 1": plans attempt 1 against a Task with zero existing Runs
+      // (modeling a crash before createRun() ever landed — the planned
+      // attempt was never actually claimed).
+      await runGoverned(preflightSpy, { listRunsForTask: async () => [] });
+
+      // A genuine subsequent attempt: a real Run for attempt 1 now exists
+      // (e.g. a previous attempt actually completed/failed), so planning
+      // again correctly derives attempt 2.
+      await runGoverned(preflightSpy, { listRunsForTask: async () => [makeRun({ attempt: 1, status: "completed" })] });
+
+      results.push(check(
+        "[SOR-138/crash-retry] once a real Run exists for the prior attempt, the next plan's nextAttempt changes and therefore derives a DIFFERENT invocationId — re-evaluated, not inherited",
+        seenInvocationIds.length === 2 && seenInvocationIds[0] !== seenInvocationIds[1]
+      ));
+    }
+
+    // ---- same-attempt retry (no Run claimed yet) reuses the SAME
+    // invocationId — this is the actual "crash before createRun()" retry
+    // case, and is intentionally idempotent at the governance layer.
+    {
+      const seenInvocationIds: string[] = [];
+      const preflightSpy = async (envelope: { request: { invocationId: string } }) => {
+        seenInvocationIds.push(envelope.request.invocationId);
+        return { status: "decided" as const, response: { decisionId: "dec-1", invocationId: envelope.request.invocationId, verdict: "DENY" as const, reasonCode: "test", evaluatorVersion: "v1", policyVersion: "a".repeat(64), matchedRuleIdentifier: null, approval: { approvalId: null, status: null } } };
+      };
+
+      await runGoverned(preflightSpy, { listRunsForTask: async () => [] });
+      await runGoverned(preflightSpy, { listRunsForTask: async () => [] });
+
+      results.push(check(
+        "[SOR-138/same-attempt retry] a retry of the SAME never-claimed attempt (still zero existing Runs) reuses the identical invocationId",
+        seenInvocationIds.length === 2 && seenInvocationIds[0] === seenInvocationIds[1]
+      ));
+    }
+
+  });
+
   return summarize("integration/execution", results);
 
+}
+
+// SOR-138 Slice 3A-2: sets/restores RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED
+// around a block of governed-path tests — same convention as this repo's
+// other env-var-scoped test helpers (e.g. tactConversationOrchestration.test.ts's
+// RUNTIME_TRIGGER_DEV_ENABLED_ENV_KEY handling).
+async function withGovernanceEnabled(fn: () => Promise<void>): Promise<void> {
+  const original = process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED;
+  process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED = "true";
+  try {
+    await fn();
+  } finally {
+    if (original === undefined) delete process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED;
+    else process.env.RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED = original;
+  }
 }

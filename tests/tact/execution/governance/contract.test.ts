@@ -167,6 +167,39 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
+  // ---- SOR-138 Slice 3A-2: a retry with a DIFFERENT attemptedAt (but
+  // otherwise identical invocation content) must still be treated as the
+  // same invocation — attemptedAt is informational metadata about the
+  // first accepted claim, not part of invocation identity (repository-
+  // audited: not used by Permission Registry rule matching or verdict
+  // computation). Before the fix, comparing attemptedAt made this
+  // impossible-to-satisfy: a caller can never resubmit with the exact
+  // same wall-clock timestamp. ----
+  {
+    const store = makeFakeGovernanceStore();
+    const rule = makeFakeRule({ targetProvider: "slack", actionCategory: "send", decision: "allowed" });
+    const deps = makePreflightDeps(store, async () => [rule]);
+    const invocationId = randomUUID();
+    const first = await preflight(makeRequest({ invocationId, attemptedAt: "2026-10-05T00:00:00.000Z" }), TRUSTED_USER_A, deps);
+    const retry = await preflight(makeRequest({ invocationId, attemptedAt: "2026-10-05T00:05:00.000Z" }), TRUSTED_USER_A, deps);
+    results.push(check(
+      "[attemptedAt-retry] a different attemptedAt on retry still resolves to decided, not invocation_conflict",
+      first.status === "decided" && retry.status === "decided"
+    ));
+    results.push(check(
+      "[attemptedAt-retry] the retry returns the SAME decisionId as the original — no fresh evaluation, no conflict",
+      first.status === "decided" && retry.status === "decided" && first.response.decisionId === retry.response.decisionId
+    ));
+    results.push(check(
+      "[attemptedAt-retry] still exactly one GovernanceInvocation row for this invocationId",
+      store.invocations.size === 1
+    ));
+    results.push(check(
+      "[attemptedAt-retry] the stored invocation keeps the ORIGINALLY accepted attemptedAt — the retry's later timestamp never overwrites it",
+      store.invocations.get(invocationId)?.attemptedAt === "2026-10-05T00:00:00.000Z"
+    ));
+  }
+
   // ---- policy change between retries must not change the retry's own answer ----
   {
     const store = makeFakeGovernanceStore();

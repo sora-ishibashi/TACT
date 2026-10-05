@@ -252,6 +252,9 @@ async function executeApprovalForReal(approval: Approval): Promise<{ outcome: Aw
     },
     reconcileWorkCompletionStatus: async () => ({ status: "no_change", reason: "tasks_not_all_terminal" }),
     emitAuditEvent: async () => {},
+    // SOR-138 Slice 3A-2: this helper only exercises the write path
+    // (executeApprovedIntegrationAction()), which never reaches governance.
+    runsGovernancePreflight: async () => { throw new Error("runsGovernancePreflight must not be called from the write path"); },
   };
 
   const outcome = await executeApprovedIntegrationAction(WORK_ID, OWNER_USER_ID, "token", approval.id, deps);

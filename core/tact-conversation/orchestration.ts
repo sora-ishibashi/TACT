@@ -71,6 +71,11 @@ import {
   // Fast Port P6b: Canonical Resume Execution。
   executeApprovedIntegrationAction,
   evaluatePolicyDecision,
+  // SOR-138 Slice 3A-2: governance gate precedence check only — this file
+  // never calls the governance client itself (core/tact-integration/
+  // execution.ts's executeReadIntegrationAction(), reached through
+  // executeReadIntegrationActionViaTactIntegration() below, owns that).
+  isRunsGovernanceSlackListChannelsEnabled,
 } from "../tact-integration";
 import type { IntegrationService, IntegrationActionExecutionOutcome, GmailSearchMessagesResult } from "../tact-integration";
 // REF-P1f: Referent Resolution primitives(REF-P1a〜P1d、既存frozen
@@ -2335,6 +2340,65 @@ const executeReadIntegrationActionViaTactIntegration: ExecuteReadIntegrationActi
 };
 
 // =========================
+// decideIntegrationReadRoute (SOR-138 Slice 3A-2 pre-commit correction)
+// =========================
+//
+// Pure decision table extracted from executeReadIntegrationActionWithRuntime
+// Routing() below so the governance-vs-Runtime precedence rule has a
+// behavioral guard that does not depend on source-text position (the
+// structural "governance check occurs before resolveRuntimeIntegrationRead
+// Adapter()" test at tests/tact/execution/governanceTransport/
+// directExecutionGateStructural.test.ts remains, but this function is what
+// a future reviewer actually calls to verify the ordering's effect, not
+// just its position in the file). Deliberately takes the runtime
+// resolution's `status` as plain data, not a live RuntimeIntegrationRead
+// Resolution — it must be callable with four bare inputs, with no env var,
+// no Supabase, no network, and no Trigger.dev SDK involved, so the A-D flag
+// matrix (SOR-138 Slice 3A-2 instructions Section 9) can be tested as pure
+// input/output pairs.
+//
+// Absolute condition (unchanged from the inline logic this replaces):
+// governance takes precedence over Runtime routing for an eligible action —
+// "governed_direct" is returned whenever isGovernanceEnabled is true,
+// regardless of what the Runtime resolution status would otherwise be. The
+// caller below never actually calls resolveRuntimeIntegrationReadAdapter()
+// in that case (see its own comment) — constructing a TriggerDevRuntime
+// Adapter has a real side effect (configure() against the Trigger.dev SDK),
+// so this function intentionally takes resolutionStatus as already-known
+// data rather than resolving it itself, preserving that existing laziness.
+export type IntegrationReadRoutingDecision =
+  | "legacy_direct"
+  | "runtime"
+  | "governed_direct"
+  | "runtime_misconfigured";
+
+export function decideIntegrationReadRoute(input: {
+  isRuntimeEligible: boolean;
+  isGovernanceEnabled: boolean;
+  runtimeResolutionStatus: "disabled" | "misconfigured" | "enabled";
+}): IntegrationReadRoutingDecision {
+
+  if (!input.isRuntimeEligible) {
+    return "legacy_direct";
+  }
+
+  if (input.isGovernanceEnabled) {
+    return "governed_direct";
+  }
+
+  if (input.runtimeResolutionStatus === "disabled") {
+    return "legacy_direct";
+  }
+
+  if (input.runtimeResolutionStatus === "misconfigured") {
+    return "runtime_misconfigured";
+  }
+
+  return "runtime";
+
+}
+
+// =========================
 // executeReadIntegrationActionWithRuntimeRouting
 // (Fast Port P5c: Route One Non-Side-Effecting Integration Read
 // Through Trigger.dev)
@@ -2367,13 +2431,54 @@ export const executeReadIntegrationActionWithRuntimeRouting: ExecuteReadIntegrat
     return executeReadIntegrationActionViaTactIntegration(params);
   }
 
-  const resolution = resolveRuntimeIntegrationReadAdapter();
+  // SOR-138 Slice 3A-2 (temporary, until Slice 3B propagates invocationId/
+  // decisionId through the runtime path): the governance gate takes
+  // precedence over Trigger.dev routing for this one action.
+  // executeReadIntegrationActionViaTactIntegration() reaches core/
+  // tact-integration/execution.ts's executeReadIntegrationAction(), which
+  // performs the actual Preflight enforcement — this file only forces that
+  // DIRECT path instead of silently dispatching an ungoverned execution to
+  // Trigger.dev. 3A-2 does not govern the Trigger.dev worker path at all.
+  //
+  // Deliberately checked (and short-circuited on) BEFORE
+  // resolveRuntimeIntegrationReadAdapter() is ever called: constructing a
+  // TriggerDevRuntimeAdapter has a real side effect (configure() against
+  // the Trigger.dev SDK) that must not fire for a governed action, even if
+  // Runtime routing is otherwise enabled and configured. decideIntegration
+  // ReadRoute() below is the pure mapping this ordering feeds into; this
+  // `if` is what actually avoids the side-effecting resolve() call.
+  const isGovernanceEnabled = isRunsGovernanceSlackListChannelsEnabled();
 
-  if (resolution.status === "disabled") {
+  if (isGovernanceEnabled) {
     return executeReadIntegrationActionViaTactIntegration(params);
   }
 
-  if (resolution.status === "misconfigured") {
+  const resolution = resolveRuntimeIntegrationReadAdapter();
+
+  const routingDecision = decideIntegrationReadRoute({
+    // Narrowed true by the eligibility guard above (service/operation/
+    // isRuntimeEligibleIntegrationAction all confirmed before this point).
+    isRuntimeEligible: true,
+    isGovernanceEnabled,
+    runtimeResolutionStatus: resolution.status,
+  });
+
+  if (routingDecision === "legacy_direct") {
+    return executeReadIntegrationActionViaTactIntegration(params);
+  }
+
+  if (routingDecision === "runtime_misconfigured") {
+    return { status: "invalid_action" };
+  }
+
+  // routingDecision can only be "runtime" at this point (legacy_direct and
+  // runtime_misconfigured returned above; governed_direct is excluded
+  // structurally by the isGovernanceEnabled early return earlier in this
+  // function) — decideIntegrationReadRoute() only returns "runtime" when
+  // runtimeResolutionStatus==="enabled", but TypeScript cannot infer that
+  // back from routingDecision's value, so this re-narrows `resolution`
+  // itself for the resolution.adapter access below.
+  if (resolution.status !== "enabled") {
     return { status: "invalid_action" };
   }
 

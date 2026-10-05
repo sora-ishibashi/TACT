@@ -219,6 +219,10 @@ function makeDeps(
 
     emitAuditEvent: async () => {},
 
+    // SOR-138 Slice 3A-2: this file only exercises the write path
+    // (executeApprovedIntegrationAction()), which never reaches governance.
+    runsGovernancePreflight: async () => { throw new Error("runsGovernancePreflight must not be called from the write path"); },
+
     ...overrides,
 
   };
