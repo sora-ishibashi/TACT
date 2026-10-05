@@ -390,8 +390,9 @@ export default function RunsSection() {
 
   const handleSelectWork = useCallback((workId: string) => {
     setSelectedWorkId(workId);
+    setSection("work");
     loadWork(workId);
-  }, [loadWork]);
+  }, [loadWork, setSection]);
 
   // SOR-48(Attention Lifecycle): 状態機械・冪等性・所有権の判定は一切
   // ここに無い(PATCH /api/tact/runs/attention/[attentionId]、および
@@ -477,13 +478,6 @@ export default function RunsSection() {
 
   }, [selectedWorkId, loadWork]);
 
-  const handleBack = useCallback(() => {
-    setSelectedWorkId(null);
-    setWorkHeader(null);
-    setWorkItems([]);
-    setWorkError(null);
-  }, []);
-
   // SOR-23: filter選択肢は現在読み込まれているactivityItemsから毎回
   // 導出する(推測・hardcodeしない、pure関数、core/tact-runs-view参照)。
   const activityFilterOptions = useMemo(() => distinctActivityFilterOptions(activityItems), [activityItems]);
@@ -530,48 +524,6 @@ export default function RunsSection() {
 
   }
 
-  if (selectedWorkId) {
-
-    return (
-
-      <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto px-6 py-5">
-
-        {workLoading ? (
-          <PresentationState kind="loading" />
-        ) : workError ? (
-          workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />
-        ) : workHeader ? (
-          <WorkDetailView work={workHeader} items={workItems} onBack={handleBack} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={setInspectedExecutionId} />
-        ) : (
-          <div className="flex flex-col gap-4">
-            <button
-              type="button"
-              onClick={handleBack}
-              className="w-fit text-[12px] text-[#626161] transition duration-150 ease-out hover:text-[#112278]"
-            >
-              ← 戻る
-            </button>
-            <p className="text-[13px] leading-[18px] text-[#626161]">このWorkは見つかりませんでした。</p>
-          </div>
-        )}
-
-        {reviewingExecutionId && getAccessToken() && (
-          <CorrelationReviewModal
-            executionId={reviewingExecutionId}
-            accessToken={getAccessToken()!}
-            onClose={() => setReviewingExecutionId(null)}
-            onCorrected={(result) => handleExecutionCorrected(reviewingExecutionId, result)}
-          />
-        )}
-
-        {executionInspector}
-
-      </div>
-
-    );
-
-  }
-
   return (
 
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -589,7 +541,9 @@ export default function RunsSection() {
       {/* Keeps all list variants shrinkable within the main scroll region. */}
       <div className="mt-4 min-w-0">
 
-        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (workListLoading ? <PresentationState kind="loading" /> : workListError ? <PresentationState kind={workListError} /> : <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p>) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} /> : section === "agent" ? <AgentManagementView items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} /> : section === "activity" ? (
+        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (
+          !selectedWorkId ? <p className="text-[13px] text-[#626161]">左の一覧から仕事を選択してください。</p> : workLoading ? <PresentationState kind="loading" /> : workError ? (workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />) : workHeader ? <WorkDetailView work={workHeader} items={workItems} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={setInspectedExecutionId} /> : <PresentationState kind="empty">Workが見つかりません。</PresentationState>
+        ) : unavailableTitle ? <PresentationState kind="unavailable" /> : section === "permission" ? <PermissionManagementView scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onSelectExecution={setInspectedExecutionId} onSelectWork={handleSelectWork} /> : section === "agent" ? <AgentManagementView items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onSelectWork={handleSelectWork} onSelectExecution={setInspectedExecutionId} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setSection("permission"); }} onOpenAttention={() => setSection("attention")} /> : section === "coverage" ? <ConnectionObservationView details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} /> : section === "activity" ? (
 
           activityLoading ? (
             <PresentationState kind="loading" />
