@@ -466,6 +466,118 @@ export interface CompleteResult {
 }
 
 // =========================
+// Governance S2S Transport Contract (SOR-138 Slice 3A-1)
+// =========================
+//
+// Preflight/Complete above (SOR-138 Slice 1) are deliberately
+// tenant-identity-free wire shapes — a trusted userId is always a separate
+// function argument, never a field on the request body. That property
+// must survive crossing an actual HTTP boundary between a future Yolna
+// caller and the standalone Yolna Runs product. These envelopes are NOT a
+// relaxation of that rule: `onBehalfOfUserId` on an envelope is NOT trusted
+// tenant context merely because it is present in a JSON body — it only
+// becomes trusted once the ENTIRE request body (this envelope, serialized)
+// has passed the caller's HMAC signature verification (see
+// buildGovernanceSignatureCanonicalString below and
+// products/yolna-runs/lib/governance/runsGovernanceAuth.ts, the only
+// verifier). A route must never read onBehalfOfUserId before that
+// verification succeeds. PreflightRequest/CompleteRequest themselves gain
+// no userId field — adding one back to either type is the visible,
+// reviewable change this file's own header comments already warn against.
+//
+// Crypto stays out of this file by design ("Crypto remains server-local on
+// each side" — SOR-138 Slice 3A-1 instructions): the HMAC
+// signing/verification implementation is deliberately duplicated once on
+// each side (core/tact-integration/runsGovernance.ts for the Yolna signer,
+// products/yolna-runs/lib/governance/runsGovernanceAuth.ts for the Runs
+// verifier) rather than shared from a single crypto-bearing module, so
+// neither deployment's trust boundary depends on importing the other
+// product's crypto code. Only the plain canonical-string FORMAT is shared
+// here, as a pure string-building function with zero Node crypto import,
+// so the two independently-implemented sides cannot silently drift apart
+// on byte-for-byte signing input.
+
+export interface GovernancePreflightEnvelope {
+
+  // Claimed tenant context. Untrusted until the envelope's signature (the
+  // entire raw request body, including this field) has been verified by
+  // the Runs-side governance-caller HMAC boundary — see this section's
+  // header comment.
+  onBehalfOfUserId: string;
+
+  request: PreflightRequest;
+
+}
+
+export interface GovernanceCompleteEnvelope {
+
+  onBehalfOfUserId: string;
+
+  request: CompleteRequest;
+
+}
+
+// Dedicated governance-transport header names — never reused from the
+// existing projection-ingestion bearer token or signed-telemetry header
+// set (different trust shape: see runsGovernance.ts's own header comment
+// on why neither existing S2S mechanism fits this boundary).
+// `as const` (not just `string`): callers use these as computed property
+// names when building a headers object literal, which requires TypeScript
+// to see each one as its own literal type, not the widened `string`.
+export const GOVERNANCE_HEADER_CALLER_ID = "x-runs-governance-caller-id" as const;
+export const GOVERNANCE_HEADER_KEY_ID = "x-runs-governance-key-id" as const;
+export const GOVERNANCE_HEADER_TIMESTAMP = "x-runs-governance-timestamp" as const;
+export const GOVERNANCE_HEADER_CONTENT_SHA256 = "x-runs-governance-content-sha256" as const;
+export const GOVERNANCE_HEADER_SIGNATURE = "x-runs-governance-signature" as const;
+
+export const GOVERNANCE_SIGNATURE_VERSION = "runs-governance-hmac-v1" as const;
+
+export interface GovernanceSignatureCanonicalInput {
+
+  method: string;
+
+  // URL pathname only (e.g. "/api/tact/runs/governance/preflight") — never
+  // the full host/origin, so the signature cannot be replayed against a
+  // different deployment's hostname by construction.
+  pathname: string;
+
+  callerId: string;
+
+  keyId: string;
+
+  // Unix seconds, as a decimal string (matches the existing signed
+  // telemetry convention — see products/yolna-runs/lib/telemetry/
+  // executionTelemetry.ts's own x-runs-timestamp header).
+  timestamp: string;
+
+  // SHA-256 digest of the raw request body, lowercase hex. The caller of
+  // this function is responsible for having verified (or, on the signer
+  // side, having itself computed) this against the actual raw body bytes
+  // — this function only formats, it never hashes.
+  bodySha256Hex: string;
+
+}
+
+// Pure text formatting only — no hashing, no HMAC, no Node crypto import
+// (see this section's header comment on why crypto stays out of this
+// package). `method` is canonicalized (uppercased) exactly once, here,
+// so neither side needs to remember to normalize it before calling this
+// function.
+export function buildGovernanceSignatureCanonicalString(input: GovernanceSignatureCanonicalInput): string {
+
+  return [
+    GOVERNANCE_SIGNATURE_VERSION,
+    input.method.toUpperCase(),
+    input.pathname,
+    input.callerId,
+    input.keyId,
+    input.timestamp,
+    input.bodySha256Hex,
+  ].join("\n");
+
+}
+
+// =========================
 // Connection Projection Contract (SOR-212)
 // =========================
 //
