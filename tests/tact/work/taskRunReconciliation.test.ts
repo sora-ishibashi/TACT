@@ -777,10 +777,11 @@ function makeExecutionDeps(options: MakeExecutionDepsOptions = {}) {
 
     attachRunExternalRef: async () => {},
 
-    // SOR-138 Slice 3A-2: this file exercises dispatchIntegrationReadToRuntime()
+    // SOR-138 Slice 3A-2/3A-3: this file exercises dispatchIntegrationReadToRuntime()
     // directly, not executeReadIntegrationAction() — the governed branch
-    // lives only in the latter, so this dep must never be reached here.
+    // lives only in the latter, so these deps must never be reached here.
     runsGovernancePreflight: async () => { throw new Error("runsGovernancePreflight must not be called from the Runtime dispatch path"); },
+    runsGovernanceComplete: async () => { throw new Error("runsGovernanceComplete must not be called from the Runtime dispatch path"); },
 
   };
 
