@@ -251,6 +251,8 @@ import { run as runExecutionGovernanceApprovalRequestContract } from "./executio
 import { run as runExecutionGovernanceApprovalRequestConcurrency } from "./execution/governance/approvalRequestConcurrency.test";
 import { run as runExecutionGovernanceApprovalRequestImmutability } from "./execution/governance/approvalRequestImmutability.test";
 import { run as runExecutionGovernanceInvocationStore } from "./execution/governance/invocationStore.test";
+import { run as runExecutionPrincipalStore } from "./execution/principal/principalStore.test";
+import { run as runExecutionPrincipalMigrationContract } from "./execution/principal/migrationContract.test";
 import { run as runExecutionGovernanceTransportCanonicalString } from "./execution/governanceTransport/canonicalString.test";
 import { run as runExecutionGovernanceTransportRootClient } from "./execution/governanceTransport/rootClient.test";
 import { run as runExecutionGovernanceTransportStructuralSecurity } from "./execution/governanceTransport/structuralSecurity.test";
@@ -489,6 +491,8 @@ const suites: { name: string; run: () => Promise<{ pass: number; fail: number }>
   { name: "execution/governance/approvalRequestConcurrency", run: runExecutionGovernanceApprovalRequestConcurrency },
   { name: "execution/governance/approvalRequestImmutability", run: runExecutionGovernanceApprovalRequestImmutability },
   { name: "execution/governance/invocationStore", run: runExecutionGovernanceInvocationStore },
+  { name: "execution/principal/principalStore", run: runExecutionPrincipalStore },
+  { name: "execution/principal/migrationContract", run: runExecutionPrincipalMigrationContract },
   { name: "execution/governanceTransport/canonicalString", run: runExecutionGovernanceTransportCanonicalString },
   { name: "execution/governanceTransport/rootClient", run: runExecutionGovernanceTransportRootClient },
   { name: "execution/governanceTransport/structuralSecurity", run: runExecutionGovernanceTransportStructuralSecurity },

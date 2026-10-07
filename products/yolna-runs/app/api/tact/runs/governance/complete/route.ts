@@ -39,13 +39,22 @@ import {
   linkInvocationExecution,
   captureExecution,
   assertExecutionOutcome,
+  resolveOrCreateExternalPrincipal,
   type CompleteDeps,
+  type ResolveOrCreateExternalPrincipalOutcome,
 } from "@tact/runs-core/tact-execution";
 import type { CompleteRequest, GovernanceCompleteEnvelope } from "@tact/execution-contract";
 import { verifyGovernanceSignedRequest, exceedsDeclaredContentLength } from "@/lib/governance/runsGovernanceAuth";
 
 export interface GovernanceCompleteRouteDeps {
   verify: typeof verifyGovernanceSignedRequest;
+  // SOR-260 Phase 1: resolves/creates the external Principal from
+  // (auth.callerId, envelope.onBehalfOfUserId) AFTER authentication
+  // succeeds and BEFORE complete() ever sees an identity — same
+  // resolution path and same claim boundary as the Preflight route (see
+  // that route's own header comment). complete() now receives the
+  // resolved principal.id, never the raw onBehalfOfUserId directly.
+  resolvePrincipal: typeof resolveOrCreateExternalPrincipal;
   complete: typeof complete;
   // Factory, not a plain object: production wiring must construct a fresh
   // CompleteDeps per call (mirrors complete()'s own "no module-level
@@ -72,6 +81,7 @@ export function buildDefaultTrustedDeps(): CompleteDeps {
 
 const defaultDeps: GovernanceCompleteRouteDeps = {
   verify: verifyGovernanceSignedRequest,
+  resolvePrincipal: resolveOrCreateExternalPrincipal,
   complete,
   buildTrustedDeps: buildDefaultTrustedDeps,
 };
@@ -128,9 +138,26 @@ export async function handleGovernanceCompleteRequest(
 
   const envelope = parsedBody;
 
+  // SOR-260 Phase 1: same resolution path as the Preflight route — see
+  // that route's header comment for the full rationale. complete() below
+  // never receives the raw envelope.onBehalfOfUserId as a trusted
+  // user_id again past this point, only principalOutcome.principal.id.
+  const principalOutcome: ResolveOrCreateExternalPrincipalOutcome = await deps.resolvePrincipal(
+    auth.callerId,
+    envelope.onBehalfOfUserId
+  );
+
+  if (principalOutcome.status === "invalid") {
+    return errorResponse(400, "invalid_principal");
+  }
+
+  if (principalOutcome.status === "unavailable") {
+    return errorResponse(503, "governance_unavailable");
+  }
+
   const result = await deps.complete(
     envelope.request as CompleteRequest,
-    envelope.onBehalfOfUserId,
+    principalOutcome.principal.id,
     deps.buildTrustedDeps()
   );
 

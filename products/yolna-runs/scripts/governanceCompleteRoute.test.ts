@@ -27,7 +27,7 @@ import {
   buildDefaultTrustedDeps,
   type GovernanceCompleteRouteDeps,
 } from "../app/api/tact/runs/governance/complete/route";
-import type { CompleteDeps } from "@tact/runs-core/tact-execution";
+import type { CompleteDeps, ResolveOrCreateExternalPrincipalOutcome } from "@tact/runs-core/tact-execution";
 import type { GovernanceAuthResult } from "../lib/governance/runsGovernanceAuth";
 
 const checks: string[] = [];
@@ -104,6 +104,41 @@ function makeFakeComplete(result: CompleteResult): { fn: typeof import("@tact/ru
 // assertExecutionOutcome itself), so stub functions that would fail loudly
 // if ever actually called are intentional — only this factory's own return
 // shape matters here.
+// SOR-260 Phase 1: same deterministic, observable resolver fake as
+// governancePreflightRoute.test.ts's own resolvedPrincipalId()/
+// makeFakeResolvePrincipal() — kept identical across both route test files
+// specifically so a reviewer can see Preflight and Complete resolve
+// through the exact same shape, not two independently-drifted fakes.
+function resolvedPrincipalId(namespace: string, externalSubjectId: string): string {
+  return `principal::${namespace}::${externalSubjectId}`;
+}
+
+interface SpyResolvePrincipal {
+  calls: Array<{ namespace: string; externalSubjectId: string }>;
+}
+
+function makeFakeResolvePrincipal(
+  outcomeOverride?: ResolveOrCreateExternalPrincipalOutcome
+): { fn: (namespace: string, externalSubjectId: string) => Promise<ResolveOrCreateExternalPrincipalOutcome>; spy: SpyResolvePrincipal } {
+  const spy: SpyResolvePrincipal = { calls: [] };
+  const fn = async (namespace: string, externalSubjectId: string): Promise<ResolveOrCreateExternalPrincipalOutcome> => {
+    spy.calls.push({ namespace, externalSubjectId });
+    if (outcomeOverride) return outcomeOverride;
+    return {
+      status: "resolved",
+      principal: {
+        id: resolvedPrincipalId(namespace, externalSubjectId),
+        namespace,
+        externalSubjectId,
+        localAuthUserId: null,
+        principalKind: "external_subject",
+        createdAt: "2026-10-05T00:00:00.000Z",
+      },
+    };
+  };
+  return { fn, spy };
+}
+
 function stubTrustedDepsFactory(): CompleteDeps {
   const neverCall = () => { throw new Error("this stub dep must never actually be invoked — complete() is faked in this test"); };
   return {
@@ -125,6 +160,7 @@ async function run(): Promise<void> {
     const envelope = makeEnvelope("user-a", { observationMode: "reconciled", preExecutionVisible: true, trust: "full" });
     const body = Buffer.from(JSON.stringify(envelope));
     const { fn, spy } = makeFakeComplete(linkedResult);
+    const { fn: resolveFn, spy: resolveSpy } = makeFakeResolvePrincipal();
 
     // buildTrustedDeps is the REAL production factory (buildDefaultTrustedDeps,
     // exported by the route specifically so this test can prove the DEFAULT
@@ -133,13 +169,17 @@ async function run(): Promise<void> {
     // assertExecutionOutcome() are never actually invoked below (complete()
     // itself is faked, see spy), so this never touches a real Supabase
     // client despite using the real factory.
-    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn, buildTrustedDeps: buildDefaultTrustedDeps };
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: buildDefaultTrustedDeps };
 
     const response = await handleGovernanceCompleteRequest(makeRequest(body, sign(body, "1759622400")), deps);
     const json = await response.json();
 
     check("[1] a validly-authed request reaches complete()", spy.calls.length === 1);
-    check("[2] the trusted userId passed to complete() equals the signed envelope's onBehalfOfUserId", spy.calls[0]?.userId === "user-a");
+    check("[1b] the resolver was called exactly once, with (auth.callerId, envelope.onBehalfOfUserId)", resolveSpy.calls.length === 1 && resolveSpy.calls[0]?.namespace === CALLER_ID && resolveSpy.calls[0]?.externalSubjectId === "user-a");
+    check(
+      "[2] complete() receives the RESOLVED principal.id, NOT the raw envelope.onBehalfOfUserId — same resolution shape as the Preflight route",
+      spy.calls[0]?.userId === resolvedPrincipalId(CALLER_ID, "user-a") && spy.calls[0]?.userId !== "user-a"
+    );
     check(
       "[3] extra wire fields on the request (observationMode/preExecutionVisible/trust) never reach trustedDeps.observationProvenance",
       spy.calls[0]?.trustedDeps.observationProvenance?.observationMode === "inline" &&
@@ -157,7 +197,8 @@ async function run(): Promise<void> {
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn } = makeFakeComplete({ status: "already_linked", executionId: "exec-1" });
-    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
     const response = await handleGovernanceCompleteRequest(makeRequest(body, sign(body, "1759622400")), deps);
     check("[6] core status=already_linked maps to HTTP 200", response.status === 200);
   }
@@ -166,7 +207,8 @@ async function run(): Promise<void> {
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn } = makeFakeComplete({ status: "link_conflict", executionId: "exec-1" });
-    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
     const response = await handleGovernanceCompleteRequest(makeRequest(body, sign(body, "1759622400")), deps);
     check("[7] core status=link_conflict maps to HTTP 409", response.status === 409);
   }
@@ -175,12 +217,14 @@ async function run(): Promise<void> {
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn } = makeFakeComplete({ status: "invocation_not_found" });
-    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
     const response = await handleGovernanceCompleteRequest(makeRequest(body, sign(body, "1759622400")), deps);
 
     const body2 = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn: fn2 } = makeFakeComplete({ status: "decision_not_found" });
-    const deps2: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn2, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn2 } = makeFakeResolvePrincipal();
+    const deps2: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn2, complete: fn2, buildTrustedDeps: stubTrustedDepsFactory };
     const response2 = await handleGovernanceCompleteRequest(makeRequest(body2, sign(body2, "1759622400")), deps2);
 
     check("[8] core status=invocation_not_found/decision_not_found maps to HTTP 404", response.status === 404 && response2.status === 404);
@@ -190,7 +234,8 @@ async function run(): Promise<void> {
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn } = makeFakeComplete({ status: "invalid", reason: "execution.provider must be one of ..." });
-    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
     const response = await handleGovernanceCompleteRequest(makeRequest(body, sign(body, "1759622400")), deps);
     check("[9] core status=invalid maps to HTTP 400", response.status === 400);
   }
@@ -199,24 +244,28 @@ async function run(): Promise<void> {
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn } = makeFakeComplete({ status: "unavailable" });
-    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
     const response = await handleGovernanceCompleteRequest(makeRequest(body, sign(body, "1759622400")), deps);
 
     const body2 = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn: fn2 } = makeFakeComplete({ status: "error", reason: "db write failed" });
-    const deps2: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn2, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn2 } = makeFakeResolvePrincipal();
+    const deps2: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn2, complete: fn2, buildTrustedDeps: stubTrustedDepsFactory };
     const response2 = await handleGovernanceCompleteRequest(makeRequest(body2, sign(body2, "1759622400")), deps2);
 
     check("[10] core status=unavailable/error maps to HTTP 503", response.status === 503 && response2.status === 503);
   }
 
-  // [11] auth failure -> complete() not called
+  // [11] auth failure -> neither the principal resolver nor complete() is called
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn, spy } = makeFakeComplete(linkedResult);
-    const deps: GovernanceCompleteRouteDeps = { verify: () => ({ ok: false, kind: "client", reason: "signature_invalid" }), complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn, spy: resolveSpy } = makeFakeResolvePrincipal();
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ({ ok: false, kind: "client", reason: "signature_invalid" }), resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
     const response = await handleGovernanceCompleteRequest(makeRequest(body, sign(body, "1759622400")), deps);
     check("[11] an auth failure never reaches complete()", response.status === 401 && spy.calls.length === 0);
+    check("[11b] an auth failure never reaches the principal resolver either (resolver call count 0, confirms resolution never precedes authentication)", resolveSpy.calls.length === 0);
   }
 
   // [12] duplicate identical Complete remains idempotent at the application boundary
@@ -235,7 +284,8 @@ async function run(): Promise<void> {
         ? { status: "linked" as const, executionId: "exec-1", governanceExecutionLinkId: "link-1", outcomeRecorded: false }
         : { status: "already_linked" as const, executionId: "exec-1", governanceExecutionLinkId: "link-1", outcomeRecorded: false };
     }) as typeof import("@tact/runs-core/tact-execution").complete;
-    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
 
     const first = await handleGovernanceCompleteRequest(makeRequest(body, { ...headers }), deps);
     const second = await handleGovernanceCompleteRequest(makeRequest(body, { ...headers }), deps);
@@ -258,13 +308,36 @@ async function run(): Promise<void> {
     const headers = sign(body, "1759622400");
     headers["content-length"] = String(64 * 1024 + 1);
     const { fn, spy } = makeFakeComplete(linkedResult);
-    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
 
     const response = await handleGovernanceCompleteRequest(makeRequest(body, headers), deps);
     check(
       "[13] an oversized declared Content-Length is rejected (401) before the body is read, never reaching complete()",
       response.status === 401 && spy.calls.length === 0
     );
+  }
+
+  // [14] SOR-260: principal resolver returns invalid -> 400, never reaches complete()
+  {
+    const body = Buffer.from(JSON.stringify(makeEnvelope()));
+    const { fn, spy } = makeFakeComplete(linkedResult);
+    const { fn: resolveFn } = makeFakeResolvePrincipal({ status: "invalid", errors: ["namespace \"runs-local-auth\" is reserved"] });
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+
+    const response = await handleGovernanceCompleteRequest(makeRequest(body, sign(body, "1759622400")), deps);
+    check("[14] principal resolver status=invalid maps to HTTP 400 and never reaches complete()", response.status === 400 && spy.calls.length === 0);
+  }
+
+  // [15] SOR-260: principal resolver returns unavailable -> 503, never reaches complete()
+  {
+    const body = Buffer.from(JSON.stringify(makeEnvelope()));
+    const { fn, spy } = makeFakeComplete(linkedResult);
+    const { fn: resolveFn } = makeFakeResolvePrincipal({ status: "unavailable" });
+    const deps: GovernanceCompleteRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, complete: fn, buildTrustedDeps: stubTrustedDepsFactory };
+
+    const response = await handleGovernanceCompleteRequest(makeRequest(body, sign(body, "1759622400")), deps);
+    check("[15] principal resolver status=unavailable maps to HTTP 503 and never reaches complete()", response.status === 503 && spy.calls.length === 0);
   }
 
   console.log(`GOVERNANCE_COMPLETE_ROUTE_TESTS=${checks.length}/${checks.length}`);
