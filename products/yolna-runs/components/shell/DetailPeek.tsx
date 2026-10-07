@@ -16,11 +16,12 @@ export function DetailPeek({ title, children, footer, onClose }: {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [onClose]);
 
-  return <div className="fixed inset-0 z-40 bg-black/20 md:left-auto md:bg-transparent">
-    <aside role="dialog" aria-modal="true" aria-label={title} className="flex h-full w-full flex-col border-l border-[#D9D9D9] bg-white shadow-xl md:ml-auto md:w-[min(480px,calc(100vw-24px))]">
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[#E5E5E5] px-5 py-3"><h2 className="text-[18px] font-semibold text-[#171717]">{title}</h2><button type="button" onClick={onClose} title={`${title}を閉じる`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[#626161] outline-none hover:bg-[#F7F7F7] hover:text-[#171717] focus-visible:ring-2 focus-visible:ring-[#18B5A6]" aria-label={`${title}を閉じる`}><CloseIcon /></button></header>
+  return <div className="fixed inset-0 z-40 bg-[var(--runs-overlay)] md:bg-transparent">
+    <button type="button" className="absolute inset-0 hidden cursor-default md:block" aria-label={`${title}を閉じる`} onClick={onClose} />
+    <aside role="dialog" aria-modal="true" aria-label={title} className="runs-peek-enter relative ml-auto flex h-full w-full flex-col border-l border-runs-border bg-runs-raised shadow-[var(--runs-shadow)] md:w-[min(480px,calc(100vw-24px))]">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-runs-border-subtle px-5 py-3"><h2 className="min-w-0 break-words text-lg font-semibold text-runs-text">{title}</h2><button type="button" onClick={onClose} title={`${title}を閉じる`} className="runs-focus inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-runs-text-secondary hover:bg-runs-hover hover:text-runs-text" aria-label={`${title}を閉じる`}><CloseIcon /></button></header>
       <div className="tact-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-5">{children}</div>
-      {footer && <footer className="shrink-0 border-t border-[#E5E5E5] px-5 py-4">{footer}</footer>}
+      {footer && <footer className="shrink-0 border-t border-runs-border-subtle px-5 py-4">{footer}</footer>}
     </aside>
   </div>;
 }

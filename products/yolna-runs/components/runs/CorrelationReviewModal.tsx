@@ -177,7 +177,7 @@ export default function CorrelationReviewModal({
     <div className="fixed inset-0 z-[80] flex items-center justify-center px-4 py-8">
 
       <div
-        className="absolute inset-0 z-40 bg-[#112278]/40"
+        className="absolute inset-0 z-40 bg-[var(--runs-overlay)]"
         onClick={submit.pending ? undefined : onClose}
         aria-hidden="true"
       />
@@ -194,18 +194,18 @@ export default function CorrelationReviewModal({
         // Confirm/Change/Keep Unassigned or the close button off-screen on
         // a short or narrow window. The header stays pinned; only the body
         // scrolls.
-        className="relative z-[80] flex max-h-[85vh] w-full max-w-[480px] flex-col rounded-2xl bg-white p-6 shadow-[0_4px_16px_rgba(17,34,120,0.12)]"
+        className="runs-peek-enter relative z-[80] flex max-h-[85vh] w-full max-w-[480px] flex-col rounded-2xl border border-runs-border bg-runs-raised p-6 shadow-[var(--runs-shadow)]"
       >
 
         <div className="flex shrink-0 items-start justify-between gap-4">
-          <h2 className="text-[24px] font-medium leading-[32px] text-[#112278]">Workを確認</h2>
+          <h2 className="text-[24px] font-medium leading-[32px] text-runs-interactive-hover">Workを確認</h2>
           <button
             type="button"
             onClick={onClose}
             disabled={submit.pending}
             aria-label="Work確認を閉じる"
             title="Work確認を閉じる"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[#626161] outline-none transition duration-150 ease-out hover:bg-[#F7F7F7] hover:text-[#171717] focus-visible:ring-2 focus-visible:ring-[#18B5A6] disabled:opacity-50"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-runs-text-secondary outline-none transition duration-150 ease-out hover:bg-runs-hover hover:text-runs-text focus-visible:ring-2 focus-visible:ring-runs-focus disabled:opacity-50"
           >
             <CloseIcon />
           </button>
@@ -215,33 +215,33 @@ export default function CorrelationReviewModal({
 
           {load.status === "loading" ? (
 
-            <p className="text-[13px] leading-[18px] text-[#626161]">読み込んでいます...</p>
+            <p className="text-sm leading-[18px] text-runs-text-secondary">読み込んでいます...</p>
 
           ) : load.status === "error" ? (
 
-            <p className="text-[13px] leading-[18px] text-[#C53F4B]">{load.message}</p>
+            <p className="text-sm leading-[18px] text-runs-danger">{load.message}</p>
 
           ) : (
 
             <div className="flex flex-col gap-4">
 
               {load.view.currentWorkId && (
-                <div className="flex flex-col gap-1 text-[13px] leading-[18px] text-[#112278]">
-                  <span className="text-[12px] font-medium text-[#626161]">現在のWork</span>
+                <div className="flex flex-col gap-1 text-sm leading-[18px] text-runs-interactive-hover">
+                  <span className="text-xs font-medium text-runs-text-secondary">現在のWork</span>
                   <span>{load.view.currentWorkTitle ?? load.view.currentWorkId}</span>
                 </div>
               )}
 
               {load.view.isHumanCorrected && load.view.correction && (
-                <p className="rounded-xl border border-[#D9D9D9] bg-[#F2F2F2]/60 px-3 py-2 text-[12px] leading-[16px] text-[#626161]">
+                <p className="rounded-xl border border-runs-border bg-runs-hover/60 px-3 py-2 text-xs leading-[16px] text-runs-text-secondary">
                   {formatTimestamp(load.view.correction.correlatedAt)}に{load.view.correction.changedByActorId ?? "人間"}が訂正済みです
                   （理由: {load.view.correction.reasonCode}）。
                   以下は訂正の根拠となったsystem提案です。
                 </p>
               )}
 
-              <div className="flex flex-col gap-1 text-[13px] leading-[18px] text-[#626161]">
-                <span className="text-[12px] font-medium text-[#626161]">
+              <div className="flex flex-col gap-1 text-sm leading-[18px] text-runs-text-secondary">
+                <span className="text-xs font-medium text-runs-text-secondary">
                   {load.view.isHumanCorrected ? "訂正前のsystem提案" : "system提案の根拠"}
                 </span>
                 {load.view.methodLabel && <span>根拠: {load.view.methodLabel}</span>}
@@ -253,18 +253,18 @@ export default function CorrelationReviewModal({
               {load.view.candidates.length > 0 ? (
 
                 <div className="flex flex-col gap-2">
-                  <h3 className="text-[13px] font-medium leading-[18px] text-[#112278]">候補Work</h3>
+                  <h3 className="text-sm font-medium leading-[18px] text-runs-interactive-hover">候補Work</h3>
                   {load.view.candidates.map((candidate) => (
                     <div
                       key={candidate.workId}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-[#D9D9D9] px-3 py-2"
+                      className="flex items-center justify-between gap-3 rounded-xl border border-runs-border px-3 py-2"
                     >
                       <div className="flex min-w-0 flex-col">
-                        <span className={`truncate text-[13px] ${candidate.actionable ? "text-[#112278]" : "text-[#8A8A8A]"}`}>
+                        <span className={`truncate text-sm ${candidate.actionable ? "text-runs-text" : "text-runs-muted"}`} title={candidate.title ?? candidate.workId}>
                           {candidate.title ?? candidate.workId}
                         </span>
                         {!candidate.actionable && (
-                          <span className="text-[10px] leading-[14px] text-[#8A8A8A]">
+                          <span className="text-xs leading-[14px] text-runs-muted">
                             {candidate.unavailableReason === "not_correlatable"
                               ? "このWorkは既に終了しているため選択できません"
                               : "現在選択できません"}
@@ -281,12 +281,12 @@ export default function CorrelationReviewModal({
                             "human_confirmed_candidate",
                             load.view.currentWorkId
                           )}
-                          className="h-9 shrink-0 rounded-[10px] bg-[#18B5A6] px-3 text-[13px] font-medium text-white transition duration-150 ease-out hover:bg-white hover:text-[#18B5A6] hover:border hover:border-[#18B5A6] disabled:cursor-not-allowed disabled:opacity-50"
+                          className="runs-focus h-9 shrink-0 rounded-[10px] border border-runs-success bg-runs-success px-3 text-sm font-medium text-white transition-colors duration-150 hover:bg-runs-surface hover:text-runs-success disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
                         >
                           {submit.pending && submit.action === `confirm:${candidate.workId}` ? "保存中..." : "Confirm"}
                         </button>
                       ) : (
-                        <span className="h-9 shrink-0 rounded-[10px] bg-[#F2F2F2] px-3 text-[13px] font-medium leading-9 text-[#8A8A8A]">
+                        <span className="h-9 shrink-0 rounded-[10px] bg-runs-hover px-3 text-sm font-medium leading-9 text-runs-muted">
                           Confirm
                         </span>
                       )}
@@ -296,20 +296,21 @@ export default function CorrelationReviewModal({
 
               ) : (
 
-                <p className="text-[13px] leading-[18px] text-[#626161]">system側の候補はありません。</p>
+                <p className="text-sm leading-[18px] text-runs-text-secondary">system側の候補はありません。</p>
 
               )}
 
               <div className="flex flex-col gap-2">
-                <h3 className="text-[13px] font-medium leading-[18px] text-[#112278]">別のWorkへ変更</h3>
+                <label htmlFor="correlation-work-id" className="text-sm font-medium leading-[18px] text-runs-text">別のWorkへ変更</label>
                 <div className="flex items-center gap-2">
                   <input
+                    id="correlation-work-id"
                     type="text"
                     value={changeWorkId}
                     onChange={(event) => setChangeWorkId(event.target.value)}
                     placeholder="Work ID"
                     disabled={submit.pending}
-                    className="h-9 min-w-0 flex-1 rounded-xl border border-[#D9D9D9] px-3 text-[13px] text-[#112278] outline-none focus:border-[#18B5A6] disabled:bg-[#F2F2F2] disabled:text-[#8A8A8A]"
+                    className="runs-focus h-9 min-w-0 flex-1 rounded-xl border border-runs-border bg-runs-surface px-3 text-sm text-runs-text disabled:bg-runs-hover disabled:text-runs-muted"
                   />
                   <button
                     type="button"
@@ -320,7 +321,7 @@ export default function CorrelationReviewModal({
                       "human_selected_different_work",
                       load.view.currentWorkId
                     )}
-                    className="h-9 shrink-0 rounded-[10px] border border-[#112278] bg-white px-3 text-[13px] font-medium text-[#112278] transition duration-150 ease-out hover:bg-[#E6F2F2] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="runs-focus h-9 shrink-0 rounded-[10px] border border-runs-interactive bg-runs-surface px-3 text-sm font-medium text-runs-interactive transition-colors duration-150 hover:bg-runs-selected disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
                   >
                     {submit.pending && submit.action === "change" ? "保存中..." : "Assign"}
                   </button>
@@ -336,27 +337,27 @@ export default function CorrelationReviewModal({
                   "human_kept_unassigned",
                   load.view.currentWorkId
                 )}
-                className="h-9 w-fit rounded-[10px] px-3 text-[13px] font-medium text-[#626161] transition duration-150 ease-out hover:bg-[#E6F2F2] hover:text-[#112278] disabled:cursor-not-allowed disabled:opacity-50"
+                className="runs-focus h-9 w-fit rounded-[10px] px-3 text-sm font-medium text-runs-text-secondary transition-colors duration-150 hover:bg-runs-selected hover:text-runs-text disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
               >
                 {submit.pending && submit.action === "keep_unassigned" ? "保存中..." : "Keep Unassigned"}
               </button>
 
               {load.view.history.length > 0 && (
-                <div className="flex flex-col gap-2 border-t border-[#D9D9D9] pt-3">
-                  <h3 className="text-[13px] font-medium leading-[18px] text-[#112278]">History</h3>
+                <div className="flex flex-col gap-2 border-t border-runs-border pt-3">
+                  <h3 className="text-sm font-medium leading-[18px] text-runs-interactive-hover">History</h3>
                   {load.view.history.map((entry, index) => (
-                    <div key={index} className="flex flex-col gap-0.5 text-[12px] leading-[16px] text-[#626161]">
+                    <div key={index} className="flex flex-col gap-0.5 text-xs leading-[16px] text-runs-text-secondary">
                       <span>
                         {formatTimestamp(entry.correlatedAt)} — {entry.methodLabel}
                         {entry.changedByActorId ? `（${entry.changedByActorId}）` : ""} → {entry.canonicalStatus}
                       </span>
-                      <span className="text-[#8A8A8A]">{entry.reasonCode}</span>
+                      <span className="text-runs-muted">{entry.reasonCode}</span>
                     </div>
                   ))}
                 </div>
               )}
 
-              {submitError && <p className="text-[13px] leading-[18px] text-[#C53F4B]">{submitError}</p>}
+              {submitError && <p className="text-sm leading-[18px] text-runs-danger">{submitError}</p>}
 
             </div>
 

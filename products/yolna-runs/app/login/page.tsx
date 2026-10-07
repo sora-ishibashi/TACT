@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 import { useAuth } from "@/components/auth/AuthProvider";
+import { Field, TextInput, primaryButton, secondaryButton } from "@/components/ui/RunsPrimitives";
 
 // =========================
 // /login (SOR-135 Phase 2)
@@ -106,49 +107,33 @@ export default function LoginPage() {
   if (user) {
 
     return (
-      <main style={containerStyle}>
-        <p>{user.email} としてログイン済みです。</p>
-        <Link href="/">Yolna Runsへ戻る</Link>
+      <main className="mx-auto mt-20 max-w-sm px-4 text-sm text-runs-text">
+        <p className="break-all">{user.email} としてログイン済みです。</p>
+        <Link className="runs-focus mt-4 inline-flex rounded-sm font-medium text-runs-interactive hover:underline" href="/">Yolna Runsへ戻る</Link>
       </main>
     );
 
   }
 
   return (
-    <main style={containerStyle}>
+    <main className="mx-auto mt-12 max-w-sm px-4 sm:mt-20">
 
-      <h1 style={{ fontSize: 20, marginBottom: 16 }}>
+      <h1 className="mb-2 text-xl font-semibold text-runs-text">
         {mode === "signin" ? "ログイン" : "サインアップ"}
       </h1>
+      <p className="mb-5 text-sm leading-5 text-runs-text-secondary">Yolna Runs の実行記録と要確認項目を安全に確認します。</p>
 
-      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <form onSubmit={handleSubmit} className="grid gap-4" aria-busy={submitting}>
 
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-          disabled={submitting}
-          style={inputStyle}
-        />
+        <Field label="メールアドレス"><TextInput type="email" autoComplete="email" placeholder="name@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required disabled={submitting} /></Field>
 
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          minLength={6}
-          disabled={submitting}
-          style={inputStyle}
-        />
+        <Field label="パスワード" hint={mode === "signup" ? "6文字以上で入力してください。" : undefined}><TextInput type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} disabled={submitting} /></Field>
 
-        {error && <p style={{ color: "#c0392b", fontSize: 13 }}>{error}</p>}
+        {error && <p role="alert" className="rounded-md bg-runs-danger-surface p-3 text-sm leading-5 text-runs-danger">{error}</p>}
 
-        {message && <p style={{ color: "#2e7d32", fontSize: 13 }}>{message}</p>}
+        {message && <p role="status" className="rounded-md bg-runs-success-surface p-3 text-sm leading-5 text-runs-success">{message}</p>}
 
-        <button type="submit" disabled={submitting} style={buttonStyle}>
+        <button type="submit" disabled={submitting} className={`${primaryButton} w-full`}>
           {submitting ? "送信中..." : mode === "signin" ? "Sign in" : "Sign up"}
         </button>
 
@@ -161,7 +146,7 @@ export default function LoginPage() {
           setError(null);
           setMessage(null);
         }}
-        style={linkButtonStyle}
+        className={`${secondaryButton} mt-3 w-full border-transparent bg-transparent text-runs-text-secondary`}
       >
         {mode === "signin" ? "アカウントをお持ちでない方はこちら" : "既にアカウントをお持ちの方はこちら"}
       </button>
@@ -170,37 +155,3 @@ export default function LoginPage() {
   );
 
 }
-
-const containerStyle: React.CSSProperties = {
-  maxWidth: 360,
-  margin: "80px auto",
-  fontFamily: "sans-serif",
-  padding: "0 16px",
-};
-
-const inputStyle: React.CSSProperties = {
-  padding: 8,
-  border: "1px solid #ccc",
-  borderRadius: 4,
-  fontSize: 14,
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 4,
-  border: "1px solid #333",
-  background: "#111",
-  color: "#fff",
-  cursor: "pointer",
-};
-
-const linkButtonStyle: React.CSSProperties = {
-  marginTop: 12,
-  background: "none",
-  border: "none",
-  color: "#555",
-  cursor: "pointer",
-  fontSize: 13,
-  padding: 0,
-  textAlign: "left",
-};
