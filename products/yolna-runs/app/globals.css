@@ -74,31 +74,6 @@ body {
   box-shadow: 0 0 0 2px var(--runs-focus);
 }
 
-/* Give the desktop account footer enough room for an ellipsized address and
-   keep its final action clear of the sidebar's lower edge. */
-aside > .mt-auto.border-t {
-  position: relative;
-  padding-left: 2.75rem;
-  padding-bottom: 0.75rem;
-}
-
-aside > .mt-auto.border-t::before {
-  position: absolute;
-  top: 0.9rem;
-  left: 0.5rem;
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 999px;
-  background: var(--runs-hover);
-  content: "";
-}
-
-aside > .mt-auto.border-t > p:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .runs-peek-enter {
   animation: runs-peek-enter 180ms ease-out both;
 }

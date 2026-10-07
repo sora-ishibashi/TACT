@@ -198,7 +198,7 @@ export default function CorrelationReviewModal({
       >
 
         <div className="flex shrink-0 items-start justify-between gap-4">
-          <h2 className="text-[24px] font-medium leading-[32px] text-runs-interactive-hover">Workを確認</h2>
+          <h2 className="text-2xl font-medium leading-8 text-runs-interactive-hover">Workを確認</h2>
           <button
             type="button"
             onClick={onClose}
@@ -281,12 +281,12 @@ export default function CorrelationReviewModal({
                             "human_confirmed_candidate",
                             load.view.currentWorkId
                           )}
-                          className="runs-focus h-9 shrink-0 rounded-[10px] border border-runs-success bg-runs-success px-3 text-sm font-medium text-white transition-colors duration-150 hover:bg-runs-surface hover:text-runs-success disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+                          className="runs-focus h-9 shrink-0 rounded-lg border border-runs-success bg-runs-success px-3 text-sm font-medium text-white transition-colors duration-150 hover:bg-runs-surface hover:text-runs-success disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
                         >
                           {submit.pending && submit.action === `confirm:${candidate.workId}` ? "保存中..." : "Confirm"}
                         </button>
                       ) : (
-                        <span className="h-9 shrink-0 rounded-[10px] bg-runs-hover px-3 text-sm font-medium leading-9 text-runs-muted">
+                        <span className="h-9 shrink-0 rounded-lg bg-runs-hover px-3 text-sm font-medium leading-9 text-runs-muted">
                           Confirm
                         </span>
                       )}
@@ -321,7 +321,7 @@ export default function CorrelationReviewModal({
                       "human_selected_different_work",
                       load.view.currentWorkId
                     )}
-                    className="runs-focus h-9 shrink-0 rounded-[10px] border border-runs-interactive bg-runs-surface px-3 text-sm font-medium text-runs-interactive transition-colors duration-150 hover:bg-runs-selected disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+                    className="runs-focus h-9 shrink-0 rounded-lg border border-runs-interactive bg-runs-surface px-3 text-sm font-medium text-runs-interactive transition-colors duration-150 hover:bg-runs-selected disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
                   >
                     {submit.pending && submit.action === "change" ? "保存中..." : "Assign"}
                   </button>
@@ -337,7 +337,7 @@ export default function CorrelationReviewModal({
                   "human_kept_unassigned",
                   load.view.currentWorkId
                 )}
-                className="runs-focus h-9 w-fit rounded-[10px] px-3 text-sm font-medium text-runs-text-secondary transition-colors duration-150 hover:bg-runs-selected hover:text-runs-text disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+                className="runs-focus h-9 w-fit rounded-lg px-3 text-sm font-medium text-runs-text-secondary transition-colors duration-150 hover:bg-runs-selected hover:text-runs-text disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
               >
                 {submit.pending && submit.action === "keep_unassigned" ? "保存中..." : "Keep Unassigned"}
               </button>

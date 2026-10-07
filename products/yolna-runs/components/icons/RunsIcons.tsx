@@ -53,6 +53,14 @@ export function CoverageIcon(props: RunsIconProps) {
   return <Icon {...props}><circle cx="4" cy="8" r="1.5" {...strokeProps} /><circle cx="12" cy="4" r="1.5" {...strokeProps} /><circle cx="12" cy="12" r="1.5" {...strokeProps} /><path d="m5.4 7.4 5.2-2.8M5.4 8.6l5.2 2.8" {...strokeProps} /></Icon>;
 }
 
+export function ConnectionIcon(props: RunsIconProps) {
+  return <Icon {...props}><path d="M6.2 5.1 8 3.3a3 3 0 0 1 4.2 4.2l-1.8 1.8M9.8 10.9 8 12.7a3 3 0 0 1-4.2-4.2l1.8-1.8M5.8 10.2l4.4-4.4" {...strokeProps} /></Icon>;
+}
+
+export function ManagementIcon(props: RunsIconProps) {
+  return <Icon {...props}><rect x="2" y="2" width="5" height="5" rx="1" {...strokeProps} /><rect x="9" y="2" width="5" height="5" rx="1" {...strokeProps} /><rect x="2" y="9" width="5" height="5" rx="1" {...strokeProps} /><rect x="9" y="9" width="5" height="5" rx="1" {...strokeProps} /></Icon>;
+}
+
 export function SettingsIcon(props: RunsIconProps) {
   return <Icon {...props}><circle cx="8" cy="8" r="2.2" {...strokeProps} /><path d="M8 1.8v1.3M8 12.9v1.3M1.8 8h1.3M12.9 8h1.3M3.6 3.6l.9.9M11.5 11.5l.9.9M12.4 3.6l-.9.9M4.5 11.5l-.9.9" {...strokeProps} /></Icon>;
 }

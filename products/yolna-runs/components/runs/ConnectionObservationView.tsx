@@ -21,6 +21,7 @@ type ConnectionObservationProps = {
   details: CoverageServiceDetailView[];
   state: PresentationStateKind | null;
   selectedSurfaceId: string | null;
+  mode?: "connection" | "observation";
   onOpenDetails?: () => void;
 };
 
@@ -31,20 +32,22 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 export function ConnectionObservationView(props: ConnectionObservationProps) {
   if (props.state) return <PresentationState kind={props.state} />;
   if (props.details.length === 0) return <PresentationState kind="empty" />;
-  if (!props.selectedSurfaceId) return <p className="text-sm text-runs-text-secondary">左の一覧から観測対象を選択してください。</p>;
+  if (!props.selectedSurfaceId) return <p className="text-sm text-runs-text-secondary">左の一覧から{props.mode === "connection" ? "接続" : "観測対象"}を選択してください。</p>;
   const detail = props.details.find((item) => item.surfaceId === props.selectedSurfaceId) ?? null;
   if (!detail) return <PresentationState kind="unavailable" />;
+  const isConnection = props.mode === "connection";
+  const heading = isConnection ? (detail.connection.service ?? detail.source) : detail.source;
 
   return <div className="flex min-w-0 max-w-5xl flex-col">
     <header className="flex items-start justify-between gap-4 border-b border-runs-border-subtle pb-4">
-      <div className="min-w-0"><h1 className="break-words text-2xl font-semibold leading-8 text-runs-text">{detail.source}</h1><div className="mt-2 flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${classificationTone(detail.classification)}`}>{detail.classificationLabel}</span><span className="text-xs text-runs-text-secondary">最終観測: {formatDateTime(detail.lastSeenAt)}</span></div></div>
-      {props.onOpenDetails && <button type="button" onClick={props.onOpenDetails} aria-label="接続・観測の技術詳細を開く" title="接続・観測の技術詳細を開く" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-runs-text-secondary outline-none hover:bg-runs-hover hover:text-runs-text focus-visible:ring-2 focus-visible:ring-runs-focus"><DetailsIcon /></button>}
+      <div className="min-w-0"><h1 className="break-words text-2xl font-semibold leading-8 text-runs-text">{heading}</h1>{isConnection ? <p className="mt-2 text-xs text-runs-text-secondary">{detail.connection.statusLabel ?? detail.connection.unavailableMessage}</p> : <div className="mt-2 flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${classificationTone(detail.classification)}`}>{detail.classificationLabel}</span><span className="text-xs text-runs-text-secondary">最終観測: {formatDateTime(detail.lastSeenAt)}</span></div>}</div>
+      {props.onOpenDetails && <button type="button" onClick={props.onOpenDetails} aria-label={`${isConnection ? "接続" : "観測"}の技術詳細を開く`} title={`${isConnection ? "接続" : "観測"}の技術詳細を開く`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-runs-text-secondary outline-none hover:bg-runs-hover hover:text-runs-text focus-visible:ring-2 focus-visible:ring-runs-focus"><DetailsIcon /></button>}
     </header>
 
-    {detail.activeGap && <section className="border-b border-runs-border-subtle py-4"><div className="flex items-start gap-2 text-runs-warning"><WarningIcon className="mt-0.5 shrink-0" /><div><h2 className="text-sm font-semibold">Capture Gap</h2><p className="mt-1 text-xs leading-5">{detail.activeGap.reason}</p><p className="mt-0.5 text-xs text-runs-text-secondary">検出: {formatDateTime(detail.activeGap.detectedAt)}{detail.activeGap.affectedScope ? ` · ${detail.activeGap.affectedScope}` : ""}</p></div></div></section>}
+    {props.mode !== "connection" && detail.activeGap && <section className="border-b border-runs-border-subtle py-4"><div className="flex items-start gap-2 text-runs-warning"><WarningIcon className="mt-0.5 shrink-0" /><div><h2 className="text-sm font-semibold">Capture Gap</h2><p className="mt-1 text-xs leading-5">{detail.activeGap.reason}</p><p className="mt-0.5 text-xs text-runs-text-secondary">検出: {formatDateTime(detail.activeGap.detectedAt)}{detail.activeGap.affectedScope ? ` · ${detail.activeGap.affectedScope}` : ""}</p></div></div></section>}
 
-    <Section title="接続"><div className="mt-2 text-sm">{detail.connection.joined ? <><p className="text-runs-text">{detail.connection.service}{detail.connection.provider ? ` · ${detail.connection.provider}` : ""}</p><p className="mt-1 text-runs-text-secondary">{detail.connection.statusLabel}</p></> : <p className="text-runs-text-secondary">{detail.connection.unavailableMessage}</p>}</div></Section>
-    <Section title="観測"><dl className="mt-2 grid gap-x-6 gap-y-3 sm:grid-cols-2"><div><dt className="text-xs text-runs-muted">対象サービス</dt><dd className="mt-1 text-sm text-runs-text">{detail.providerLabel}</dd></div><div><dt className="text-xs text-runs-muted">観測方式</dt><dd className="mt-1 text-sm text-runs-text">{detail.observationModeLabel}</dd></div><div><dt className="text-xs text-runs-muted">最終観測</dt><dd className="mt-1 text-sm text-runs-text">{formatDateTime(detail.lastSeenAt)}</dd></div><div><dt className="text-xs text-runs-muted">権限事前確認</dt><dd className="mt-1 text-sm text-runs-text">{detail.permissionPrecheckAvailable ? "利用可能" : "確認できません"}</dd></div></dl></Section>
+    {props.mode !== "observation" ? <Section title="接続"><div className="mt-2 text-sm">{detail.connection.joined ? <><p className="text-runs-text">{detail.connection.service}{detail.connection.provider ? ` · ${detail.connection.provider}` : ""}</p><p className="mt-1 text-runs-text-secondary">{detail.connection.statusLabel}</p></> : <p className="text-runs-text-secondary">{detail.connection.unavailableMessage}</p>}</div></Section> : null}
+    {props.mode !== "connection" ? <Section title="観測"><dl className="mt-2 grid gap-x-6 gap-y-3 sm:grid-cols-2"><div><dt className="text-xs text-runs-muted">対象サービス</dt><dd className="mt-1 text-sm text-runs-text">{detail.providerLabel}</dd></div><div><dt className="text-xs text-runs-muted">観測方式</dt><dd className="mt-1 text-sm text-runs-text">{detail.observationModeLabel}</dd></div><div><dt className="text-xs text-runs-muted">最終観測</dt><dd className="mt-1 text-sm text-runs-text">{formatDateTime(detail.lastSeenAt)}</dd></div><div><dt className="text-xs text-runs-muted">権限事前確認</dt><dd className="mt-1 text-sm text-runs-text">{detail.permissionPrecheckAvailable ? "利用可能" : "確認できません"}</dd></div></dl></Section> : null}
   </div>;
 }
 

@@ -26,9 +26,9 @@ assert.match(login, /<Field label="パスワード"/);
 assert.doesNotMatch(login, /style=\{/);
 
 function sourceFiles(directory: string): string[] {
-  assert.match(inspector, /label="\\u7d50\\u679c"/);
-  assert.match(inspector, /label="\\u30a2\\u30af\\u30b7\\u30e7\\u30f3"/);
-  assert.match(inspector, /label="\\u5bfe\\u8c61"/);
+  assert.match(inspector, /label="結果"/);
+  assert.match(inspector, /label="アクション"/);
+  assert.match(inspector, /label="対象"/);
   assert.match(inspector, /space-y-4/);
   assert.match(icons, /CloseIcon[\s\S]*strokeWidth=\{2\}/);
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
