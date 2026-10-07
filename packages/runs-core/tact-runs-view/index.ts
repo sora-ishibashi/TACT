@@ -489,6 +489,16 @@ export function toAttentionCardView(item: AttentionItemView): AttentionCardView 
 
 }
 
+/** Shared active-Attention metric for Home, Work list, and Work detail. */
+export function activeAttentionCountForWork(
+  attentions: readonly Pick<AttentionCardView, "workId" | "status">[],
+  workId: string
+): number {
+  return attentions.filter((attention) =>
+    attention.workId === workId && (attention.status === "open" || attention.status === "acknowledged")
+  ).length;
+}
+
 // =========================
 // Screen 3: Work Detail
 // =========================

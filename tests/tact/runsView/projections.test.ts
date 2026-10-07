@@ -20,6 +20,7 @@ import {
   toCanonicalPermissionResultFromExecutionStatus,
   toActivityItemView,
   toAttentionCardView,
+  activeAttentionCountForWork,
   toWorkTimelineItemView,
   toWorkHeaderView,
   ACTIVITY_ITEM_VIEW_KEYS,
@@ -494,6 +495,21 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     "[Required test] WorkHeaderView: attentionCountを渡した場合はそのまま反映する",
     toWorkHeaderView(baseWork(), 3, 1).attentionCount === 1
   ));
+
+  const activeAttentionCards = [
+    toAttentionCardView(baseAttentionItem({ workId: "W-001", status: "open" })),
+    toAttentionCardView(baseAttentionItem({ workId: "W-001", status: "acknowledged" })),
+    toAttentionCardView(baseAttentionItem({ workId: "W-001", status: "resolved" })),
+    toAttentionCardView(baseAttentionItem({ workId: "W-002", status: "open" })),
+  ];
+  results.push(check(
+    "[SOR-258] the shared active Attention count includes open and acknowledged, excludes resolved and other Work",
+    activeAttentionCountForWork(activeAttentionCards, "W-001") === 2
+  ));
+  results.push(check(
+    "[SOR-258] the shared active Attention count is zero when a Work has no Attention",
+    activeAttentionCountForWork(activeAttentionCards, "W-003") === 0
+ ));
 
   results.push(check(
     "[Required test] WorkHeaderView.statusLabel は internal word \"running\" ではなく canonical wording \"Running\" を返す",

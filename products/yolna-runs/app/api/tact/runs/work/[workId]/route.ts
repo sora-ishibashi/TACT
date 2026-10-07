@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { listExecutionsForWork, listExecutionAttentions, listLatestCorrelationDecisionsForExecutions } from "@tact/runs-core/tact-execution";
 import { getWorkViaRegistry } from "@tact/runs-core/tact-execution/projection/registry";
-import { toWorkHeaderView, toWorkTimelineItemView } from "@tact/runs-core/tact-runs-view";
+import { activeAttentionCountForWork, toAttentionCardView, toWorkHeaderView, toWorkTimelineItemView } from "@tact/runs-core/tact-runs-view";
 
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
 // SOR-135 Phase 3 (Standalone Runs): side-effect-only import — see
@@ -68,8 +68,8 @@ export async function GET(
     let attentionCount: number | null = null;
 
     try {
-      const openAttentions = await listExecutionAttentions(userId, { status: "open" });
-      attentionCount = openAttentions.filter((item) => item.workId === workId).length;
+      const activeAttentions = await listExecutionAttentions(userId, { statuses: ["open", "acknowledged"] });
+      attentionCount = activeAttentionCountForWork(activeAttentions.map(toAttentionCardView), workId);
     } catch {
       // Attention countは補助情報のため、取得失敗してもWork Detail自体は返す。
       attentionCount = null;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listExecutionAttentions, listExecutionsForUser } from "@tact/runs-core/tact-execution";
 import { listRecentWorksForUserViaRegistry } from "@tact/runs-core/tact-execution/projection/registry";
+import { activeAttentionCountForWork, toAttentionCardView } from "@tact/runs-core/tact-runs-view";
 import { getCurrentUserContext } from "@/core/auth/getUserContext";
 import "@/lib/projection/postgresProjectionAdapter";
 
@@ -27,10 +28,7 @@ export async function GET(request: NextRequest) {
         lastActivity: !previous.lastActivity || observedAt > previous.lastActivity ? observedAt : previous.lastActivity,
       });
     }
-    const attentionCount = new Map<string, number>();
-    for (const attention of attentions) {
-      if (attention.workId) attentionCount.set(attention.workId, (attentionCount.get(attention.workId) ?? 0) + 1);
-    }
+    const attentionCards = attentions.map(toAttentionCardView);
     return NextResponse.json({
       success: true,
       items: works.map((work) => ({
@@ -39,7 +37,7 @@ export async function GET(request: NextRequest) {
         status: work.status,
         lastActivity: executionSummary.get(work.id)?.lastActivity ?? null,
         executionCount: executionSummary.get(work.id)?.count ?? 0,
-        attentionCount: attentionCount.get(work.id) ?? 0,
+        attentionCount: activeAttentionCountForWork(attentionCards, work.id),
       })),
     });
   } catch (error) {
