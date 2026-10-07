@@ -7,10 +7,34 @@ import type { AttentionCardView } from "./index";
 export type AttentionDecisionPhase = "post_execution" | "unknown";
 export type AttentionPrimaryAction = "acknowledge" | "resolve" | null;
 
+export type AttentionReviewPresentation = {
+  phase: AttentionDecisionPhase;
+  heading: string;
+  explanation: string;
+  timestampLabel: "記録日時" | "確認日時";
+  timestamp: string;
+};
+
 export function attentionDecisionPhase(item: Pick<AttentionCardView, "executionStatus">): AttentionDecisionPhase {
   return item.executionStatus === "succeeded" || item.executionStatus === "failed" || item.executionStatus === "cancelled"
     ? "post_execution"
     : "unknown";
+}
+
+/** An Attention is linked to an execution, never proof of safe preflight approval. */
+export function attentionReviewPresentation(
+  item: Pick<AttentionCardView, "executionStatus" | "createdAt" | "acknowledgedAt">
+): AttentionReviewPresentation {
+  const phase = attentionDecisionPhase(item);
+  return {
+    phase,
+    heading: phase === "post_execution" ? "実行後の人による確認が必要です" : "実行状況を確認できません",
+    explanation: phase === "post_execution"
+      ? "この実行は完了または終了しています。権限評価とは別に、Attention を確認・解決してください。"
+      : "この Attention だけでは実行前か実行後かを判断できません。実行の詳細を確認してください。",
+    timestampLabel: item.acknowledgedAt ? "確認日時" : "記録日時",
+    timestamp: item.acknowledgedAt ?? item.createdAt,
+  };
 }
 
 export function attentionReasonJapanese(reason: AttentionCardView["attentionReason"]): string {
