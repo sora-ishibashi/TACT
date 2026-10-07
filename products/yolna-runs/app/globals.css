@@ -1,21 +1,86 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #112278;
+  color-scheme: light dark;
+  --runs-base: #f7f8fa;
+  --runs-surface: #ffffff;
+  --runs-raised: #ffffff;
+  --runs-text: #171717;
+  --runs-text-secondary: #626161;
+  --runs-muted: #8a8a8a;
+  --runs-border: #d9d9d9;
+  --runs-border-subtle: #e5e5e5;
+  --runs-interactive: #172e95;
+  --runs-interactive-hover: #112278;
+  --runs-selected: #f2f4fb;
+  --runs-hover: #f2f2f2;
+  --runs-success: #187a46;
+  --runs-success-surface: #eaf7ef;
+  --runs-warning: #8a5a00;
+  --runs-warning-surface: #fff4d8;
+  --runs-danger: #b42318;
+  --runs-danger-surface: #fff0ee;
+  --runs-info: #12617a;
+  --runs-info-surface: #eaf7fa;
+  --runs-focus: #18b5a6;
+  --runs-overlay: rgb(17 17 17 / 32%);
+  --runs-shadow: 0 12px 36px rgb(17 17 17 / 16%);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: var(--runs-base);
+  --color-foreground: var(--runs-text);
+  --color-runs-base: var(--runs-base);
+  --color-runs-surface: var(--runs-surface);
+  --color-runs-raised: var(--runs-raised);
+  --color-runs-text: var(--runs-text);
+  --color-runs-text-secondary: var(--runs-text-secondary);
+  --color-runs-muted: var(--runs-muted);
+  --color-runs-border: var(--runs-border);
+  --color-runs-border-subtle: var(--runs-border-subtle);
+  --color-runs-interactive: var(--runs-interactive);
+  --color-runs-interactive-hover: var(--runs-interactive-hover);
+  --color-runs-selected: var(--runs-selected);
+  --color-runs-hover: var(--runs-hover);
+  --color-runs-success: var(--runs-success);
+  --color-runs-success-surface: var(--runs-success-surface);
+  --color-runs-warning: var(--runs-warning);
+  --color-runs-warning-surface: var(--runs-warning-surface);
+  --color-runs-danger: var(--runs-danger);
+  --color-runs-danger-surface: var(--runs-danger-surface);
+  --color-runs-info: var(--runs-info);
+  --color-runs-info-surface: var(--runs-info-surface);
+  --color-runs-focus: var(--runs-focus);
   --font-sans: var(--font-inter);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--runs-base);
+  color: var(--runs-text);
   font-family: var(--font-inter), sans-serif;
   font-weight: 500;
+}
+
+::selection {
+  background: var(--runs-selected);
+  color: var(--runs-text);
+}
+
+.runs-focus {
+  outline: none;
+}
+
+.runs-focus:focus-visible {
+  box-shadow: 0 0 0 2px var(--runs-focus);
+}
+
+.runs-peek-enter {
+  animation: runs-peek-enter 180ms ease-out both;
+}
+
+@keyframes runs-peek-enter {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 .tact-scrollbar {
@@ -39,9 +104,46 @@ body {
 }
 
 .tact-scrollbar:hover {
-  scrollbar-color: #D9D9D9 transparent;
+  scrollbar-color: var(--runs-border) transparent;
 }
 
 .tact-scrollbar:hover::-webkit-scrollbar-thumb {
-  background-color: #D9D9D9;
+  background-color: var(--runs-border);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --runs-base: #111315;
+    --runs-surface: #171a1d;
+    --runs-raised: #202428;
+    --runs-text: #f3f4f6;
+    --runs-text-secondary: #bdc3ca;
+    --runs-muted: #929aa3;
+    --runs-border: #454b52;
+    --runs-border-subtle: #30363c;
+    --runs-interactive: #aebcff;
+    --runs-interactive-hover: #d4dcff;
+    --runs-selected: #252d4d;
+    --runs-hover: #24292e;
+    --runs-success: #72d79d;
+    --runs-success-surface: #173525;
+    --runs-warning: #f2c766;
+    --runs-warning-surface: #382d16;
+    --runs-danger: #ff9a91;
+    --runs-danger-surface: #3b201f;
+    --runs-info: #7fd7ed;
+    --runs-info-surface: #17333a;
+    --runs-focus: #4bd8c9;
+    --runs-overlay: rgb(0 0 0 / 62%);
+    --runs-shadow: 0 16px 44px rgb(0 0 0 / 42%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

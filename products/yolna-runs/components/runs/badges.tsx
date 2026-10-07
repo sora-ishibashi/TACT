@@ -24,17 +24,17 @@ import { StatusIndicator } from "./StatusIndicator";
 type BadgeTone = "success" | "error" | "warning" | "neutral" | "muted";
 
 const TONE_STYLES: Record<BadgeTone, string> = {
-  success: "bg-[#E6F2F2] text-[#18B5A6]",
-  error: "bg-[#C53F4B]/10 text-[#C53F4B]",
-  warning: "bg-[#B7791F]/10 text-[#B7791F]",
-  neutral: "bg-[#F2F2F2] text-[#112278]",
-  muted: "bg-[#F2F2F2] text-[#8A8A8A]",
+  success: "bg-runs-success-surface text-runs-success",
+  error: "bg-runs-danger-surface text-runs-danger",
+  warning: "bg-runs-warning-surface text-runs-warning",
+  neutral: "bg-runs-selected text-runs-text",
+  muted: "bg-runs-hover text-runs-text-secondary",
 };
 
 export function Badge({ label, tone }: { label: string; tone: BadgeTone }) {
   return (
     <span
-      className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-[10px] font-medium leading-[14px] ${TONE_STYLES[tone]}`}
+      className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium leading-4 ${TONE_STYLES[tone]}`}
     >
       {label}
     </span>
@@ -53,7 +53,7 @@ export function PermissionBadge({ result }: { result: CanonicalPermissionResult 
 }
 
 export function ResultBadge({ status }: { status: ExecutionStatus }) {
-  return <StatusIndicator status={status} className="text-[11px] font-medium" />;
+  return <StatusIndicator status={status} className="text-xs font-medium" />;
 }
 
 // SOR-178 / SEC-8D: permission_unknown/downstream_permission_conflict
@@ -139,12 +139,12 @@ export function WorkReference({
           event.stopPropagation();
           onSelectWork(workId);
         }}
-        className="text-[13px] font-medium text-[#172E95] underline-offset-2 transition duration-150 ease-out hover:underline"
+        className="runs-focus rounded-sm text-sm font-medium text-runs-interactive underline-offset-2 transition-colors duration-150 hover:text-runs-interactive-hover hover:underline motion-reduce:transition-none"
       >
         {displayLabel}
       </button>
     ) : (
-      <span className="text-[13px] font-medium text-[#112278]">{displayLabel}</span>
+      <span className="text-sm font-medium text-runs-text">{displayLabel}</span>
     );
 
     if (!isHumanCorrected || !onReview) {
@@ -160,7 +160,7 @@ export function WorkReference({
             event.stopPropagation();
             onReview();
           }}
-          className="text-[12px] text-[#626161] underline-offset-2 transition duration-150 ease-out hover:text-[#112278] hover:underline"
+          className="runs-focus rounded-sm text-xs text-runs-text-secondary underline-offset-2 transition-colors duration-150 hover:text-runs-text hover:underline motion-reduce:transition-none"
         >
           履歴
         </button>
@@ -184,7 +184,7 @@ export function WorkReference({
           event.stopPropagation();
           onReview();
         }}
-        className="text-[13px] font-medium text-[#172E95] underline-offset-2 transition duration-150 ease-out hover:underline"
+        className="runs-focus rounded-sm text-sm font-medium text-runs-interactive underline-offset-2 transition-colors duration-150 hover:text-runs-interactive-hover hover:underline motion-reduce:transition-none"
       >
         確認
       </button>
