@@ -13,6 +13,9 @@ const runsSection = read("components/runs/RunsSection.tsx");
 const inspector = read("components/runs/ExecutionInspector.tsx");
 const attention = read("components/runs/AttentionInbox.tsx");
 const icons = read("components/icons/RunsIcons.tsx");
+const home = read("components/runs/HomeView.tsx");
+const connectionObservation = read("components/runs/ConnectionObservationView.tsx");
+const agentManagement = read("components/runs/AgentManagementView.tsx");
 
 for (const destination of [
   '{ id: "home", label: "ホーム"',
@@ -27,16 +30,20 @@ assert.doesNotMatch(shell, /label: "(?:AI|権限|接続|観測|分析)"/);
 assert.match(shell, /min-\[1200px\]:static/);
 assert.match(shell, /fixed inset-0 z-40/);
 assert.match(shell, /focus-visible:ring-2/);
+assert.match(shell, /ShellLayoutMode = "wide" \| "compact" \| "narrow"/);
+assert.match(shell, /ShellOverlay = "none" \| "primary" \| "secondary" \| "peek"/);
+assert.match(shell, /setOverlay\(next\)/);
+assert.match(shell, /overlay === "primary"/);
 
 for (const subsection of ["agent", "permission", "connection", "observation"]) {
   assert.match(management, new RegExp(`id: "${subsection}"`));
 }
 assert.match(management, /title="管理"/);
 assert.match(secondary, /-translate-x-full/);
-assert.match(shellContainers, /lg:static/);
-assert.match(secondary, /lg:translate-x-0/);
-assert.match(secondary, /fixed inset-0 z-40/);
-assert.match(secondary, /aria-expanded=\{open\}/);
+assert.doesNotMatch(shellContainers, /lg:static/);
+assert.match(secondary, /min-\[1200px\]:static/);
+assert.match(secondary, /persistentWide \|\| overlay === "secondary"/);
+assert.match(secondary, /openOverlay\("secondary"/);
 
 assert.match(runsSection, /section === "management" && <ManagementSidebar/);
 assert.match(runsSection, /mode=\{managementSection\}/);
@@ -54,6 +61,16 @@ assert.match(inspector, /技術ディテール/);
 
 assert.match(attention, /attentionReviewPresentation\(item\)/);
 assert.match(attention, /attentionPrimaryAction\(item\)/);
+assert.match(attention, /実行は完了しています。内容を確認してください。/);
+assert.doesNotMatch(attention, /attentionReasonJapaneseExplanation/);
 assert.match(icons, /CloseIcon[\s\S]*strokeWidth=\{2\}/);
+assert.match(icons, /SettingsIcon[\s\S]*<circle cx="8" cy="8" r="2.2"/);
+assert.match(home, /<h1 className="sr-only">ホーム<\/h1>/);
+assert.doesNotMatch(runsSection, /section === "home" \? "ホーム"/);
+assert.match(runsSection, /persistent=\{false\} hideTrigger/);
+assert.match(runsSection, /フィルタ\{activeFilterCount/);
+assert.match(connectionObservation, /const isObservation = props.mode === "observation"/);
+assert.match(connectionObservation, /\{isObservation && <Section title="Capture Gap履歴"/);
+assert.match(agentManagement, /現在確認できる追加メタデータはありません。/);
 
 console.log("PASS SOR-262 UI architecture v1 contract");

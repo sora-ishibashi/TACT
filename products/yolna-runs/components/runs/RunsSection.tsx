@@ -15,7 +15,7 @@
 // read modelをそのまま描画するだけ(絶対条件、SOR-54指示「No business
 // logic in React」)。
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ActivityExplorer } from "./ActivityExplorer";
 import ActivityFilters from "./ActivityFilters";
@@ -63,7 +63,8 @@ const EMPTY_COVERAGE: { surfaces: ObservationSurface[]; gaps: CaptureGap[]; conn
 export default function RunsSection() {
 
   const { user, getAccessToken, signOut } = useAuth();
-  const { section, setSection } = useRunsShell();
+  const { section, setSection, openOverlay } = useRunsShell();
+  const activityFilterButtonRef = useRef<HTMLButtonElement>(null);
 
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
   // SOR-77(CORRELATION-REVIEW-P1): レビュー対象のexecutionId(モーダル
@@ -519,6 +520,7 @@ export default function RunsSection() {
     return [...counts].map(([id, count]) => ({ id: id as AttentionCardView["attentionReason"], count, label: attentionReasonJapanese(id as AttentionCardView["attentionReason"]) }));
   }, [attentionItems]);
   const filteredAttentionItems = useMemo(() => attentionCategory ? attentionItems.filter((item) => item.attentionReason === attentionCategory) : attentionItems, [attentionCategory, attentionItems]);
+  const activeFilterCount = useMemo(() => Object.values(activityFilters).filter((value) => value !== undefined && value !== "").length, [activityFilters]);
   // SOR-187: pure projection (coverageManagement.ts) — classification/
   // join判定は一切ここに無い、既存surfaces/gaps/connectionsをそのまま渡す。
   const coverageDetails = useMemo(
@@ -550,15 +552,17 @@ export default function RunsSection() {
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       {section === "work" && <WorkSidebar items={workList} state={workListLoading ? "loading" : workListError} selectedWorkId={selectedWorkId} search={workSearch} onSearch={setWorkSearch} onSelect={handleSelectWork} />}
       {section === "management" && <ManagementSidebar section={managementSection} agents={agentItems} permissions={permissionScopes} details={coverageDetails} selectedAgentId={selectedAgentId} selectedScopeKey={selectedPermissionScopeKey} selectedSurfaceId={selectedSurfaceId} onSectionChange={setManagementSection} onSelectAgent={setSelectedAgentId} onSelectPermission={setSelectedPermissionScopeKey} onSelectSurface={setSelectedSurfaceId} />}
-      {(section === "activity" || section === "attention") && <SecondarySidebar title={section === "attention" ? "要確認" : "実行記録のフィルタ"}>
+      {section === "activity" && <SecondarySidebar title="実行記録のフィルタ" persistent={false} hideTrigger>
         {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
+      </SecondarySidebar>}
+      {section === "attention" && <SecondarySidebar title="要確認">
         {section === "attention" ? <div className="flex flex-col gap-0.5"><p className="mb-1 px-2 text-xs font-semibold tracking-wide text-runs-muted">理由</p><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className={`border-l-2 px-2 py-1.5 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-runs-focus ${attentionCategory === null ? "border-runs-interactive bg-runs-selected font-semibold text-runs-text" : "border-transparent text-runs-text-secondary hover:bg-runs-hover"}`}>すべて <span className="float-right tabular-nums">{attentionItems.length}</span></button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className={`border-l-2 px-2 py-1.5 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-runs-focus ${attentionCategory === category.id ? "border-runs-interactive bg-runs-selected font-semibold text-runs-text" : "border-transparent text-runs-text-secondary hover:bg-runs-hover"}`}>{category.label}<span className="float-right tabular-nums">{category.count}</span></button>)}</div> : null}
       </SecondarySidebar>}
       <div className="tact-scrollbar min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 lg:px-6">
-      {(section === "home" || section === "attention" || section === "activity") && <PageHeader title={section === "home" ? "ホーム" : section === "attention" ? "要確認" : "実行記録"} />}
+      {(section === "attention" || section === "activity") && <PageHeader title={section === "attention" ? "要確認" : "実行記録"} actions={section === "activity" ? <button ref={activityFilterButtonRef} type="button" onClick={() => openOverlay("secondary", activityFilterButtonRef.current)} className="runs-focus inline-flex h-9 items-center rounded-md border border-runs-border bg-runs-surface px-3 text-sm font-medium text-runs-text hover:bg-runs-hover">フィルタ{activeFilterCount > 0 ? ` ${activeFilterCount}` : ""}</button> : undefined} />}
 
       {/* Keeps all list variants shrinkable within the main scroll region. */}
-      <div className={`${section === "home" || section === "attention" || section === "activity" ? "mt-4" : ""} min-w-0`}>
+      <div className={`${section === "attention" || section === "activity" ? "mt-4" : ""} min-w-0`}>
 
         {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (
           !selectedWorkId ? <p className="text-sm text-runs-text-secondary">左の一覧からWorkを選択してください。</p> : workLoading ? <PresentationState kind="loading" /> : workError ? (workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />) : workHeader ? <WorkDetailView work={workHeader} items={workItems} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={handleSelectExecution} /> : <PresentationState kind="empty">Workが見つかりません。</PresentationState>
@@ -609,7 +613,7 @@ export default function RunsSection() {
 
       {section === "management" && managementSection === "agent" && managementDetailPeek === "agent" && selectedAgentId && !inspectedExecutionId && <AgentManagementPeek items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onClose={() => setManagementDetailPeek(null)} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setManagementSection("permission"); }} />}
       {section === "management" && managementSection === "permission" && managementDetailPeek === "permission" && selectedPermissionScopeKey && !inspectedExecutionId && <PermissionManagementPeek scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onClose={() => setManagementDetailPeek(null)} onSelectExecution={handleSelectExecution} onSelectWork={handleSelectWork} />}
-      {section === "management" && (managementSection === "connection" || managementSection === "observation") && managementDetailPeek === "coverage" && selectedSurfaceId && <ConnectionObservationPeek details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} onClose={() => setManagementDetailPeek(null)} />}
+      {section === "management" && (managementSection === "connection" || managementSection === "observation") && managementDetailPeek === "coverage" && selectedSurfaceId && <ConnectionObservationPeek details={coverageDetails} state={coverageLoading ? "loading" : coverageError} selectedSurfaceId={selectedSurfaceId} mode={managementSection} onClose={() => setManagementDetailPeek(null)} />}
 
       </div>
     </div>

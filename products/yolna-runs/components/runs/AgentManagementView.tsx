@@ -11,7 +11,6 @@ import { AttentionReasonBadge, PermissionBadge, ResultBadge } from "./badges";
 
 const UNCONFIRMED = "確認できません";
 const WORK_TITLE_UNCONFIRMED = "Work名を確認できません";
-const registrationStatusLabel: Record<AgentManagementDetailView["registrationStatus"], string> = { unknown: UNCONFIRMED };
 
 function formatDateTime(value: string | null): string {
   return value ? new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : UNCONFIRMED;
@@ -71,11 +70,11 @@ export function AgentManagementPeek({ onClose, ...props }: AgentManagementProps 
   const detail = props.details.find((item) => item.agentId === props.selectedAgentId) ?? null;
   if (!detail) return null;
 
-  const unavailableBasics = detail.aiProvider === null && detail.model === null;
+  const availableBasics = [detail.aiProvider ? ["AI提供元", detail.aiProvider] : null, detail.model ? ["モデル", detail.model] : null].filter((item): item is [string, string] => item !== null);
 
   return <DetailPeek title={`${detail.agentId} の詳細`} onClose={onClose}>
     <div className="flex min-w-0 flex-col">
-      <Section title="追加情報"><dl className="mt-2 grid gap-1 text-xs"><div><dt className="inline text-runs-muted">表示名: </dt><dd className="inline text-runs-text">{UNCONFIRMED}</dd></div><div><dt className="inline text-runs-muted">AI提供元: </dt><dd className="inline text-runs-text">{detail.aiProvider ?? UNCONFIRMED}</dd></div><div><dt className="inline text-runs-muted">モデル: </dt><dd className="inline text-runs-text">{detail.model ?? UNCONFIRMED}</dd></div><div><dt className="inline text-runs-muted">登録状態: </dt><dd className="inline text-runs-text">{registrationStatusLabel[detail.registrationStatus]}</dd></div></dl>{unavailableBasics && <p className="mt-2 text-xs text-runs-text-secondary">追加のAI情報は確認できません。</p>}</Section>
+      <Section title="追加情報">{availableBasics.length ? <dl className="mt-2 grid gap-1 text-xs">{availableBasics.map(([label, value]) => <div key={label}><dt className="inline text-runs-muted">{label}: </dt><dd className="inline text-runs-text">{value}</dd></div>)}</dl> : <p className="mt-2 text-sm text-runs-text-secondary">現在確認できる追加メタデータはありません。</p>}</Section>
       <Section title="識別の根拠"><ul className="mt-2 space-y-1 text-sm text-runs-text-secondary">{detail.identityEvidence.map((evidence) => <li key={evidence}>{identityEvidenceLabel(evidence)}</li>)}</ul></Section>
       <Section title="依頼元 / AIへの委任"><div className="mt-2 grid gap-3 text-xs sm:grid-cols-2"><div><p className="font-medium text-runs-text-secondary">依頼元</p>{detail.principals.length ? detail.principals.map((principal, index) => <p key={`${principal.actorKind}-${index}`} className="mt-1 text-runs-text">{principal.actorKindLabel} · {principal.actorLabel}</p>) : <p className="mt-1 text-runs-text-secondary">確認できません</p>}</div><div><p className="font-medium text-runs-text-secondary">AIへの委任</p>{detail.delegations.length ? detail.delegations.map((delegation, index) => <p key={`${delegation.onBehalfOfActorKind}-${index}`} className="mt-1 text-runs-text">{delegation.onBehalfOfActorKindLabel} · {delegation.actorLabel}</p>) : <p className="mt-1 text-runs-text-secondary">確認できません</p>}</div></div></Section>
       <Section title="接続の根拠"><div className="mt-2 space-y-2">{detail.connectionEvidence.connections.length ? detail.connectionEvidence.connections.map((connection) => <div key={connection.connectionId} className="flex justify-between gap-3 text-xs"><span className="text-runs-text">{connection.service} · {connection.provider}</span><span className="text-runs-text-secondary">{connection.statusLabel}</span></div>) : <p className="text-sm text-runs-text-secondary">{detail.connectionEvidence.unavailableMessage}</p>}</div></Section>
