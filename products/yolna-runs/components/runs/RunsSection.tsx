@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ActivityExplorer } from "./ActivityExplorer";
-import ActivityFilters from "./ActivityFilters";
+import { ActivityFilterSheet } from "./ActivityFilterSheet";
 import AttentionInbox from "./AttentionInbox";
 import { PermissionManagementPeek, PermissionManagementView } from "./PermissionManagementView";
 import { AgentManagementPeek, AgentManagementView } from "./AgentManagementView";
@@ -35,6 +35,7 @@ import { PresentationState, presentationStateForHttp, type PresentationStateKind
 import { PageHeader } from "@/components/shell/ShellContainers";
 import { summarizeActivityStatuses } from "@/lib/statusPresentation";
 import SettingsView from "./SettingsView";
+import { FilterIcon } from "@/components/icons/RunsIcons";
 import {
   filterActivityItems,
   distinctActivityFilterOptions,
@@ -63,8 +64,9 @@ const EMPTY_COVERAGE: { surfaces: ObservationSurface[]; gaps: CaptureGap[]; conn
 export default function RunsSection() {
 
   const { user, getAccessToken, signOut } = useAuth();
-  const { section, setSection, openOverlay } = useRunsShell();
+  const { section, setSection } = useRunsShell();
   const activityFilterButtonRef = useRef<HTMLButtonElement>(null);
+  const [activityFilterOpen, setActivityFilterOpen] = useState(false);
 
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
   // SOR-77(CORRELATION-REVIEW-P1): レビュー対象のexecutionId(モーダル
@@ -535,6 +537,7 @@ export default function RunsSection() {
       onClose={() => setInspectedExecutionId(null)}
     />
   );
+  const closeActivityFilter = useCallback(() => { setActivityFilterOpen(false); queueMicrotask(() => activityFilterButtonRef.current?.focus()); }, []);
   if (!user) {
 
     return (
@@ -552,14 +555,11 @@ export default function RunsSection() {
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       {section === "work" && <WorkSidebar items={workList} state={workListLoading ? "loading" : workListError} selectedWorkId={selectedWorkId} search={workSearch} onSearch={setWorkSearch} onSelect={handleSelectWork} />}
       {section === "management" && <ManagementSidebar section={managementSection} agents={agentItems} permissions={permissionScopes} details={coverageDetails} selectedAgentId={selectedAgentId} selectedScopeKey={selectedPermissionScopeKey} selectedSurfaceId={selectedSurfaceId} onSectionChange={setManagementSection} onSelectAgent={setSelectedAgentId} onSelectPermission={setSelectedPermissionScopeKey} onSelectSurface={setSelectedSurfaceId} />}
-      {section === "activity" && <SecondarySidebar title="実行記録のフィルタ" persistent={false} hideTrigger>
-        {section === "activity" ? <ActivityFilters filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} /> : null}
-      </SecondarySidebar>}
       {section === "attention" && <SecondarySidebar title="要確認">
         {section === "attention" ? <div className="flex flex-col gap-0.5"><p className="mb-1 px-2 text-xs font-semibold tracking-wide text-runs-muted">理由</p><button type="button" onClick={() => setAttentionCategory(null)} aria-pressed={attentionCategory === null} className={`border-l-2 px-2 py-1.5 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-runs-focus ${attentionCategory === null ? "border-runs-interactive bg-runs-selected font-semibold text-runs-text" : "border-transparent text-runs-text-secondary hover:bg-runs-hover"}`}>すべて <span className="float-right tabular-nums">{attentionItems.length}</span></button>{attentionCategories.map((category) => <button key={category.id} type="button" onClick={() => setAttentionCategory(category.id)} aria-pressed={attentionCategory === category.id} className={`border-l-2 px-2 py-1.5 text-left text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-runs-focus ${attentionCategory === category.id ? "border-runs-interactive bg-runs-selected font-semibold text-runs-text" : "border-transparent text-runs-text-secondary hover:bg-runs-hover"}`}>{category.label}<span className="float-right tabular-nums">{category.count}</span></button>)}</div> : null}
       </SecondarySidebar>}
       <div className="tact-scrollbar min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 lg:px-6">
-      {(section === "attention" || section === "activity") && <PageHeader title={section === "attention" ? "要確認" : "実行記録"} actions={section === "activity" ? <button ref={activityFilterButtonRef} type="button" onClick={() => openOverlay("secondary", activityFilterButtonRef.current)} className="runs-focus inline-flex h-9 items-center rounded-md border border-runs-border bg-runs-surface px-3 text-sm font-medium text-runs-text hover:bg-runs-hover">フィルタ{activeFilterCount > 0 ? ` ${activeFilterCount}` : ""}</button> : undefined} />}
+      {(section === "attention" || section === "activity") && <PageHeader title={section === "attention" ? "要確認" : "実行記録"} actions={section === "activity" ? <button ref={activityFilterButtonRef} type="button" onClick={() => setActivityFilterOpen(true)} aria-label="フィルタ" title="フィルタ" className="runs-focus relative inline-flex h-9 w-9 items-center justify-center rounded-md text-runs-text-secondary hover:bg-runs-hover hover:text-runs-text"><FilterIcon />{activeFilterCount > 0 && <span aria-label={`${activeFilterCount}件のフィルタを適用中`} className="absolute right-0.5 top-0.5 min-w-4 rounded-full bg-runs-selected px-1 text-center text-xs font-semibold leading-4 text-runs-text">{activeFilterCount}</span>}</button> : undefined} />}
 
       {/* Keeps all list variants shrinkable within the main scroll region. */}
       <div className={`${section === "attention" || section === "activity" ? "mt-4" : ""} min-w-0`}>
@@ -610,6 +610,8 @@ export default function RunsSection() {
       )}
 
       {executionInspector}
+
+      {section === "activity" && <ActivityFilterSheet open={activityFilterOpen} filters={activityFilters} options={activityFilterOptions} onChange={setActivityFilters} onClose={closeActivityFilter} />}
 
       {section === "management" && managementSection === "agent" && managementDetailPeek === "agent" && selectedAgentId && !inspectedExecutionId && <AgentManagementPeek items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onClose={() => setManagementDetailPeek(null)} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setManagementSection("permission"); }} />}
       {section === "management" && managementSection === "permission" && managementDetailPeek === "permission" && selectedPermissionScopeKey && !inspectedExecutionId && <PermissionManagementPeek scopes={permissionScopes} state={permissionLoading ? "loading" : permissionError} selectedScopeKey={selectedPermissionScopeKey} onClose={() => setManagementDetailPeek(null)} onSelectExecution={handleSelectExecution} onSelectWork={handleSelectWork} />}

@@ -62,7 +62,11 @@ export function ManagementIcon(props: RunsIconProps) {
 }
 
 export function SettingsIcon(props: RunsIconProps) {
-  return <Icon {...props}><circle cx="8" cy="8" r="2.2" {...strokeProps} /><path d="M8 1.8v1.3M8 12.9v1.3M1.8 8h1.3M12.9 8h1.3M3.6 3.6l.9.9M11.5 11.5l.9.9M12.4 3.6l-.9.9M4.5 11.5l-.9.9" {...strokeProps} /></Icon>;
+  return <Icon {...props}><path d="M6.1 2.3h3.8l.5 1.4 1.4.8 1.5-.2 1.9 3.4-1 1.1v1.6l1 1.1-1.9 3.4-1.5-.2-1.4.8-.5 1.4H6.1l-.5-1.4-1.4-.8-1.5.2-1.9-3.4 1-1.1V8.8l-1-1.1 1.9-3.4 1.5.2 1.4-.8.5-1.4Z" {...strokeProps} /><circle cx="8" cy="8" r="2" {...strokeProps} /></Icon>;
+}
+
+export function FilterIcon(props: RunsIconProps) {
+  return <Icon {...props}><path d="M2.2 3h11.6L9.2 8.1v4.2L6.8 13V8.1L2.2 3Z" {...strokeProps} /></Icon>;
 }
 
 export function CloseIcon(props: RunsIconProps) {

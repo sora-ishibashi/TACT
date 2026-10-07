@@ -16,6 +16,7 @@ const icons = read("components/icons/RunsIcons.tsx");
 const home = read("components/runs/HomeView.tsx");
 const connectionObservation = read("components/runs/ConnectionObservationView.tsx");
 const agentManagement = read("components/runs/AgentManagementView.tsx");
+const filterSheet = read("components/runs/ActivityFilterSheet.tsx");
 
 for (const destination of [
   '{ id: "home", label: "ホーム"',
@@ -64,11 +65,18 @@ assert.match(attention, /attentionPrimaryAction\(item\)/);
 assert.match(attention, /実行は完了しています。内容を確認してください。/);
 assert.doesNotMatch(attention, /attentionReasonJapaneseExplanation/);
 assert.match(icons, /CloseIcon[\s\S]*strokeWidth=\{2\}/);
-assert.match(icons, /SettingsIcon[\s\S]*<circle cx="8" cy="8" r="2.2"/);
+assert.match(icons, /SettingsIcon[\s\S]*M6\.1 2\.3h3\.8/);
+assert.match(icons, /FilterIcon/);
 assert.match(home, /<h1 className="sr-only">ホーム<\/h1>/);
 assert.doesNotMatch(runsSection, /section === "home" \? "ホーム"/);
-assert.match(runsSection, /persistent=\{false\} hideTrigger/);
-assert.match(runsSection, /フィルタ\{activeFilterCount/);
+assert.match(runsSection, /aria-label="フィルタ"/);
+assert.match(runsSection, /<FilterIcon \/>/);
+assert.match(runsSection, /<ActivityFilterSheet open=\{activityFilterOpen\}/);
+assert.doesNotMatch(runsSection, /section === "activity" && <SecondarySidebar/);
+assert.match(filterSheet, /absolute inset-y-0 right-0/);
+assert.match(filterSheet, /if \(!open\) return null/);
+assert.match(filterSheet, /event\.key === "Escape"/);
+assert.match(runsSection, /activityFilterButtonRef\.current\?\.focus\(\)/);
 assert.match(connectionObservation, /const isObservation = props.mode === "observation"/);
 assert.match(connectionObservation, /\{isObservation && <Section title="Capture Gap履歴"/);
 assert.match(agentManagement, /現在確認できる追加メタデータはありません。/);
