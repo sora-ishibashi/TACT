@@ -144,7 +144,14 @@ async function createGovernanceApprovalRequest(
     .single();
 
   if (!error && data) return { status: "created", approvalRequest: toGovernanceApprovalRequest(data) };
-  if ((error as { code?: string } | null)?.code !== DUPLICATE) return { status: "error", message: error?.message ?? "insert failed" };
+  // SOR-260 Phase 1 hardening: a non-duplicate failure here now includes a
+  // tact_governance_approval_requests.user_id FK violation (23503) whenever
+  // a caller passes an id this store boundary never validated itself — a
+  // raw Postgres error.message must never reach the typed application
+  // boundary (SOR-260 Human Owner decision 12: no SQL/credential/row detail
+  // leakage), so this returns a fixed, safe message regardless of which
+  // non-duplicate error occurred.
+  if ((error as { code?: string } | null)?.code !== DUPLICATE) return { status: "error", message: "insert failed" };
 
   const e = await c
     .from("tact_governance_approval_requests")

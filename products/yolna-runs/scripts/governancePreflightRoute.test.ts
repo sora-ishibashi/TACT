@@ -1,16 +1,25 @@
 // =========================
-// Yolna Runs Standalone — Governance Preflight Route Regression (SOR-138 Slice 3A-1)
+// Yolna Runs Standalone — Governance Preflight Route Regression (SOR-138 Slice 3A-1, SOR-260 Phase 1)
 // =========================
 //
 // Exercises the real exported handleGovernancePreflightRequest() directly
-// against constructed Request objects. preflight() itself is injected as a
-// fake (its own behavior is already covered by
-// tests/tact/execution/governance/contract.test.ts at the repo root) — this
-// file only proves the ROUTE correctly sequences auth -> parse -> validate
-// -> trusted-argument-passing -> HTTP status mapping. Two tests (unsigned
-// body, tampered onBehalfOfUserId) use the REAL verifyGovernanceSignedRequest
-// instead of a fake, specifically to prove the transport boundary itself —
-// not just this route's own logic — rejects those cases.
+// against constructed Request objects. preflight() and
+// resolveOrCreateExternalPrincipal() are both injected as fakes (their own
+// behavior is covered by tests/tact/execution/governance/contract.test.ts
+// and tests/tact/execution/principal/principalStore.test.ts at the repo
+// root respectively) — this file only proves the ROUTE correctly sequences
+// auth -> parse -> validate -> principal resolution -> trusted-argument-
+// passing -> HTTP status mapping. Two tests (unsigned body, tampered
+// onBehalfOfUserId) use the REAL verifyGovernanceSignedRequest instead of a
+// fake, specifically to prove the transport boundary itself — not just this
+// route's own logic — rejects those cases.
+//
+// SOR-260 Phase 1: preflight() now receives the RESOLVED principal.id, not
+// the raw signed onBehalfOfUserId directly. Every test below that reaches
+// preflight() asserts this explicitly (see resolvedPrincipalId()) so a
+// regression that silently reverts to passing onBehalfOfUserId straight
+// through would fail loudly here, not just in production against a real
+// tact_runs_principals FK.
 
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
@@ -29,7 +38,7 @@ import {
   type GovernancePreflightRouteDeps,
 } from "../app/api/tact/runs/governance/preflight/route";
 import { verifyGovernanceSignedRequest, type GovernanceAuthResult } from "../lib/governance/runsGovernanceAuth";
-import type { PreflightOutcome } from "@tact/runs-core/tact-execution";
+import type { PreflightOutcome, ResolveOrCreateExternalPrincipalOutcome } from "@tact/runs-core/tact-execution";
 
 const checks: string[] = [];
 const check = (name: string, value: unknown) => { assert.ok(value, name); checks.push(name); };
@@ -104,6 +113,41 @@ function makeFakePreflight(outcome: PreflightOutcome): { fn: typeof import("@tac
   return { fn, spy };
 }
 
+// SOR-260 Phase 1: a deterministic, observable resolver fake. The returned
+// principal.id is DERIVED FROM (namespace, externalSubjectId) rather than
+// a fixed constant, specifically so a test can assert preflight() received
+// THIS value (proving resolution actually ran and its output was threaded
+// through) rather than merely proving *some* string was passed.
+function resolvedPrincipalId(namespace: string, externalSubjectId: string): string {
+  return `principal::${namespace}::${externalSubjectId}`;
+}
+
+interface SpyResolvePrincipal {
+  calls: Array<{ namespace: string; externalSubjectId: string }>;
+}
+
+function makeFakeResolvePrincipal(
+  outcomeOverride?: ResolveOrCreateExternalPrincipalOutcome
+): { fn: (namespace: string, externalSubjectId: string) => Promise<ResolveOrCreateExternalPrincipalOutcome>; spy: SpyResolvePrincipal } {
+  const spy: SpyResolvePrincipal = { calls: [] };
+  const fn = async (namespace: string, externalSubjectId: string): Promise<ResolveOrCreateExternalPrincipalOutcome> => {
+    spy.calls.push({ namespace, externalSubjectId });
+    if (outcomeOverride) return outcomeOverride;
+    return {
+      status: "resolved",
+      principal: {
+        id: resolvedPrincipalId(namespace, externalSubjectId),
+        namespace,
+        externalSubjectId,
+        localAuthUserId: null,
+        principalKind: "external_subject",
+        createdAt: "2026-10-05T00:00:00.000Z",
+      },
+    };
+  };
+  return { fn, spy };
+}
+
 async function run(): Promise<void> {
 
   // Tests [3]/[4]/[10] exercise the REAL verifyGovernanceSignedRequest,
@@ -131,18 +175,26 @@ async function run(): Promise<void> {
     },
   };
 
-  // [1] valid signed request reaches preflight(), [2] trusted userId equals signed onBehalfOfUserId, [6] core decided -> 200
+  // [1] valid signed request reaches preflight(), [2] preflight() receives
+  // the RESOLVED principal.id — never the raw signed onBehalfOfUserId —
+  // and the resolver itself was called with (auth.callerId,
+  // envelope.onBehalfOfUserId), [6] core decided -> 200
   {
     const envelope = makeEnvelope("user-a");
     const body = Buffer.from(JSON.stringify(envelope));
     const { fn, spy } = makeFakePreflight(decidedOutcome);
-    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, preflight: fn };
+    const { fn: resolveFn, spy: resolveSpy } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
 
     const response = await handleGovernancePreflightRequest(makeRequest(body, sign(body, FIXED_TIMESTAMP)), deps);
     const json = await response.json();
 
     check("[1] a validly-authed request reaches preflight()", spy.calls.length === 1);
-    check("[2] the trusted userId passed to preflight() equals the signed envelope's onBehalfOfUserId", spy.calls[0]?.userId === "user-a");
+    check("[1b] the resolver was called exactly once, with (auth.callerId, envelope.onBehalfOfUserId)", resolveSpy.calls.length === 1 && resolveSpy.calls[0]?.namespace === CALLER_ID && resolveSpy.calls[0]?.externalSubjectId === "user-a");
+    check(
+      "[2] preflight() receives the RESOLVED principal.id, NOT the raw envelope.onBehalfOfUserId",
+      spy.calls[0]?.userId === resolvedPrincipalId(CALLER_ID, "user-a") && spy.calls[0]?.userId !== "user-a"
+    );
     check("[6] core status=decided maps to HTTP 200 with the decision in the body", response.status === 200 && json.success === true && json.decision.verdict === "ALLOW");
   }
 
@@ -151,12 +203,14 @@ async function run(): Promise<void> {
     const envelope = makeEnvelope("user-b");
     const body = Buffer.from(JSON.stringify(envelope));
     const { fn, spy } = makeFakePreflight(decidedOutcome);
-    const deps: GovernancePreflightRouteDeps = { verify: verifyWithFixedNow, preflight: fn };
+    const { fn: resolveFn, spy: resolveSpy } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: verifyWithFixedNow, resolvePrincipal: resolveFn, preflight: fn };
 
     const unsignedRequest = new NextRequest(`https://runs.internal.test${PATHNAME}`, { method: "POST", headers: { "content-type": "application/json" }, body: body.toString("utf-8") });
     const response = await handleGovernancePreflightRequest(unsignedRequest, deps);
 
     check("[3] an unsigned request is rejected (401) and never reaches preflight()", response.status === 401 && spy.calls.length === 0);
+    check("[3b] invalid HMAC never reaches the principal resolver either (resolver call count 0)", resolveSpy.calls.length === 0);
   }
 
   // [4] tampered onBehalfOfUserId invalidates signature (real verify)
@@ -165,30 +219,47 @@ async function run(): Promise<void> {
     const body = Buffer.from(JSON.stringify(envelope));
     const headers = sign(body, FIXED_TIMESTAMP);
     const { fn, spy } = makeFakePreflight(decidedOutcome);
-    const deps: GovernancePreflightRouteDeps = { verify: verifyWithFixedNow, preflight: fn };
+    const { fn: resolveFn, spy: resolveSpy } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: verifyWithFixedNow, resolvePrincipal: resolveFn, preflight: fn };
 
     const tamperedEnvelope = { ...envelope, onBehalfOfUserId: "user-b" };
     const tamperedBody = Buffer.from(JSON.stringify(tamperedEnvelope));
     const response = await handleGovernancePreflightRequest(makeRequest(tamperedBody, headers), deps);
 
     check("[4] a tampered onBehalfOfUserId invalidates the signature (401) and never reaches preflight()", response.status === 401 && spy.calls.length === 0);
+    check("[4b] a tampered signature never reaches the principal resolver either (resolver call count 0)", resolveSpy.calls.length === 0);
   }
 
-  // [5] malformed body after valid auth -> 400
+  // [5] malformed body after valid auth -> 400, never reaches the resolver or preflight()
   {
     const malformedBody = Buffer.from("not json");
     const { fn, spy } = makeFakePreflight(decidedOutcome);
-    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, preflight: fn };
+    const { fn: resolveFn, spy: resolveSpy } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
 
     const response = await handleGovernancePreflightRequest(makeRequest(malformedBody, sign(malformedBody, FIXED_TIMESTAMP)), deps);
     check("[5] a malformed body after valid auth returns 400 and never reaches preflight()", response.status === 400 && spy.calls.length === 0);
+    check("[5b] malformed JSON never reaches the principal resolver either (resolver call count 0)", resolveSpy.calls.length === 0);
+  }
+
+  // [5c] structurally invalid envelope (valid JSON, but missing onBehalfOfUserId) -> 400, never reaches the resolver or preflight()
+  {
+    const invalidEnvelopeBody = Buffer.from(JSON.stringify({ request: { invocationId: "inv-1" } }));
+    const { fn, spy } = makeFakePreflight(decidedOutcome);
+    const { fn: resolveFn, spy: resolveSpy } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
+
+    const response = await handleGovernancePreflightRequest(makeRequest(invalidEnvelopeBody, sign(invalidEnvelopeBody, FIXED_TIMESTAMP)), deps);
+    check("[5c] a structurally invalid envelope (no onBehalfOfUserId) returns 400 and never reaches preflight()", response.status === 400 && spy.calls.length === 0);
+    check("[5c-b] an invalid envelope never reaches the principal resolver either (resolver call count 0)", resolveSpy.calls.length === 0);
   }
 
   // [7] core invalid -> 400
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn } = makeFakePreflight({ status: "invalid", errors: ["actorKind must be one of ..."] });
-    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, preflight: fn };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
     const response = await handleGovernancePreflightRequest(makeRequest(body, sign(body, FIXED_TIMESTAMP)), deps);
     const json = await response.json();
     check("[7] core status=invalid maps to HTTP 400", response.status === 400 && json.success === false && Array.isArray(json.details));
@@ -198,7 +269,8 @@ async function run(): Promise<void> {
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn } = makeFakePreflight({ status: "unavailable", reason: "governance decision store unavailable" });
-    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, preflight: fn };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
     const response = await handleGovernancePreflightRequest(makeRequest(body, sign(body, FIXED_TIMESTAMP)), deps);
     check("[8] core status=unavailable maps to HTTP 503", response.status === 503);
   }
@@ -208,19 +280,22 @@ async function run(): Promise<void> {
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn } = makeFakePreflight({ status: "invocation_conflict" });
-    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, preflight: fn };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
     const response = await handleGovernancePreflightRequest(makeRequest(body, sign(body, FIXED_TIMESTAMP)), deps);
     const json = await response.json();
     check("[8-conflict] core status=invocation_conflict maps to HTTP 409, not 503", response.status === 409 && json.success === false);
   }
 
-  // [9] auth fail -> no preflight call
+  // [9] auth fail -> no resolver call, no preflight call
   {
     const body = Buffer.from(JSON.stringify(makeEnvelope()));
     const { fn, spy } = makeFakePreflight(decidedOutcome);
-    const deps: GovernancePreflightRouteDeps = { verify: () => ({ ok: false, kind: "client", reason: "signature_invalid" }), preflight: fn };
+    const { fn: resolveFn, spy: resolveSpy } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: () => ({ ok: false, kind: "client", reason: "signature_invalid" }), resolvePrincipal: resolveFn, preflight: fn };
     const response = await handleGovernancePreflightRequest(makeRequest(body, sign(body, FIXED_TIMESTAMP)), deps);
     check("[9] an auth failure never reaches preflight()", response.status === 401 && spy.calls.length === 0);
+    check("[9b] an auth failure never reaches the principal resolver either (resolver call count 0, confirms resolution never precedes authentication)", resolveSpy.calls.length === 0);
   }
 
   // [10] exact duplicate signed request reaches the idempotent contract without a transport-layer replay rejection
@@ -229,7 +304,8 @@ async function run(): Promise<void> {
     const body = Buffer.from(JSON.stringify(envelope));
     const headers = sign(body, FIXED_TIMESTAMP);
     const { fn, spy } = makeFakePreflight(decidedOutcome);
-    const deps: GovernancePreflightRouteDeps = { verify: verifyWithFixedNow, preflight: fn };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: verifyWithFixedNow, resolvePrincipal: resolveFn, preflight: fn };
 
     const first = await handleGovernancePreflightRequest(makeRequest(body, { ...headers }), deps);
     const second = await handleGovernancePreflightRequest(makeRequest(body, { ...headers }), deps);
@@ -253,12 +329,70 @@ async function run(): Promise<void> {
     const headers = sign(body, FIXED_TIMESTAMP);
     headers["content-length"] = String(64 * 1024 + 1);
     const { fn, spy } = makeFakePreflight(decidedOutcome);
-    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, preflight: fn };
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
 
     const response = await handleGovernancePreflightRequest(makeRequest(body, headers), deps);
     check(
       "[11] an oversized declared Content-Length is rejected (401) before the body is read, never reaching preflight()",
       response.status === 401 && spy.calls.length === 0
+    );
+  }
+
+  // [12] SOR-260: principal resolver returns invalid -> 400, never reaches preflight()
+  {
+    const body = Buffer.from(JSON.stringify(makeEnvelope()));
+    const { fn, spy } = makeFakePreflight(decidedOutcome);
+    const { fn: resolveFn } = makeFakeResolvePrincipal({ status: "invalid", errors: ["namespace \"runs-local-auth\" is reserved"] });
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
+
+    const response = await handleGovernancePreflightRequest(makeRequest(body, sign(body, FIXED_TIMESTAMP)), deps);
+    const json = await response.json();
+    check("[12] principal resolver status=invalid maps to HTTP 400 and never reaches preflight()", response.status === 400 && json.success === false && spy.calls.length === 0);
+  }
+
+  // [13] SOR-260: principal resolver returns unavailable -> 503, never reaches preflight()
+  {
+    const body = Buffer.from(JSON.stringify(makeEnvelope()));
+    const { fn, spy } = makeFakePreflight(decidedOutcome);
+    const { fn: resolveFn } = makeFakeResolvePrincipal({ status: "unavailable" });
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
+
+    const response = await handleGovernancePreflightRequest(makeRequest(body, sign(body, FIXED_TIMESTAMP)), deps);
+    check("[13] principal resolver status=unavailable maps to HTTP 503 and never reaches preflight()", response.status === 503 && spy.calls.length === 0);
+  }
+
+  // [14] SOR-260: the full existing Preflight verdict contract (ALLOW/DENY/
+  // UNKNOWN/APPROVAL_REQUIRED) all reach HTTP 200 via "decided" once a
+  // principal has been resolved — none of the four verdicts is special-
+  // cased by this route, and every one of them receives the RESOLVED
+  // principal.id. APPROVAL_REQUIRED's own ApprovalRequest persistence for
+  // an external (non-auth.users) principal is proven at the store/
+  // migration layer (tests/tact/execution/principal/principalStore.test.ts
+  // and migrationContract.test.ts, plus the existing
+  // tests/tact/execution/governance/approvalRequestStore.test.ts, which
+  // already exercises ensureGovernanceApprovalRequestForDecision() with an
+  // arbitrary trustedUserId string with no auth.users assumption) — this
+  // route-level check only proves the HTTP sequencing/argument-passing
+  // around whichever verdict Core returns.
+  for (const verdict of ["ALLOW", "DENY", "UNKNOWN", "APPROVAL_REQUIRED"] as const) {
+    const envelope = makeEnvelope("user-a");
+    const body = Buffer.from(JSON.stringify(envelope));
+    const verdictOutcome: PreflightOutcome = {
+      status: "decided",
+      response: { ...decidedOutcome.status === "decided" ? decidedOutcome.response : (() => { throw new Error("unreachable"); })(), verdict },
+    };
+    const { fn, spy } = makeFakePreflight(verdictOutcome);
+    const { fn: resolveFn } = makeFakeResolvePrincipal();
+    const deps: GovernancePreflightRouteDeps = { verify: () => ALWAYS_OK_AUTH, resolvePrincipal: resolveFn, preflight: fn };
+
+    const response = await handleGovernancePreflightRequest(makeRequest(body, sign(body, FIXED_TIMESTAMP)), deps);
+    const json = await response.json();
+
+    check(
+      `[14-${verdict}] verdict=${verdict} reaches HTTP 200 and preflight() received the resolved principal.id`,
+      response.status === 200 && json.decision.verdict === verdict &&
+      spy.calls[0]?.userId === resolvedPrincipalId(CALLER_ID, "user-a")
     );
   }
 
