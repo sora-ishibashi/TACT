@@ -58,7 +58,6 @@ export function attentionPrimaryAction(item: Pick<AttentionCardView, "status">):
 export function attentionPrimaryActionJapanese(action: AttentionPrimaryAction): string | null {
   if (action === "acknowledge") return "\u78ba\u8a8d\u6e08\u307f\u306b\u3059\u308b";
   switch (action) {
-    case "acknowledge": return "確認した";
     case "resolve": return "解決する";
     case null: return null;
   }
