@@ -15,7 +15,7 @@ export type ExecutionInspectorViewModel = {
   summary: {
     actionSentence: string;
     actor: string;
-    ai: string | null;
+    ai: string;
     principal: string;
     provider: string;
     action: string;
@@ -104,8 +104,8 @@ export function toExecutionInspectorViewModel(
   const target = targetSystemLabel(execution.provider, execution.targetProvider, execution.adapterVersion);
   const action = executionActionPresentation(actionLabel(execution.operation, execution.provider, execution.targetProvider));
   const actor = `${actorKindLabel[execution.actorKind]}${execution.actorId ? `\uff08${execution.actorId}\uff09` : ""}`;
-  const ai = execution.agentId ? `AI\uff08${execution.agentId}\uff09` : null;
-  const principal = principalLabel(execution.actorId);
+  const ai = execution.agentId ? `AI\uff08${execution.agentId}\uff09` : "\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093";
+  const principal = principalLabel(execution.onBehalfOfActorId ?? execution.actorId);
   const resource = execution.resourceIdentifier ?? execution.resourceType;
   const source = execution.sourceMetadata && typeof execution.sourceMetadata === "object" && !Array.isArray(execution.sourceMetadata)
     ? execution.sourceMetadata as Record<string, unknown>
@@ -115,7 +115,7 @@ export function toExecutionInspectorViewModel(
   return {
     executionId: execution.id,
     summary: {
-      actionSentence: `${actor} \u304c ${target.label} \u3067 ${action}${resource ? `\uff08${resource}\uff09` : ""}\u3092\u5b9f\u884c\u3057\u307e\u3057\u305f\u3002`,
+      actionSentence: `${execution.agentId ? ai : actor} \u304c ${target.label} \u3067 ${action}${resource ? `\uff08${resource}\uff09` : ""}\u3092\u5b9f\u884c\u3057\u307e\u3057\u305f\u3002`,
       actor,
       ai,
       principal,

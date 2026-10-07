@@ -20,9 +20,23 @@ assert.equal(model.permission.evaluation, "\u672a\u8a55\u4fa1");
 assert.equal(model.technical.invocationId, "invoke-1");
 assert.equal(model.permission.downstream.length, 0);
 assert.equal(model.summary.actor, "AI\uff08requester-1\uff09");
+assert.equal(model.summary.ai, "AI\uff08agent-1\uff09");
+assert.ok(model.summary.actionSentence.startsWith("AI\uff08agent-1\uff09"));
+
+const delegatedModel = toExecutionInspectorViewModel({ ...execution, onBehalfOfActorId: "principal-1" } as CanonicalExecution, [], []);
+assert.equal(delegatedModel.summary.principal, "principal-1");
+
+const unknownAiModel = toExecutionInspectorViewModel({ ...execution, agentId: null } as CanonicalExecution, [], []);
+assert.equal(unknownAiModel.summary.ai, "\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093");
+assert.ok(unknownAiModel.summary.actionSentence.startsWith("AI\uff08requester-1\uff09"));
+
+const outcomeModel = toExecutionInspectorViewModel({ ...execution, outcomeStatus: "asserted", outcomeKind: "page_updated" } as CanonicalExecution, [], []);
+assert.equal(outcomeModel.summary.action, "\u30da\u30fc\u30b8\u3092\u66f4\u65b0");
+assert.equal(outcomeModel.summary.outcome, "page_updated");
+assert.notEqual(outcomeModel.summary.action, outcomeModel.summary.outcome);
 
 const humanModel = toExecutionInspectorViewModel({ ...execution, actorKind: "human", actorId: "user-1", agentId: null } as CanonicalExecution, [], []);
-assert.equal(humanModel.summary.ai, null);
+assert.equal(humanModel.summary.ai, "\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093");
 assert.equal(humanModel.summary.actor, "\u4eba\uff08user-1\uff09");
 assert.ok(humanModel.summary.actionSentence.startsWith("\u4eba\uff08user-1\uff09"));
 assert.equal(executionActionPresentation("SEND_MESSAGE"), "メッセージを送信");
