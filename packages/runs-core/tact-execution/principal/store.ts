@@ -47,6 +47,38 @@ function toPrincipal(row: PrincipalRow): Principal {
   };
 }
 
+// Pre-commit review hardening: a raw DB row crossing this trust boundary —
+// whether from this function's own fresh INSERT or from the 23505
+// read-back below — is never trusted by shape/cast alone
+// (`row.principal_kind as PrincipalKind` is not, by itself, validation).
+// This is the one shared guard both paths funnel through: it requires the
+// row to actually BE the external_subject principal this call asked for —
+// same namespace, same externalSubjectId, principal_kind strictly
+// 'external_subject', local_auth_user_id strictly null — before this
+// module will ever hand it back as a resolved/created Principal. A row
+// that fails this (e.g. a 'local_runs_user' row, or any row with a
+// non-null local_auth_user_id, somehow sharing the requested natural key)
+// is never aliased, mutated, or reinterpreted into an external_subject —
+// the caller gets `unavailable` instead.
+function toExternalSubjectPrincipal(
+  row: PrincipalRow,
+  expectedNamespace: string,
+  expectedExternalSubjectId: string
+): Principal | null {
+
+  if (
+    row.namespace !== expectedNamespace ||
+    row.external_subject_id !== expectedExternalSubjectId ||
+    row.principal_kind !== "external_subject" ||
+    row.local_auth_user_id !== null
+  ) {
+    return null;
+  }
+
+  return toPrincipal(row);
+
+}
+
 export interface PrincipalStoreDeps {
   getClient: typeof getServiceRoleClient;
 }
@@ -115,7 +147,14 @@ export async function resolveOrCreateExternalPrincipal(
     .single();
 
   if (!error && data) {
-    return { status: "created", principal: toPrincipal(data as PrincipalRow) };
+    // Cheap re-validation of our own fresh insert through the same guard
+    // as the 23505 path below, rather than a second, divergent trust path
+    // (pre-commit review requirement) — a row that fails it here means
+    // the DB returned something other than what was just written, and
+    // this never surfaces as a fabricated "created" Principal.
+    const principal = toExternalSubjectPrincipal(data as PrincipalRow, namespace, externalSubjectId);
+    if (!principal) return { status: "unavailable" };
+    return { status: "created", principal };
   }
 
   // unique(namespace, external_subject_id) race: another concurrent
@@ -132,7 +171,18 @@ export async function resolveOrCreateExternalPrincipal(
       .maybeSingle();
 
     if (existing.data) {
-      return { status: "resolved", principal: toPrincipal(existing.data as PrincipalRow) };
+      // Defense-in-depth (pre-commit review requirement): the row that
+      // won the race is explicitly re-validated as a coherent
+      // external_subject principal for THIS (namespace, externalSubjectId)
+      // before it is ever returned as "resolved" — never aliased,
+      // mutated, or reinterpreted if it turns out to be incompatible
+      // (e.g. a 'local_runs_user' row, or one with a non-null
+      // local_auth_user_id, somehow sharing this natural key). An
+      // incompatible winner fails closed as "unavailable", never
+      // "resolved".
+      const principal = toExternalSubjectPrincipal(existing.data as PrincipalRow, namespace, externalSubjectId);
+      if (!principal) return { status: "unavailable" };
+      return { status: "resolved", principal };
     }
 
     return { status: "unavailable" };

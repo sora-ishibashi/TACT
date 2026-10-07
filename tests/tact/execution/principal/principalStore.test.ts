@@ -89,9 +89,67 @@ export async function run(): Promise<{ pass: number; fail: number }> {
     ));
   }
 
+  // ---- [negative] 23505 winner is an incompatible local_runs_user row: fail closed, never "resolved" ----
+  {
+    // Constructed to be unreachable in practice (a local_runs_user row's
+    // own CHECK constraint pins its namespace to 'runs-local-auth' and its
+    // external_subject_id to its own id, so it could never actually share
+    // a natural key with an external-subject request) — this test proves
+    // the application-level guard itself, independent of whether the DB
+    // schema also happens to prevent the scenario.
+    const incompatibleRow = principalRowFixture({
+      id: "principal-should-never-be-returned",
+      principal_kind: "local_runs_user",
+      local_auth_user_id: "principal-should-never-be-returned",
+    });
+    const client = makeSequentialFakeClient([
+      { data: null, error: { code: "23505", message: "duplicate key" } },
+      { data: incompatibleRow, error: null },
+    ]);
+    const deps: PrincipalStoreDeps = { getClient: () => client };
+
+    const outcome = await resolveOrCreateExternalPrincipal("yolna-root-staging", "yolna-user-42", deps);
+
+    results.push(check("[negative] incompatible local_runs_user winner: never status=resolved", outcome.status !== "resolved"));
+    results.push(check("[negative] incompatible local_runs_user winner: fails closed as unavailable", outcome.status === "unavailable"));
+  }
+
+  // ---- [negative] 23505 winner has a non-null local_auth_user_id despite claiming external_subject: fail closed ----
+  {
+    const incompatibleRow = principalRowFixture({
+      id: "principal-should-never-be-returned-2",
+      principal_kind: "external_subject",
+      local_auth_user_id: "some-auth-user-id",
+    });
+    const client = makeSequentialFakeClient([
+      { data: null, error: { code: "23505", message: "duplicate key" } },
+      { data: incompatibleRow, error: null },
+    ]);
+    const deps: PrincipalStoreDeps = { getClient: () => client };
+
+    const outcome = await resolveOrCreateExternalPrincipal("yolna-root-staging", "yolna-user-42", deps);
+
+    results.push(check("[negative] incompatible non-null local_auth_user_id winner: never status=resolved", outcome.status !== "resolved"));
+    results.push(check("[negative] incompatible non-null local_auth_user_id winner: fails closed as unavailable", outcome.status === "unavailable"));
+  }
+
+  // ---- [negative] fresh insert returning a mismatched row is also rejected, not just the 23505 path ----
+  {
+    const mismatchedRow = principalRowFixture({
+      id: "principal-mismatched-fresh-insert",
+      namespace: "a-different-namespace-than-requested",
+    });
+    const deps: PrincipalStoreDeps = { getClient: () => makeSequentialFakeClient([{ data: mismatchedRow, error: null }]) };
+
+    const outcome = await resolveOrCreateExternalPrincipal("yolna-root-staging", "yolna-user-42", deps);
+
+    results.push(check("[negative] mismatched fresh-insert row: never status=created", outcome.status !== "created"));
+    results.push(check("[negative] mismatched fresh-insert row: fails closed as unavailable", outcome.status === "unavailable"));
+  }
+
   // ---- repeat resolve is idempotent at the natural-key level: two calls, same principal.id ----
   {
-    const row = principalRowFixture({ id: "principal-stable" });
+    const row = principalRowFixture({ id: "principal-stable", external_subject_id: "yolna-user-stable" });
     const firstDeps: PrincipalStoreDeps = { getClient: () => makeSequentialFakeClient([{ data: row, error: null }]) };
     const secondDeps: PrincipalStoreDeps = {
       getClient: () => makeSequentialFakeClient([

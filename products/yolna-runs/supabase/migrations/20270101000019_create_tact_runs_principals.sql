@@ -39,7 +39,7 @@
 -- Yolna deployment's registered governance callerId), never a rotatable
 -- credential/keyId and never a per-request value. 'runs-local-auth' is
 -- RESERVED for principals backed by a genuine Runs Supabase Auth login
--- (see step 2) — an external governance caller can never resolve into
+-- (see steps 3/4) — an external governance caller can never resolve into
 -- that namespace (enforced both by the CHECK constraint below and, as a
 -- second independent layer, by packages/runs-core/tact-execution/
 -- principal/store.ts's resolveOrCreateExternalPrincipal(), which always
@@ -133,26 +133,124 @@ create unique index tact_runs_principals_local_auth_user_id_key
 alter table public.tact_runs_principals enable row level security;
 
 -- ---------------------------------------------------------------------
--- 3. Backfill — one principal per existing Runs-local auth user
+-- 3. Future auth.users creation becomes Principal-safe (pre-commit
+--    review fix — the migration-time backfill in step 4 below only
+--    covers auth.users rows that exist AT MIGRATION TIME; Standalone
+--    Runs has a real signup path — products/yolna-runs/components/auth/
+--    AuthProvider.tsx's signUp(), supabase.auth.signUp() — and any
+--    future auth-user-creation path (admin-created users, a future
+--    Magic Link/OAuth flow) creates auth.users rows this migration can
+--    never see. Without this trigger, a user created the moment AFTER
+--    this migration commits would have no tact_runs_principals row,
+--    and their first write into any of the six tables below would fail
+--    the new FK in step 6 — a DB-owned invariant must cover every
+--    future auth.users insert, not just a one-time snapshot, and not
+--    only the one known UI entry point (AuthProvider.tsx is not and
+--    must not become the enforcement boundary for this invariant).
+-- ---------------------------------------------------------------------
+--
+-- Installed BEFORE the backfill (step 4) and BEFORE the FK retarget
+-- (step 6), inside this same migration transaction, so no auth.users
+-- row — existing or created after this point — can ever end up without
+-- a matching principal once this migration commits.
+--
+-- security definer + fixed search_path (same convention as this schema's
+-- existing internal primitives — see 20270101000004's
+-- apply_execution_work_correlation/reclassify_execution_work): every
+-- referenced relation is fully qualified, there is no dynamic SQL, and
+-- EXECUTE is revoked from public/anon/authenticated below (defense in
+-- depth — Postgres already refuses to let any role invoke a trigger
+-- function directly outside trigger-firing context, since it returns
+-- the pseudo-type `trigger`; this closes the privilege on the function
+-- object itself rather than relying on that alone).
+create function public.tact_runs_principals_bootstrap_local_auth_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_existing public.tact_runs_principals;
+begin
+
+  -- NEW.id is exactly and only the new principal's id — never a fresh
+  -- gen_random_uuid(), never caller-influenced (this function reads no
+  -- argument, only the auth.users row Postgres itself just inserted).
+  -- principal_kind is hardcoded 'local_runs_user'; this trigger can
+  -- never create an external_subject row. ON CONFLICT targets the
+  -- primary key only — it never touches the (namespace,
+  -- external_subject_id) unique constraint, so it can only ever no-op
+  -- against a PRE-EXISTING row at this exact id, never silently adopt
+  -- or merge into an unrelated principal.
+  insert into public.tact_runs_principals (id, namespace, external_subject_id, local_auth_user_id, principal_kind)
+  values (new.id, 'runs-local-auth', new.id::text, new.id, 'local_runs_user')
+  on conflict (id) do nothing;
+
+  select * into v_existing from public.tact_runs_principals where id = new.id;
+
+  -- Fail closed on an impossible id/natural-key conflict (pre-commit
+  -- review requirement): the only way v_existing can fail this shape
+  -- check is a pre-existing row at this exact uuid that is NOT the row
+  -- this trigger itself just ensured — e.g. an external_subject
+  -- principal whose DB-generated id happens to collide with this new
+  -- auth.users.id (astronomically unlikely, never silently accepted),
+  -- or a local_runs_user row already linked to a DIFFERENT auth user at
+  -- this id (should be structurally impossible given auth.users.id is
+  -- itself a primary key). Raising here aborts the triggering
+  -- auth.users insert entirely — this trigger never overwrites, never
+  -- relinks, and never reinterprets an incompatible existing row.
+  if v_existing.namespace is distinct from 'runs-local-auth'
+     or v_existing.external_subject_id is distinct from new.id::text
+     or v_existing.principal_kind is distinct from 'local_runs_user'
+     or v_existing.local_auth_user_id is distinct from new.id
+  then
+    raise exception
+      'tact_runs_principals bootstrap: auth.users.id % already maps to an incompatible principal (namespace=%, principal_kind=%, local_auth_user_id=%)',
+      new.id, v_existing.namespace, v_existing.principal_kind, v_existing.local_auth_user_id;
+  end if;
+
+  return new;
+
+end;
+$$;
+
+revoke execute on function public.tact_runs_principals_bootstrap_local_auth_user() from public;
+revoke execute on function public.tact_runs_principals_bootstrap_local_auth_user() from anon;
+revoke execute on function public.tact_runs_principals_bootstrap_local_auth_user() from authenticated;
+
+drop trigger if exists trg_tact_runs_principals_bootstrap_local_auth_user on auth.users;
+create trigger trg_tact_runs_principals_bootstrap_local_auth_user
+  after insert on auth.users
+  for each row
+  execute function public.tact_runs_principals_bootstrap_local_auth_user();
+
+-- ---------------------------------------------------------------------
+-- 4. Backfill — one principal per existing Runs-local auth user
 -- ---------------------------------------------------------------------
 --
 -- id is explicitly pinned to auth.users.id (not left to the column
 -- default) so principal.id = auth.users.id holds for every existing
 -- local row — the invariant every existing `auth.uid() = user_id` RLS
 -- policy on the six Phase-1 tables below depends on continuing to work
--- unchanged after the FK retarget in step 4.
+-- unchanged after the FK retarget in step 7. ON CONFLICT (id) DO NOTHING
+-- makes this safe to run after step 3's trigger is already installed:
+-- within this migration's own transaction no other session's insert is
+-- visible here regardless, but this keeps the statement correct and
+-- idempotent on its own terms rather than depending on that fact.
 insert into public.tact_runs_principals (id, namespace, external_subject_id, local_auth_user_id, principal_kind)
 select id, 'runs-local-auth', id::text, id, 'local_runs_user'
-from auth.users;
+from auth.users
+on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------
--- 4. Fail-fast backfill verification (before any FK is touched)
+-- 5. Fail-fast backfill verification (before any FK is touched)
 -- ---------------------------------------------------------------------
 --
 -- Every user_id value already present on the six Phase-1 tables was
 -- already guaranteed to exist in auth.users by the FK being replaced
--- below, and step 3 just created exactly one principal per auth.users
--- row with id = auth.users.id — so this should never actually fire. It
+-- below, and step 4 (helped by step 3's trigger for anything created
+-- since) ensures exactly one principal per auth.users row with
+-- id = auth.users.id — so this should never actually fire. It
 -- exists as a hard, named stop rather than letting a missed edge case
 -- surface later as a confusing ALTER TABLE failure.
 do $$
@@ -186,7 +284,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
--- 5. FK retarget — exactly the six Phase-1 columns, all RESTRICT
+-- 6. FK retarget — exactly the six Phase-1 columns, all RESTRICT
 -- ---------------------------------------------------------------------
 --
 -- RESTRICT, not CASCADE (SOR-260 Human Owner decision 2, uniform across
@@ -241,13 +339,14 @@ alter table public.tact_governance_approval_requests
     foreign key (user_id) references public.tact_runs_principals (id) on delete restrict;
 
 -- ---------------------------------------------------------------------
--- 6. RLS on the six retargeted tables: unchanged, deliberately
+-- 7. RLS on the six retargeted tables: unchanged, deliberately
 -- ---------------------------------------------------------------------
 --
 -- Every existing `auth.uid() = user_id` SELECT-own policy on these six
 -- tables continues to hold for Runs-local principals without editing a
--- single policy: step 3 pinned principal.id = auth.users.id, so the
--- stored user_id value these policies compare against auth.uid() never
+-- single policy: steps 3/4 pin principal.id = auth.users.id (for future
+-- and existing rows respectively), so the stored user_id value these
+-- policies compare against auth.uid() never
 -- changes — only which table validates that value via FK changes. No
 -- policy on tact_canonical_executions, tact_execution_permission_rules,
 -- tact_governance_invocations, tact_governance_decisions,
