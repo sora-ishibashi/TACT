@@ -57,7 +57,7 @@ export default function AttentionList({
   if (items.length === 0) {
 
     return (
-      <p className="text-[13px] leading-[18px] text-[#626161]">
+      <p className="text-sm leading-[18px] text-runs-text-secondary">
         現在、確認が必要なExecutionはありません。
       </p>
     );
@@ -72,7 +72,7 @@ export default function AttentionList({
 
         <li
           key={item.attentionId}
-          className="rounded-xl border border-[#D9D9D9] bg-white px-4 py-3"
+          className="rounded-xl border border-runs-border bg-runs-surface px-4 py-3"
         >
 
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -80,7 +80,7 @@ export default function AttentionList({
             <div className="flex flex-wrap items-center gap-2">
               <AttentionReasonBadge reason={item.attentionReason} />
               <AttentionStatusBadge status={item.status} />
-              <span className="text-[12px] text-[#626161]">{formatTimestamp(item.createdAt)}</span>
+              <span className="text-xs text-runs-text-secondary">{formatTimestamp(item.createdAt)}</span>
             </div>
 
             {item.workId ? (
@@ -91,39 +91,39 @@ export default function AttentionList({
                 onSelectWork={onSelectWork}
               />
             ) : (
-              <span className="text-[10px] font-medium text-[#8A8A8A]">{japaneseProjection("UNASSIGNED")}</span>
+              <span className="text-xs font-medium text-runs-muted">{japaneseProjection("UNASSIGNED")}</span>
             )}
 
           </div>
 
-          <p className="mt-2 text-[13px] leading-[18px] text-[#112278]">
+          <p className="mt-2 text-sm leading-[18px] text-runs-interactive-hover">
             {item.attentionReasonExplanation}
           </p>
 
-          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[13px] leading-[18px] text-[#112278] sm:grid-cols-4">
+          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm leading-[18px] text-runs-interactive-hover sm:grid-cols-4">
 
             <div>
-              <dt className="text-[10px] tracking-wide text-[#8A8A8A]">依頼元</dt>
+              <dt className="text-xs tracking-wide text-runs-muted">依頼元</dt>
               <dd>{item.principalLabel}</dd>
             </div>
 
             <div>
-              <dt className="text-[10px] tracking-wide text-[#8A8A8A]">AI</dt>
+              <dt className="text-xs tracking-wide text-runs-muted">AI</dt>
               <dd>{item.agentLabel}</dd>
             </div>
 
             <div>
-              <dt className="text-[10px] uppercase tracking-wide text-[#8A8A8A]">SaaS</dt>
+              <dt className="text-xs uppercase tracking-wide text-runs-muted">SaaS</dt>
               <dd>
                 {item.targetSystem.label}
                 {item.targetSystem.subLabel && (
-                  <span className="ml-1 text-[10px] text-[#8A8A8A]">{item.targetSystem.subLabel}</span>
+                  <span className="ml-1 text-xs text-runs-muted">{item.targetSystem.subLabel}</span>
                 )}
               </dd>
             </div>
 
             <div>
-              <dt className="text-[10px] uppercase tracking-wide text-[#8A8A8A]">Action</dt>
+              <dt className="text-xs uppercase tracking-wide text-runs-muted">Action</dt>
               <dd className="font-medium">{item.action}</dd>
             </div>
 
@@ -135,7 +135,7 @@ export default function AttentionList({
               <PermissionBadge result={item.permissionEvaluation} />
               <ResultBadge status={item.executionStatus} />
               <span
-                className="text-[10px] text-[#8A8A8A]"
+                className="text-xs text-runs-muted"
                 title={item.executionId}
               >
                 実行 {formatExecutionId(item.executionId)}
@@ -148,7 +148,7 @@ export default function AttentionList({
                   <button
                     type="button"
                     onClick={() => onTransition(item.attentionId, "acknowledge")}
-                    className="rounded-full border border-[#D9D9D9] px-3 py-1 text-[12px] font-medium text-[#112278] transition duration-150 ease-out hover:border-[#172E95] hover:text-[#172E95]"
+                    className="rounded-full border border-runs-border px-3 py-1 text-xs font-medium text-runs-interactive-hover transition duration-150 ease-out hover:border-runs-interactive hover:text-runs-interactive"
                   >
                     確認済みにする
                   </button>
@@ -156,7 +156,7 @@ export default function AttentionList({
                 <button
                   type="button"
                   onClick={() => onTransition(item.attentionId, "resolve")}
-                  className="rounded-full bg-[#18B5A6] px-3 py-1 text-[12px] font-medium text-white transition duration-150 ease-out hover:bg-[#149488]"
+                  className="rounded-full bg-runs-success px-3 py-1 text-xs font-medium text-white transition duration-150 ease-out hover:bg-runs-success"
                 >
                   解決する
                 </button>

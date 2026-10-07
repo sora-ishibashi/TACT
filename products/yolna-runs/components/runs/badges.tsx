@@ -4,8 +4,7 @@
 // Runs UI — shared badges/labels (SOR-54)
 // =========================
 //
-// Runsの状態体系に合わせ、成功=Mint、warning=#B7791F、hard failure=
-// #C53F4B、Sub text=#626161、Disabled=#8A8A8A背景#F2F2F2を使用。
+// Runsの状態体系に合わせ、成功・警告・失敗・mutedの意味論トーンを使用。
 // 状態は色だけで表現しない——必ず
 // text labelを併記する(絶対条件、Design Rules Section7/13、SOR-54
 // 指示section「Accessibility」)。
