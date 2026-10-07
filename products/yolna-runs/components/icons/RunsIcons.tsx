@@ -58,7 +58,7 @@ export function SettingsIcon(props: RunsIconProps) {
 }
 
 export function CloseIcon(props: RunsIconProps) {
-  return <Icon {...props}><path d="m4 4 8 8M12 4l-8 8" {...strokeProps} /></Icon>;
+  return <Icon {...props}><path d="m4 4 8 8M12 4l-8 8" {...strokeProps} strokeWidth={2} /></Icon>;
 }
 
 export function MenuIcon(props: RunsIconProps) {

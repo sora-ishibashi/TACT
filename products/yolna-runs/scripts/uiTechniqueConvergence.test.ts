@@ -8,6 +8,8 @@ const appShell = readFileSync(resolve(root, "components/shell/AppShell.tsx"), "u
 const peek = readFileSync(resolve(root, "components/shell/DetailPeek.tsx"), "utf8");
 const presentationState = readFileSync(resolve(root, "components/shell/PresentationState.tsx"), "utf8");
 const login = readFileSync(resolve(root, "app/login/page.tsx"), "utf8");
+const inspector = readFileSync(resolve(root, "components/runs/ExecutionInspector.tsx"), "utf8");
+const icons = readFileSync(resolve(root, "components/icons/RunsIcons.tsx"), "utf8");
 
 for (const token of ["base", "surface", "raised", "text", "text-secondary", "muted", "border", "interactive", "selected", "success", "warning", "danger", "info", "focus"]) {
   assert.match(globals, new RegExp(`--runs-${token}:`), `missing semantic token: ${token}`);
@@ -24,6 +26,11 @@ assert.match(login, /<Field label="パスワード"/);
 assert.doesNotMatch(login, /style=\{/);
 
 function sourceFiles(directory: string): string[] {
+  assert.match(inspector, /label="\\u7d50\\u679c"/);
+  assert.match(inspector, /label="\\u30a2\\u30af\\u30b7\\u30e7\\u30f3"/);
+  assert.match(inspector, /label="\\u5bfe\\u8c61"/);
+  assert.match(inspector, /space-y-4/);
+  assert.match(icons, /CloseIcon[\s\S]*strokeWidth=\{2\}/);
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) return sourceFiles(path);

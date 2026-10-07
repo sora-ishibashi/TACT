@@ -10,7 +10,7 @@ export type ExecutionInspectorProps = { executionId: string | null; accessToken:
 
 const unavailable = "確認できません";
 const formatTime = (value: string | null) => value ? new Date(value).toLocaleString() : unavailable;
-const Field = ({ label, value, strong = false }: { label: string; value: string | null; strong?: boolean }) => <div className="min-w-0"><dt className="text-xs text-runs-text-secondary">{label}</dt><dd className={`mt-0.5 break-words text-sm ${strong ? "font-semibold" : ""} text-runs-text`}>{value ?? unavailable}</dd></div>;
+const Field = ({ label, value, strong = false }: { label: string; value: string | null; strong?: boolean }) => <div className="min-w-0"><dt className="text-xs font-medium text-runs-text-secondary">{label}</dt><dd className={`mt-1 break-words text-sm leading-6 ${strong ? "font-semibold" : "font-medium"} text-runs-text`}>{value ?? unavailable}</dd></div>;
 const correlationStatusLabel: Record<CorrelationReviewView["currentStatus"], string> = { CORRELATED: "紐づけ済み", AMBIGUOUS: "判断が必要", UNASSIGNED: "未割り当て" };
 const correlationMethodLabel: Record<string, string> = { Explicit: "明示", "Structural match": "文脈から判断", "Recent activity": "最近の活動から判断", "AI-assisted": "AIの補助", "Manual correction": "人が設定" };
 
@@ -42,6 +42,16 @@ export function ExecutionInspector({ executionId, accessToken, onClose }: Execut
   if (!executionId) return null;
   const currentResponse = response?.executionId === executionId && response.authIdentity === authIdentity ? response : null;
   const model = currentResponse?.model ?? null;
+  if (model && !currentResponse?.state) {
+    const primaryTime = formatTime(model.summary.occurredAt ?? model.summary.observedAt);
+    const primaryWork = model.summary.workId ?? unavailable;
+    return <DetailPeek title={`${model.summary.provider} \u00b7 ${model.summary.action}`} onClose={onClose}><div className="min-w-0 space-y-5">
+      <section className="min-w-0 border-b border-runs-border-subtle pb-5"><dl className="space-y-4"><Field label="\u7d50\u679c" value={model.summary.result} strong/><Field label="\u30a2\u30af\u30b7\u30e7\u30f3" value={`${model.summary.provider} \u00b7 ${model.summary.action}`} strong/><Field label="AI" value={model.summary.ai}/><Field label="Work" value={primaryWork}/><Field label="\u6642\u523b" value={primaryTime}/></dl></section>
+      <section className="min-w-0 border-b border-runs-border-subtle pb-5"><dl className="space-y-4"><Field label="\u5bfe\u8c61" value={model.summary.resource}/><Field label="\u4f9d\u983c\u8005" value={model.summary.principal}/>{model.summary.outcome && <Field label="\u7d50\u679c\u306e\u8a73\u7d30" value={model.summary.outcome}/>}</dl></section>
+      <details className="min-w-0 border-b border-runs-border-subtle pb-5"><summary className="cursor-pointer text-xs font-semibold text-runs-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-runs-focus">\u6a29\u9650\u30fb\u76e3\u67fb\u60c5\u5831</summary><div className="mt-3 space-y-4"><Field label="\u6a29\u9650\u8a55\u4fa1" value={model.permission.evaluation}/><Field label="\u8a55\u4fa1\u7406\u7531" value={model.permission.reasonCode}/><Field label="\u4e0b\u6d41\u6a29\u9650" value={model.permission.downstream.length === 0 ? unavailable : model.permission.downstream.map((item) => `${item.state} (${item.authority})`).join(" / ")}/><Field label="\u9069\u7528\u30eb\u30fc\u30eb" value={model.permission.decisions.some((decision) => decision.ruleId) ? model.permission.decisions.filter((decision) => decision.ruleId).map((decision) => `${decision.ruleId} / revision ${decision.revision ?? "?"}`).join(" / ") : unavailable}/></div></details>
+      <details className="min-w-0"><summary className="cursor-pointer text-xs font-semibold text-runs-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-runs-focus">\u6280\u8853\u30c7\u30a3\u30c6\u30fc\u30eb</summary><dl className="mt-3 grid gap-4 sm:grid-cols-2"><Field label="executionId" value={model.executionId}/><Field label="invocationId" value={model.technical.invocationId}/><Field label="traceId" value={model.technical.traceId}/><Field label="spanId" value={model.technical.spanId}/><Field label="raw observation reference" value={model.technical.rawObservationReference}/></dl></details>
+    </div></DetailPeek>;
+  }
   const correlation = currentResponse?.correlation ?? null;
   const state = !accessToken ? "unavailable" : currentResponse ? currentResponse.state : "loading";
   const workTitle = correlation?.currentWorkTitle ?? (model?.summary.workId ? "Work名を確認できません" : "未割り当て");
