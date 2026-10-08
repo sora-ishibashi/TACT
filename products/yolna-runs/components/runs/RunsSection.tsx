@@ -45,13 +45,13 @@ import {
   type WorkHeaderView,
   type WorkTimelineItemView,
 } from "@tact/runs-core/tact-runs-view";
-import type { CaptureGap, ObservationSurface } from "@tact/runs-core/tact-execution";
 import { attentionReasonJapanese } from "@tact/runs-core/tact-runs-view/attentionInbox";
 import type { PermissionScopeView } from "@tact/runs-core/tact-runs-view/permissionManagement";
 import type {
   AgentManagementDetailView,
   AgentManagementItemView,
 } from "@tact/runs-core/tact-runs-view/agentManagement";
+import type { CaptureGap, ObservationSurface } from "@tact/runs-core/tact-execution";
 import {
   buildCoverageServiceDetails,
   type ConnectionReadState,
@@ -66,6 +66,8 @@ export default function RunsSection() {
   const { user, getAccessToken, signOut } = useAuth();
   const { section, setSection } = useRunsShell();
   const activityFilterButtonRef = useRef<HTMLButtonElement>(null);
+  const previousSectionRef = useRef(section);
+  const preserveSelectionRef = useRef(false);
   const [activityFilterOpen, setActivityFilterOpen] = useState(false);
 
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
@@ -393,12 +395,22 @@ export default function RunsSection() {
   }, [user]);
 
   useEffect(() => {
-    // A detail surface belongs to the section that opened it. Selection and
-    // filter state remain intact, but overlays never cross a primary-nav boundary.
+    const changedPrimarySection = previousSectionRef.current !== section;
+    previousSectionRef.current = section;
     queueMicrotask(() => {
       setInspectedExecutionId(null);
       setReviewingExecutionId(null);
       setManagementDetailPeek(null);
+      if (changedPrimarySection && !preserveSelectionRef.current) {
+        setSelectedWorkId(null);
+        setWorkHeader(null);
+        setWorkItems([]);
+        setWorkError(null);
+        setSelectedAgentId(null);
+        setSelectedPermissionScopeKey(null);
+        setSelectedSurfaceId(null);
+      }
+      preserveSelectionRef.current = false;
     });
   }, [section]);
 
@@ -410,6 +422,7 @@ export default function RunsSection() {
   }, [managementSection]);
 
   const handleSelectWork = useCallback((workId: string) => {
+    preserveSelectionRef.current = true;
     setSelectedWorkId(workId);
     setSection("work");
     loadWork(workId);
@@ -564,7 +577,7 @@ export default function RunsSection() {
       {/* Keeps all list variants shrinkable within the main scroll region. */}
       <div className={`${section === "attention" || section === "activity" ? "mt-4" : ""} min-w-0`}>
 
-        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} surfaces={coverage.surfaces} gaps={coverage.gaps} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} /> : section === "work" ? (
+        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} activity={activityItems} activityState={activityLoading ? "loading" : activityError} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} onOpenActivity={(status) => { setActivityFilters(status ? { executionStatus: status } : {}); setSection("activity"); }} onSelectExecution={(executionId) => { preserveSelectionRef.current = true; setSection("activity"); setInspectedExecutionId(executionId); }} /> : section === "work" ? (
           !selectedWorkId ? <p className="text-sm text-runs-text-secondary">左の一覧からWorkを選択してください。</p> : workLoading ? <PresentationState kind="loading" /> : workError ? (workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />) : workHeader ? <WorkDetailView work={workHeader} items={workItems} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={handleSelectExecution} /> : <PresentationState kind="empty">Workが見つかりません。</PresentationState>
         ) : section === "management" ? (
           managementSection === "agent" ? <AgentManagementView items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onOpenDetails={() => setManagementDetailPeek("agent")} onSelectWork={handleSelectWork} onSelectExecution={handleSelectExecution} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setManagementSection("permission"); }} onOpenAttention={() => setSection("attention")} />

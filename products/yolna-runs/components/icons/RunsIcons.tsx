@@ -61,8 +61,8 @@ export function ManagementIcon(props: RunsIconProps) {
   return <Icon {...props}><rect x="2" y="2" width="5" height="5" rx="1" {...strokeProps} /><rect x="9" y="2" width="5" height="5" rx="1" {...strokeProps} /><rect x="2" y="9" width="5" height="5" rx="1" {...strokeProps} /><rect x="9" y="9" width="5" height="5" rx="1" {...strokeProps} /></Icon>;
 }
 
-export function SettingsIcon(props: RunsIconProps) {
-  return <Icon {...props}><path d="M6.1 2.3h3.8l.5 1.4 1.4.8 1.5-.2 1.9 3.4-1 1.1v1.6l1 1.1-1.9 3.4-1.5-.2-1.4.8-.5 1.4H6.1l-.5-1.4-1.4-.8-1.5.2-1.9-3.4 1-1.1V8.8l-1-1.1 1.9-3.4 1.5.2 1.4-.8.5-1.4Z" {...strokeProps} /><circle cx="8" cy="8" r="2" {...strokeProps} /></Icon>;
+export function CogIcon(props: RunsIconProps) {
+  return <Icon {...props}><path d="M6.25 2.1h3.5l.43 1.35 1.16.67 1.35-.33 1.7 2.94-.96 1.04v1.46l.96 1.04-1.7 2.94-1.35-.33-1.16.67-.43 1.35h-3.5l-.43-1.35-1.16-.67-1.35.33-1.7-2.94.96-1.04V7.77l-.96-1.04 1.7-2.94 1.35.33 1.16-.67.43-1.35Z" {...strokeProps} /><circle cx="8" cy="8" r="2.1" {...strokeProps} /></Icon>;
 }
 
 export function FilterIcon(props: RunsIconProps) {

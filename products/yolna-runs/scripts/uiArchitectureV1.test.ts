@@ -17,6 +17,7 @@ const home = read("components/runs/HomeView.tsx");
 const connectionObservation = read("components/runs/ConnectionObservationView.tsx");
 const agentManagement = read("components/runs/AgentManagementView.tsx");
 const filterSheet = read("components/runs/ActivityFilterSheet.tsx");
+const detailPeek = read("components/shell/DetailPeek.tsx");
 
 for (const destination of [
   '{ id: "home", label: "ホーム"',
@@ -31,7 +32,7 @@ assert.doesNotMatch(shell, /label: "(?:AI|権限|接続|観測|分析)"/);
 assert.match(shell, /min-\[1200px\]:static/);
 assert.match(shell, /fixed inset-0 z-40/);
 assert.match(shell, /focus-visible:ring-2/);
-assert.match(shell, /ShellLayoutMode = "wide" \| "compact" \| "narrow"/);
+assert.match(shell, /ShellLayoutMode = "wide" \| "medium" \| "narrow"/);
 assert.match(shell, /ShellOverlay = "none" \| "primary" \| "secondary" \| "peek"/);
 assert.match(shell, /setOverlay\(next\)/);
 assert.match(shell, /overlay === "primary"/);
@@ -42,9 +43,10 @@ for (const subsection of ["agent", "permission", "connection", "observation"]) {
 assert.match(management, /title="管理"/);
 assert.match(secondary, /-translate-x-full/);
 assert.doesNotMatch(shellContainers, /lg:static/);
-assert.match(secondary, /min-\[1200px\]:static/);
-assert.match(secondary, /persistentWide \|\| overlay === "secondary"/);
+assert.match(secondary, /min-\[768px\]:static/);
+assert.match(secondary, /persistentDesktop \|\| overlay === "secondary"/);
 assert.match(secondary, /openOverlay\("secondary"/);
+assert.match(secondary, /aria-label=\{`\$\{title\}の一覧を開く`\}/);
 
 assert.match(runsSection, /section === "management" && <ManagementSidebar/);
 assert.match(runsSection, /mode=\{managementSection\}/);
@@ -65,9 +67,20 @@ assert.match(attention, /attentionPrimaryAction\(item\)/);
 assert.match(attention, /実行は完了しています。内容を確認してください。/);
 assert.doesNotMatch(attention, /attentionReasonJapaneseExplanation/);
 assert.match(icons, /CloseIcon[\s\S]*strokeWidth=\{2\}/);
-assert.match(icons, /SettingsIcon[\s\S]*M6\.1 2\.3h3\.8/);
+assert.match(shell, /CogIcon/);
+assert.match(icons, /CogIcon[\s\S]*circle cx="8" cy="8" r="2\.1"/);
+assert.doesNotMatch(shell, /SettingsIcon/);
 assert.match(icons, /FilterIcon/);
 assert.match(home, /<h1 className="sr-only">ホーム<\/h1>/);
+assert.match(home, /lg:grid-cols-\[minmax\(0,1\.12fr\)_minmax\(0,\.88fr\)\]/);
+assert.match(home, /最近の実行/);
+assert.doesNotMatch(home, /CaptureGap|ObservationSurface|観測カバレッジ/);
+assert.match(home, /text-runs-warning">\{attention\.length\}/);
+assert.match(runsSection, /setSelectedWorkId\(null\)/);
+assert.match(runsSection, /preserveSelectionRef/);
+assert.match(detailPeek, /role=\{narrow \? "dialog" : "complementary"\}/);
+assert.match(detailPeek, /aria-modal=\{narrow \|\| undefined\}/);
+assert.doesNotMatch(detailPeek, /md:block/);
 assert.doesNotMatch(runsSection, /section === "home" \? "ホーム"/);
 assert.match(runsSection, /aria-label="フィルタ"/);
 assert.match(runsSection, /<FilterIcon \/>/);
