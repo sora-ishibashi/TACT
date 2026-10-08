@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { workLabelPresentation } from "../components/runs/ExecutionIdentity";
 
 const root = process.cwd();
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
@@ -50,12 +51,14 @@ assert.match(attention, /attentionPrimaryAction\(item\)/);
 assert.doesNotMatch(attention, /attentionReasonJapaneseExplanation/);
 assert.match(attentionSummary, /attentionReviewPresentation\(item\)/);
 assert.match(attentionSummary, /<ExecutionIdentity/);
-assert.match(attentionSummary, /Work未割り当て/);
+assert.match(attentionSummary, /workLabel=\{item\.workTitle\}/);
 assert.match(attentionSummary, /review\.label/);
 assert.doesNotMatch(attentionSummary, /agentLabel|principalLabel/);
 assert.match(attentionSummary, /variant === "expanded"/);
 assert.match(executionIdentity, /対象：未観測/);
 assert.match(executionIdentity, /Work未割り当て/);
+assert.equal(workLabelPresentation(null), "Work未割り当て");
+assert.equal(workLabelPresentation("関連付け済みWork"), "関連付け済みWork");
 assert.match(executionIdentity, /attention\.classification/);
 assert.doesNotMatch(executionIdentity, /post_execution/);
 assert.match(inspector, /model\.summary\.resource \?\? "未観測"/);

@@ -21,10 +21,14 @@ type ExecutionIdentityProps = {
   trailing?: ReactNode;
 };
 
+export function workLabelPresentation(workLabel?: string | null): string {
+  return workLabel ?? "Work未割り当て";
+}
+
 /** Shared operational-row grammar: identity, source, state, and context. */
 export function ExecutionIdentity({ provider, providerDetail, action, objectLabel, status, workLabel, time, attention, trailing }: ExecutionIdentityProps) {
   const object = objectLabel ?? "対象：未観測";
-  const work = workLabel ?? "Work未割り当て";
+  const work = workLabelPresentation(workLabel);
   return <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">
     <div className="min-w-0">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
