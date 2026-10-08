@@ -528,10 +528,6 @@ export default function RunsSection() {
     () => filterActivityItems(activityItems, activityFilters),
     [activityItems, activityFilters]
   );
-  const attentionExecutionIds = useMemo(
-    () => new Set(attentionItems.map((item) => item.executionId)),
-    [attentionItems]
-  );
   const activityStatusSummary = useMemo(() => summarizeActivityStatuses(activityItems), [activityItems]);
   const attentionCategories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -598,7 +594,7 @@ export default function RunsSection() {
               {activityItems.length > 0 && filteredActivityItems.length === 0 ? (
                 <PresentationState kind="empty" />
               ) : (
-                <ActivityExplorer items={filteredActivityItems} attentionExecutionIds={attentionExecutionIds} selectedExecutionId={inspectedExecutionId} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={handleSelectExecution} />
+                <ActivityExplorer items={filteredActivityItems} attentionItems={attentionItems} selectedExecutionId={inspectedExecutionId} onSelectWork={handleSelectWork} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={handleSelectExecution} />
               )}
             </div>
           )

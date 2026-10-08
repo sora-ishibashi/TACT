@@ -1,11 +1,11 @@
 "use client";
 
-import type { ActivityItemView } from "@tact/runs-core/tact-runs-view";
+import type { ActivityItemView, AttentionCardView } from "@tact/runs-core/tact-runs-view";
 import ActivityTable from "./ActivityTable";
 
 export type ActivityExplorerProps = {
   items: ActivityItemView[];
-  attentionExecutionIds: ReadonlySet<string>;
+  attentionItems: AttentionCardView[];
   selectedExecutionId: string | null;
   onSelectExecution: (executionId: string) => void;
   onSelectWork: (workId: string) => void;

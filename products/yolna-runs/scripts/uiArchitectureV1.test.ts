@@ -51,13 +51,13 @@ assert.doesNotMatch(attention, /attentionReasonJapaneseExplanation/);
 assert.match(attentionSummary, /attentionReviewPresentation\(item\)/);
 assert.match(attentionSummary, /<ExecutionIdentity/);
 assert.match(attentionSummary, /Work未割り当て/);
-assert.match(attentionSummary, /attentionReasonJapanese/);
+assert.match(attentionSummary, /review\.label/);
 assert.doesNotMatch(attentionSummary, /agentLabel|principalLabel/);
 assert.match(attentionSummary, /variant === "expanded"/);
 assert.match(executionIdentity, /対象：未観測/);
 assert.match(executionIdentity, /Work未割り当て/);
-assert.match(executionIdentity, /実行後の確認/);
-assert.match(executionIdentity, /実行前承認は未観測/);
+assert.match(executionIdentity, /attention\.classification/);
+assert.doesNotMatch(executionIdentity, /post_execution/);
 assert.match(inspector, /model\.summary\.resource \?\? "未観測"/);
 
 assert.match(runsSection, /preserveSelectionRef/);

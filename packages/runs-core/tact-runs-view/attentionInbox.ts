@@ -1,40 +1,44 @@
 import type { AttentionCardView } from "./index";
 
-// SOR-184 deliberately does not infer "not executed" from
-// preExecutionVisible. That field describes an observation capability, not the
-// current fact that an action has not happened. A terminal canonical execution
-// status is the only fact this read model can use for a post-execution card.
-export type AttentionDecisionPhase = "post_execution" | "unknown";
+// Attention is an execution-linked, post-observation read model. It is not a
+// GovernanceApprovalRequest: only that separate durable record may show an
+// actual pre-execution approval wait. Execution status is intentionally not
+// an input to this classification.
+export type AttentionPresentationProvenance =
+  | "post_execution_permission_finding"
+  | "downstream_provider_permission_failure"
+  | "unknown_provenance";
 export type AttentionPrimaryAction = "acknowledge" | "resolve" | null;
 
 export type AttentionReviewPresentation = {
-  phase: AttentionDecisionPhase;
+  provenance: AttentionPresentationProvenance;
+  label: string;
   heading: string;
   explanation: string;
-  timestampLabel: "記録日時" | "確認日時";
+  timestampLabel: "検出日時" | "確認日時";
   timestamp: string;
 };
 
-export function attentionDecisionPhase(item: Pick<AttentionCardView, "executionStatus">): AttentionDecisionPhase {
-  return item.executionStatus === "succeeded" || item.executionStatus === "failed" || item.executionStatus === "cancelled"
-    ? "post_execution"
-    : "unknown";
+export function attentionPresentationProvenance(item: Pick<AttentionCardView, "attentionReason">): AttentionPresentationProvenance {
+  switch (item.attentionReason) {
+    case "permission_mismatch":
+    case "approval_required": return "post_execution_permission_finding";
+    case "downstream_permission_conflict": return "downstream_provider_permission_failure";
+    case "permission_unknown": return "unknown_provenance";
+  }
 }
 
-/** An Attention is linked to an execution, never proof of safe preflight approval. */
-export function attentionReviewPresentation(
-  item: Pick<AttentionCardView, "executionStatus" | "createdAt" | "acknowledgedAt">
-): AttentionReviewPresentation {
-  const phase = attentionDecisionPhase(item);
-  return {
-    phase,
-    heading: phase === "post_execution" ? "実行後の人による確認が必要です" : "実行状況を確認できません",
-    explanation: phase === "post_execution"
-      ? "この実行は完了または終了しています。権限評価とは別に、Attention を確認・解決してください。"
-      : "この Attention だけでは実行前か実行後かを判断できません。実行の詳細を確認してください。",
-    timestampLabel: item.acknowledgedAt ? "確認日時" : "記録日時",
-    timestamp: item.acknowledgedAt ?? item.createdAt,
-  };
+export function attentionReviewPresentation(item: Pick<AttentionCardView, "attentionReason" | "createdAt" | "acknowledgedAt">): AttentionReviewPresentation {
+  const provenance = attentionPresentationProvenance(item);
+  const presentation = (() => {
+    switch (item.attentionReason) {
+      case "permission_mismatch": return { label: "事後検出：登録ルールと不一致", explanation: "実行の観測後に、登録ルールとの不一致が検出されました。" };
+      case "approval_required": return { label: "事後検出：承認要件あり", explanation: "実行の観測後に、承認要件があることが検出されました。これは実行前の承認待ちを示すものではありません。" };
+      case "downstream_permission_conflict": return { label: "接続先権限エラー", explanation: "接続先で観測された権限情報に不整合があります。" };
+      case "permission_unknown": return { label: "確認が必要（判定元不明）", explanation: "この Attention の判定元を既存データから確定できません。" };
+    }
+  })();
+  return { provenance, label: presentation.label, heading: presentation.label, explanation: presentation.explanation, timestampLabel: item.acknowledgedAt ? "確認日時" : "検出日時", timestamp: item.acknowledgedAt ?? item.createdAt };
 }
 
 export function attentionReasonJapanese(reason: AttentionCardView["attentionReason"]): string {
@@ -46,64 +50,12 @@ export function attentionReasonJapanese(reason: AttentionCardView["attentionReas
   }
 }
 
-/** Keeps the UI within the lifecycle actions the existing API supports. */
 export function attentionPrimaryAction(item: Pick<AttentionCardView, "status">): AttentionPrimaryAction {
-  switch (item.status) {
-    case "open": return "acknowledge";
-    case "acknowledged": return "resolve";
-    case "resolved": return null;
-  }
+  switch (item.status) { case "open": return "acknowledge"; case "acknowledged": return "resolve"; case "resolved": return null; }
 }
-
-export function attentionPrimaryActionJapanese(action: AttentionPrimaryAction): string | null {
-  if (action === "acknowledge") return "\u78ba\u8a8d\u6e08\u307f\u306b\u3059\u308b";
-  switch (action) {
-    case "resolve": return "解決する";
-    case null: return null;
-  }
-}
-
-export function attentionStatusJapanese(status: AttentionCardView["status"]): string {
-  switch (status) {
-    case "open": return "未確認";
-    case "acknowledged": return "確認済み";
-    case "resolved": return "解決済み";
-  }
-}
-
-export function attentionReasonJapaneseExplanation(reason: AttentionCardView["attentionReason"]): string {
-  switch (reason) {
-    case "approval_required": return "この操作には人による承認が必要と記録されています。";
-    case "permission_mismatch": return "登録ルールの評価と一致しない記録があります。";
-    case "permission_unknown": return "権限の評価結果を確認できません。";
-    case "downstream_permission_conflict": return "接続先の権限情報と整合しない記録があります。";
-  }
-}
-
-export function permissionJapanese(result: AttentionCardView["permissionEvaluation"]): string {
-  switch (result) {
-    case "MATCH": return "登録ルールに一致";
-    case "MISMATCH": return "登録ルールと不一致";
-    case "APPROVAL_REQUIRED": return "承認要件あり";
-    case "UNKNOWN": return "判定できません";
-  }
-}
-
-export function executionResultJapanese(status: AttentionCardView["executionStatus"]): string {
-  switch (status) {
-    case "succeeded": return "完了";
-    case "failed": return "失敗";
-    case "cancelled": return "取り消し";
-    case "running": return "実行中";
-    case "observed": return "観測済み";
-    case "unknown": return "判定できません";
-  }
-}
-
-export function actionJapanese(action: string): string {
-  const labels: Record<string, string> = {
-    CREATE: "作成", CREATE_PAGE: "ページを作成", UPDATE: "更新", UPDATE_PAGE: "ページを更新",
-    DELETE: "削除", DELETE_PAGE: "ページを削除", SEND: "送信", READ: "読み取り",
-  };
-  return labels[action] ?? "操作";
-}
+export function attentionPrimaryActionJapanese(action: AttentionPrimaryAction): string | null { return action === "acknowledge" ? "確認済みにする" : action === "resolve" ? "解決する" : null; }
+export function attentionStatusJapanese(status: AttentionCardView["status"]): string { switch (status) { case "open": return "未確認"; case "acknowledged": return "確認済み"; case "resolved": return "解決済み"; } }
+export function attentionReasonJapaneseExplanation(reason: AttentionCardView["attentionReason"]): string { return attentionReviewPresentation({ attentionReason: reason, createdAt: "", acknowledgedAt: null }).explanation; }
+export function permissionJapanese(result: AttentionCardView["permissionEvaluation"]): string { switch (result) { case "MATCH": return "登録ルールに一致"; case "MISMATCH": return "登録ルールと不一致"; case "APPROVAL_REQUIRED": return "承認要件あり"; case "UNKNOWN": return "判定できません"; } }
+export function executionResultJapanese(status: AttentionCardView["executionStatus"]): string { switch (status) { case "succeeded": return "完了"; case "failed": return "失敗"; case "cancelled": return "取り消し"; case "running": return "実行中"; case "observed": return "観測済み"; case "unknown": return "判定できません"; } }
+export function actionJapanese(action: string): string { const labels: Record<string, string> = { CREATE: "作成", CREATE_PAGE: "ページを作成", UPDATE: "更新", UPDATE_PAGE: "ページを更新", DELETE: "削除", DELETE_PAGE: "ページを削除", SEND: "送信", READ: "読み取り" }; return labels[action] ?? "操作"; }
