@@ -14,6 +14,6 @@ function formatAttentionTime(iso: string): string {
 export function AttentionSummaryRow({ item, variant, selected = false, onSelect }: AttentionSummaryRowProps) {
   const review = attentionReviewPresentation(item);
   return <button type="button" onClick={onSelect} aria-pressed={variant === "expanded" ? selected : undefined} className={`runs-focus block min-h-12 w-full cursor-pointer py-2.5 text-left hover:bg-runs-hover ${selected ? "bg-runs-selected" : ""}`}>
-    <ExecutionIdentity provider={item.targetSystem.label} providerDetail={item.targetSystem.subLabel} action={item.action} status={item.executionStatus} workLabel={item.workTitle} time={formatAttentionTime(item.createdAt)} attention={{ classification: review.label, lifecycle: variant === "expanded" ? attentionStatusJapanese(item.status) : undefined, danger: isAttentionDanger(item.attentionReason) }} trailing={<ChevronRightIcon className="text-runs-text-secondary" />} />
+    <ExecutionIdentity provider={item.targetSystem.label} providerDetail={item.targetSystem.subLabel} action={item.action} status={item.executionStatus} workLabel={item.workTitle} time={formatAttentionTime(item.createdAt)} layout={variant === "expanded" ? "attention" : "compact"} attention={{ classification: review.label, lifecycle: variant === "expanded" ? attentionStatusJapanese(item.status) : undefined, danger: isAttentionDanger(item.attentionReason) }} trailing={<ChevronRightIcon className="text-runs-text-secondary" />} />
   </button>;
 }
