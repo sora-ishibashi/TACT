@@ -87,6 +87,7 @@ export default function RunsSection() {
   // activityItemsへのclient-side filter)。
   const [activityFilters, setActivityFilters] = useState<ActivityItemFilters>({});
   const [attentionCategory, setAttentionCategory] = useState<AttentionCardView["attentionReason"] | null>(null);
+  const [selectedAttentionId, setSelectedAttentionId] = useState<string | null>(null);
   const [selectedSurfaceId, setSelectedSurfaceId] = useState<string | null>(null);
   const [selectedPermissionScopeKey, setSelectedPermissionScopeKey] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -398,8 +399,11 @@ export default function RunsSection() {
     const changedPrimarySection = previousSectionRef.current !== section;
     previousSectionRef.current = section;
     queueMicrotask(() => {
-      setInspectedExecutionId(null);
-      setReviewingExecutionId(null);
+      if (!preserveSelectionRef.current) {
+        setInspectedExecutionId(null);
+        setReviewingExecutionId(null);
+        setSelectedAttentionId(null);
+      }
       setManagementDetailPeek(null);
       if (changedPrimarySection && !preserveSelectionRef.current) {
         setSelectedWorkId(null);
@@ -577,7 +581,7 @@ export default function RunsSection() {
       {/* Keeps all list variants shrinkable within the main scroll region. */}
       <div className={`${section === "attention" || section === "activity" ? "mt-4" : ""} min-w-0`}>
 
-        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} activity={activityItems} activityState={activityLoading ? "loading" : activityError} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} onOpenActivity={(status) => { setActivityFilters(status ? { executionStatus: status } : {}); setSection("activity"); }} onSelectExecution={(executionId) => { preserveSelectionRef.current = true; setSection("activity"); setInspectedExecutionId(executionId); }} /> : section === "work" ? (
+        {section === "home" ? <HomeView attention={attentionItems} attentionState={attentionLoading ? "loading" : attentionError} works={workList} worksState={workListLoading ? "loading" : workListError} activity={activityItems} activityState={activityLoading ? "loading" : activityError} activityStatusSummary={activityStatusSummary} onSelectWork={handleSelectWork} onOpenAttention={() => setSection("attention")} onSelectAttention={(attentionId) => { preserveSelectionRef.current = true; setAttentionCategory(null); setSection("attention"); setSelectedAttentionId(attentionId); }} onOpenActivity={(status) => { setActivityFilters(status ? { executionStatus: status } : {}); setSection("activity"); }} onSelectExecution={(executionId) => { preserveSelectionRef.current = true; setActivityFilters({}); setSection("activity"); setInspectedExecutionId(executionId); }} /> : section === "work" ? (
           !selectedWorkId ? <p className="text-sm text-runs-text-secondary">左の一覧からWorkを選択してください。</p> : workLoading ? <PresentationState kind="loading" /> : workError ? (workError === "not-found" ? <PresentationState kind="empty">Workが見つかりません。</PresentationState> : <PresentationState kind={workError} />) : workHeader ? <WorkDetailView work={workHeader} items={workItems} onReviewCorrelation={setReviewingExecutionId} onSelectExecution={handleSelectExecution} /> : <PresentationState kind="empty">Workが見つかりません。</PresentationState>
         ) : section === "management" ? (
           managementSection === "agent" ? <AgentManagementView items={agentItems} details={agentDetails} state={agentLoading ? "loading" : agentError} selectedAgentId={selectedAgentId} onOpenDetails={() => setManagementDetailPeek("agent")} onSelectWork={handleSelectWork} onSelectExecution={handleSelectExecution} onOpenPermission={(exactScopeKey) => { if (exactScopeKey) setSelectedPermissionScopeKey(exactScopeKey); setManagementSection("permission"); }} onOpenAttention={() => setSection("attention")} />
@@ -606,7 +610,7 @@ export default function RunsSection() {
           ) : attentionError ? (
             <PresentationState kind={attentionError} />
           ) : (
-            filteredAttentionItems.length === 0 ? <PresentationState kind="empty" /> : <AttentionInbox items={filteredAttentionItems} onSelectWork={handleSelectWork} onSelectExecution={handleSelectExecution} onOpenPermissionSettings={() => { setManagementSection("permission"); setSection("management"); }} onTransition={handleAttentionTransition} />
+            filteredAttentionItems.length === 0 ? <PresentationState kind="empty" /> : <AttentionInbox items={filteredAttentionItems} selectedAttentionId={selectedAttentionId} onSelectedAttentionChange={setSelectedAttentionId} onSelectWork={handleSelectWork} onSelectExecution={handleSelectExecution} onOpenPermissionSettings={() => { setManagementSection("permission"); setSection("management"); }} onTransition={handleAttentionTransition} />
           )
 
         ) : <SettingsView email={user.email ?? ""} onSignOut={signOut} />}
