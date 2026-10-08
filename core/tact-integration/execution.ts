@@ -57,6 +57,11 @@ import { toRunExternalRefFields } from "../tact-runtime/types";
 // 3A-1 client, reused as-is; this file never duplicates its HMAC/transport
 // logic.
 import { callRunsGovernancePreflight, callRunsGovernanceComplete, deriveGovernanceInvocationId } from "./runsGovernance";
+// SOR-138 Slice 3A-4: diagnostics-only instrumentation (see
+// governanceDiagnostics.ts's own header comment). Disabled by default
+// (RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED!=="true"); never changes this
+// file's control flow, Preflight contract, revalidation, or Run lifecycle.
+import { emitGovernanceDiagnosticEvent } from "./governanceDiagnostics";
 
 // =========================
 // TACT Integration — Execution Boundary
@@ -203,6 +208,17 @@ export interface ExecuteApprovedIntegrationActionDeps {
   // entrypoint) never reaches this dep.
   runsGovernanceComplete: typeof callRunsGovernanceComplete;
 
+  // SOR-138 Slice 3A-4: DI seam for diagnostics-only event emission (see
+  // governanceDiagnostics.ts's own header comment). A no-op unless
+  // RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED==="true"; tests inject a fake to
+  // assert exact emitted events without relying on console output.
+  // Optional, not required: every pre-existing test file that constructs a
+  // full ExecuteApprovedIntegrationActionDeps literal predates this field
+  // and must keep compiling unchanged — executeReadIntegrationAction()
+  // below falls back to the real (env-gated) emitter when omitted, never
+  // throwing on a missing dep.
+  emitGovernanceDiagnostic?: typeof emitGovernanceDiagnosticEvent;
+
 }
 
 const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
@@ -221,6 +237,7 @@ const defaultDeps: ExecuteApprovedIntegrationActionDeps = {
   attachRunExternalRef: defaultAttachRunExternalRef,
   runsGovernancePreflight: callRunsGovernancePreflight,
   runsGovernanceComplete: callRunsGovernanceComplete,
+  emitGovernanceDiagnostic: emitGovernanceDiagnosticEvent,
 };
 
 // 絶対条件(Phase C2.1a指示、最重要): reconciliation自体が失敗しても、
@@ -1601,6 +1618,32 @@ export async function executeReadIntegrationAction(
 
   const { workId, userId, accessToken, taskId, connectionId, action } = params;
 
+  // SOR-138 Slice 3A-4: local fallback, not `deps.emitGovernanceDiagnostic`
+  // directly — the dep is optional (see its own comment on
+  // ExecuteApprovedIntegrationActionDeps above) so every pre-existing test
+  // deps literal that predates this field keeps compiling and keeps
+  // working unchanged. Falling back to the real emitter is always safe:
+  // it is itself a no-op unless RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED==="true".
+  const rawEmitDiagnostic = deps.emitGovernanceDiagnostic ?? emitGovernanceDiagnosticEvent;
+  // SOR-138 Slice 3A-4 diagnostic-safety fix: the diagnostics-only
+  // contract above ("No existing return value, branch, or timing-sensitive
+  // behavior changes because this module exists") was not actually
+  // enforced — every call site below is synchronous and unguarded, so an
+  // emitter throwing (a DI fake in a future test, console.warn failing,
+  // or a future event-shape bug) would reject this entire async function,
+  // discarding an already-successful `coreOutcome` (Run already created,
+  // provider already called/completed) at the final stage E call site.
+  // Swallow any emitter failure here so a diagnostics-layer exception can
+  // never change the real execution result, an existing error, or
+  // fail-closed behavior.
+  const emitDiagnostic: typeof rawEmitDiagnostic = (event) => {
+    try {
+      rawEmitDiagnostic(event);
+    } catch {
+      // diagnostics-only: never let an emitter failure affect execution.
+    }
+  };
+
   const preconditions = await validateReadExecutionPreconditions(
     { workId, userId, accessToken, taskId, connectionId, action },
     deps
@@ -1648,6 +1691,20 @@ export async function executeReadIntegrationAction(
     operation: action.operation,
   });
 
+  // SOR-138 Slice 3A-4 (diagnostics only — see governanceDiagnostics.ts's
+  // own header comment): stage A, emitted immediately before the one new
+  // network call this slice makes. performance.now() is monotonic and
+  // used ONLY to measure elapsed time below; it is never compared against
+  // any wall-clock value and never feeds any control-flow decision.
+  emitDiagnostic({
+    stage: "preflight_request_started",
+    invocationId,
+    service: action.service,
+    operation: action.operation,
+    actionCategory: "read",
+  });
+  const preflightStartedAt = performance.now();
+
   // 7. The only new network call in this slice. Never carries
   // providerConnectionRef, any credential, or raw provider payload — only
   // the canonical governance metadata below (Section 14/15 of the SOR-138
@@ -1675,6 +1732,20 @@ export async function executeReadIntegrationAction(
     },
   });
 
+  // SOR-138 Slice 3A-4 (diagnostics only): stage B. httpStatus is 200 when
+  // decided (callRunsGovernancePreflight() only ever returns "decided" on
+  // an actual HTTP 200 with a valid shape — see that function's own code);
+  // on "unavailable", httpStatus is whatever was actually observed (may be
+  // absent for a transport-level failure that never reached an HTTP
+  // response at all, e.g. timeout/network_error).
+  emitDiagnostic({
+    stage: "preflight_transport_completed",
+    invocationId,
+    durationMs: Math.round(performance.now() - preflightStartedAt),
+    httpStatus: preflightResult.status === "decided" ? 200 : preflightResult.httpStatus ?? null,
+    transportResult: preflightResult.status === "decided" ? "decided" : preflightResult.reason,
+  });
+
   // 8. Only a validated, authenticated HTTP 200 decided ALLOW may proceed.
   // Everything else — DENY, UNKNOWN, APPROVAL_REQUIRED (approved or not),
   // unconfigured, network error, timeout, non-2xx (including 409), or a
@@ -1684,11 +1755,40 @@ export async function executeReadIntegrationAction(
   // see core/tact-conversation/orchestration.ts's existing invalid_action
   // collapsing).
   if (preflightResult.status !== "decided" || preflightResult.response.verdict !== "ALLOW") {
+    // SOR-138 Slice 3A-4 (diagnostics only): stage C, rejected branch.
+    emitDiagnostic({
+      stage: "root_decision_gate",
+      invocationId,
+      outcome: "rejected",
+      rejectionCategory:
+        preflightResult.status === "decided" ? `verdict_${preflightResult.response.verdict}` : preflightResult.reason,
+      verdict: preflightResult.status === "decided" ? preflightResult.response.verdict : null,
+    });
     return {
       status: "invalid_action",
       reason: "Runs governance preflight did not allow this action",
     };
   }
+
+  // SOR-138 Slice 3A-4 (diagnostics only): stage C, accepted branch.
+  emitDiagnostic({
+    stage: "root_decision_gate",
+    invocationId,
+    outcome: "accepted",
+    rejectionCategory: null,
+    verdict: preflightResult.response.verdict,
+  });
+
+  // SOR-138 Slice 3A-4 (diagnostics only): stage D entered. The mere
+  // presence of this event in an enabled diagnostic environment proves
+  // execution reached this point; its ABSENCE (with stage C "accepted"
+  // present) would localize a future divergence to between those two
+  // lines, with no further code to inspect there.
+  emitDiagnostic({
+    stage: "revalidation_entered",
+    invocationId,
+    plannedAttempt: planned.plan.nextAttempt,
+  });
 
   // 8.5. Re-validate mutable local state across the Preflight network wait
   // — see revalidateGovernedExecutionState()'s own header comment. On any
@@ -1708,8 +1808,46 @@ export async function executeReadIntegrationAction(
   );
 
   if (!revalidation.ok) {
+    // SOR-138 Slice 3A-4 (diagnostics only): stage D resolved, rejected.
+    // revalidation.outcome.status is one of revalidateGovernedExecutionState()'s
+    // own existing IntegrationActionExecutionOutcome statuses (not_found /
+    // work_not_runnable / connection_unavailable / task_not_executable) —
+    // this reads that existing, unchanged value, it does not add a new one.
+    emitDiagnostic({
+      stage: "revalidation_resolved",
+      invocationId,
+      outcome: "rejected",
+      rejectionCategory: revalidation.outcome.status,
+      plannedAttempt: planned.plan.nextAttempt,
+      observedAttempt: null,
+      attemptMatch: null,
+    });
     return revalidation.outcome;
   }
+
+  // SOR-138 Slice 3A-4 (diagnostics only): stage D resolved, passed.
+  // computeNextAttemptNumber() is the same existing pure function
+  // revalidateGovernedExecutionState() itself already used internally to
+  // reach this branch (imported at the top of this file) — recomputing it
+  // here from the same existingRuns it already returned on success is a
+  // read-only diagnostic echo, not a second implementation of that check.
+  const observedAttempt = computeNextAttemptNumber(revalidation.existingRuns);
+  emitDiagnostic({
+    stage: "revalidation_resolved",
+    invocationId,
+    outcome: "passed",
+    rejectionCategory: null,
+    plannedAttempt: planned.plan.nextAttempt,
+    observedAttempt,
+    attemptMatch: observedAttempt === planned.plan.nextAttempt,
+  });
+
+  // SOR-138 Slice 3A-4 (diagnostics only): stage E entered, immediately
+  // before the call that leads to createRun() (prepareRunForExecution()'s
+  // first operation — see that function's own header comment). As with
+  // stage D, this event's absence in an enabled diagnostic environment
+  // would localize a future divergence to this exact call.
+  emitDiagnostic({ stage: "run_creation_entered", invocationId });
 
   // 9-10. ALLOW + state unchanged: claim EXACTLY the planned attempt
   // (reusing `planned.plan`, never re-deriving a new one) and continue the
@@ -1721,7 +1859,14 @@ export async function executeReadIntegrationAction(
   // this same successful Preflight response) into executeIntegrationActionCore(),
   // so Runs Complete (if reached) records against the SAME invocation/
   // decision Preflight just allowed, never a re-derived identity.
-  return executeIntegrationActionCore(
+  //
+  // SOR-138 Slice 3A-4: this call is awaited and its result bound to
+  // `coreOutcome` (instead of `return executeIntegrationActionCore(...)`
+  // directly) ONLY so stage E's resolution can be emitted before
+  // returning — this is not a behavior change. A thrown rejection from
+  // executeIntegrationActionCore() propagates out of this async function
+  // identically either way; no try/catch was added.
+  const coreOutcome = await executeIntegrationActionCore(
     {
       workId,
       userId,
@@ -1739,6 +1884,22 @@ export async function executeReadIntegrationAction(
     },
     deps
   );
+
+  // SOR-138 Slice 3A-4 (diagnostics only): stage E resolved. "completed"
+  // and "failed" both carry a `run` (see IntegrationActionExecutionOutcome's
+  // own type above) — both are only reachable once createRun() actually
+  // returned a Run, so both mean createRun() succeeded regardless of the
+  // provider result. Every other status is only reachable from a branch
+  // that returns before createRun() is ever called.
+  const runWasCreated = coreOutcome.status === "completed" || coreOutcome.status === "failed";
+  emitDiagnostic({
+    stage: "run_creation_resolved",
+    invocationId,
+    outcome: runWasCreated ? "succeeded" : "failed",
+    errorCategory: runWasCreated ? null : coreOutcome.status,
+  });
+
+  return coreOutcome;
 
 }
 
