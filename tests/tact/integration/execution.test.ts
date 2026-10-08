@@ -28,6 +28,10 @@ import {
   executeRuntimeIntegrationRead,
   type ExecuteApprovedIntegrationActionDeps,
 } from "../../../core/tact-integration/execution";
+import {
+  emitGovernanceDiagnosticEvent,
+  type GovernanceDiagnosticEvent,
+} from "../../../core/tact-integration/governanceDiagnostics";
 import type { RuntimeAdapter, RuntimeStartOutcome, RuntimeExecutionRequest } from "../../../core/tact-runtime/types";
 import { mapSlackActionToComposioTool } from "../../../core/tact-integration/providers/composio/mappings/slack";
 import { buildExecutionResultFromToolResult } from "../../../core/tact-integration/providers/composio/adapter";
@@ -214,6 +218,12 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
     // (non-3A-3) test in this file naturally asserts 0 here without needing
     // to know this dep exists at all.
     runsGovernanceCompleteCalls: 0,
+    // SOR-138 Slice 3A-4: records every diagnostics-only event emitted
+    // through the DI seam (never console output — see
+    // governanceDiagnostics.ts's own header comment). Legacy/ungoverned
+    // tests never read this; governed-path diagnostics tests assert on it
+    // directly instead of scraping console.warn.
+    emitGovernanceDiagnosticCalls: [] as GovernanceDiagnosticEvent[],
   };
 
   const deps: ExecuteApprovedIntegrationActionDeps = {
@@ -317,6 +327,16 @@ function makeDeps(overrides: Partial<ExecuteApprovedIntegrationActionDeps> = {})
       calls.runsGovernanceCompleteCalls += 1;
       calls.callOrder.push("runsGovernanceComplete");
       return { status: "completed", result: { status: "linked" } };
+    },
+
+    // SOR-138 Slice 3A-4: harmless default — records the event and nothing
+    // else (no console output in tests, no behavior to assert by default).
+    // Diagnostics-specific tests override this to make assertions on
+    // `calls.emitGovernanceDiagnosticCalls` without needing the real env
+    // flag enabled or console scraped.
+    emitGovernanceDiagnostic: (event) => {
+      calls.emitGovernanceDiagnosticCalls.push(event);
+      calls.callOrder.push(`diagnostic:${event.stage}`);
     },
 
     ...overrides,
@@ -3779,6 +3799,257 @@ export async function run(): Promise<{ pass: number; fail: number }> {
       results.push(check(
         "[SOR-138/same-attempt retry] a retry of the SAME never-claimed attempt (still zero existing Runs) reuses the identical invocationId",
         seenInvocationIds.length === 2 && seenInvocationIds[0] === seenInvocationIds[1]
+      ));
+    }
+
+    // =========================
+    // SOR-138 Slice 3A-4 — diagnostics-only instrumentation (DI seam,
+    // never console output in these tests — see makeDeps()'s default
+    // emitGovernanceDiagnostic fake). Every case below asserts the exact
+    // stage sequence AND that no field carries anything beyond the
+    // hand-typed primitive shapes governanceDiagnostics.ts declares — this
+    // is itself part of the "no secret/raw payload can appear" guarantee,
+    // since JSON.stringify(event) can never contain more than the object
+    // literal this file constructed.
+    // =========================
+
+    function diagnosticStages(calls: { emitGovernanceDiagnosticCalls: GovernanceDiagnosticEvent[] }): string[] {
+      return calls.emitGovernanceDiagnosticCalls.map((event) => event.stage);
+    }
+
+    function diagnosticFieldsAreSafe(calls: { emitGovernanceDiagnosticCalls: GovernanceDiagnosticEvent[] }): boolean {
+      // Every event must serialize to a JSON object whose own keys are a
+      // subset of this closed allowlist — proves no caller ever widened an
+      // event literal with an extra (potentially unsafe) field at a call
+      // site, independent of the type system.
+      const ALLOWED_KEYS = new Set([
+        "stage", "invocationId", "service", "operation", "actionCategory",
+        "durationMs", "httpStatus", "transportResult", "outcome",
+        "rejectionCategory", "verdict", "plannedAttempt", "observedAttempt",
+        "attemptMatch", "errorCategory",
+      ]);
+      return calls.emitGovernanceDiagnosticCalls.every((event) =>
+        Object.keys(event).every((key) => ALLOWED_KEYS.has(key))
+      );
+    }
+
+    // ---- [3A-4/happy-path] valid HTTP 200 ALLOW: full stage sequence ----
+    {
+      const { calls } = await runGoverned(decided("ALLOW"));
+      results.push(check(
+        "[3A-4/happy-path] ALLOW emits the full A->E diagnostic sequence in order",
+        (() => {
+          const stages = diagnosticStages(calls);
+          return (
+            stages.indexOf("preflight_request_started") === 0 &&
+            stages.indexOf("preflight_transport_completed") === 1 &&
+            stages.indexOf("root_decision_gate") === 2 &&
+            stages.indexOf("revalidation_entered") === 3 &&
+            stages.indexOf("revalidation_resolved") === 4 &&
+            stages.indexOf("run_creation_entered") === 5 &&
+            stages.indexOf("run_creation_resolved") === 6 &&
+            stages.length === 7
+          );
+        })()
+      ));
+      const transportEvent = calls.emitGovernanceDiagnosticCalls[1];
+      const gateEvent = calls.emitGovernanceDiagnosticCalls[2];
+      const revalidationEvent = calls.emitGovernanceDiagnosticCalls[4];
+      const runEvent = calls.emitGovernanceDiagnosticCalls[6];
+      results.push(check(
+        "[3A-4/happy-path] stage B reports httpStatus=200/decided, stage C accepted/ALLOW, stage D passed+attemptMatch, stage E succeeded",
+        transportEvent?.stage === "preflight_transport_completed" && transportEvent.httpStatus === 200 && transportEvent.transportResult === "decided" &&
+        gateEvent?.stage === "root_decision_gate" && gateEvent.outcome === "accepted" && gateEvent.verdict === "ALLOW" &&
+        revalidationEvent?.stage === "revalidation_resolved" && revalidationEvent.outcome === "passed" && revalidationEvent.attemptMatch === true &&
+        runEvent?.stage === "run_creation_resolved" && runEvent.outcome === "succeeded" && runEvent.errorCategory === null
+      ));
+      results.push(check(
+        "[3A-4/happy-path] every emitted event's own fields stay within the closed diagnostic allowlist (no secret/raw-payload field ever present)",
+        diagnosticFieldsAreSafe(calls)
+      ));
+    }
+
+    // ---- [3A-4/invalid-shape] HTTP 200 but invalid response shape ----
+    {
+      const { calls } = await runGoverned(unavailable("invalid_response_shape"));
+      const transportEvent = calls.emitGovernanceDiagnosticCalls[1];
+      const gateEvent = calls.emitGovernanceDiagnosticCalls[2];
+      results.push(check(
+        "[3A-4/invalid-shape] stage B reports invalid_response_shape, stage C rejects with that category, D/E never emitted, fail-closed preserved",
+        diagnosticStages(calls).join(",") === "preflight_request_started,preflight_transport_completed,root_decision_gate" &&
+        transportEvent?.stage === "preflight_transport_completed" && transportEvent.transportResult === "invalid_response_shape" &&
+        gateEvent?.stage === "root_decision_gate" && gateEvent.outcome === "rejected" && gateEvent.rejectionCategory === "invalid_response_shape" && gateEvent.verdict === null &&
+        calls.createRunCalls === 0
+      ));
+    }
+
+    // ---- [3A-4/non-200] HTTP non-200 ----
+    {
+      const { calls } = await runGoverned(unavailable("non_2xx"));
+      const transportEvent = calls.emitGovernanceDiagnosticCalls[1];
+      results.push(check(
+        "[3A-4/non-200] stage B reports non_2xx, D/E never emitted, fail-closed preserved",
+        diagnosticStages(calls).join(",") === "preflight_request_started,preflight_transport_completed,root_decision_gate" &&
+        transportEvent?.stage === "preflight_transport_completed" && transportEvent.transportResult === "non_2xx" &&
+        calls.createRunCalls === 0
+      ));
+    }
+
+    // ---- [3A-4/timeout] client-side timeout ----
+    {
+      const { calls } = await runGoverned(unavailable("timeout"));
+      const transportEvent = calls.emitGovernanceDiagnosticCalls[1];
+      results.push(check(
+        "[3A-4/timeout] stage B reports timeout, D/E never emitted, fail-closed preserved",
+        diagnosticStages(calls).join(",") === "preflight_request_started,preflight_transport_completed,root_decision_gate" &&
+        transportEvent?.stage === "preflight_transport_completed" && transportEvent.transportResult === "timeout" &&
+        calls.createRunCalls === 0
+      ));
+    }
+
+    // ---- [3A-4/network-error] transport network error ----
+    {
+      const { calls } = await runGoverned(unavailable("network_error"));
+      const transportEvent = calls.emitGovernanceDiagnosticCalls[1];
+      results.push(check(
+        "[3A-4/network-error] stage B reports network_error, D/E never emitted, fail-closed preserved",
+        diagnosticStages(calls).join(",") === "preflight_request_started,preflight_transport_completed,root_decision_gate" &&
+        transportEvent?.stage === "preflight_transport_completed" && transportEvent.transportResult === "network_error" &&
+        calls.createRunCalls === 0
+      ));
+    }
+
+    // ---- [3A-4/revalidation-rejected] ALLOW decided, but local state drifted
+    // between planning and revalidation (a running Run appears for the
+    // SAME Task before revalidation re-reads it) — this is precisely the
+    // SOR-138 Slice 3A-4 read-only investigation's "candidate C" scenario.
+    {
+      let listRunsForTaskCallCount = 0;
+      const { calls } = await runGoverned(decided("ALLOW"), {
+        listRunsForTask: async () => {
+          listRunsForTaskCallCount += 1;
+          // 1st call is planRunForExecution()'s (before Preflight): zero
+          // existing Runs, so planning succeeds with nextAttempt=1. 2nd
+          // call is revalidateGovernedExecutionState()'s own re-read
+          // (after Preflight ALLOW): a running Run now exists — this is
+          // the exact "state drifted during the Preflight wait" case that
+          // function exists to catch.
+          if (listRunsForTaskCallCount === 1) return [];
+          return [makeRun({ attempt: 1, status: "running" })];
+        },
+      });
+      const revalidationResolvedEvent = calls.emitGovernanceDiagnosticCalls.find((e) => e.stage === "revalidation_resolved");
+      results.push(check(
+        "[3A-4/revalidation-rejected] stage D entered+resolved(rejected, task_not_executable), stage E never emitted, zero Run created",
+        diagnosticStages(calls).join(",") ===
+          "preflight_request_started,preflight_transport_completed,root_decision_gate,revalidation_entered,revalidation_resolved" &&
+        revalidationResolvedEvent?.stage === "revalidation_resolved" &&
+        revalidationResolvedEvent.outcome === "rejected" &&
+        revalidationResolvedEvent.rejectionCategory === "task_not_executable" &&
+        revalidationResolvedEvent.observedAttempt === null &&
+        revalidationResolvedEvent.attemptMatch === null &&
+        calls.createRunCalls === 0
+      ));
+    }
+
+    // ---- [3A-4/create-run-failed] revalidation passes, but createRun()
+    // itself returns no Run (the SOR-138 Slice 3A-4 read-only
+    // investigation's "candidate D" scenario) ----
+    {
+      const { calls } = await runGoverned(decided("ALLOW"), {
+        createRun: async () => undefined,
+      });
+      const runResolvedEvent = calls.emitGovernanceDiagnosticCalls.find((e) => e.stage === "run_creation_resolved");
+      results.push(check(
+        "[3A-4/create-run-failed] stage D passed, stage E entered+resolved(failed, not_found), matching createRun() returning no Run",
+        diagnosticStages(calls).join(",") ===
+          "preflight_request_started,preflight_transport_completed,root_decision_gate,revalidation_entered,revalidation_resolved,run_creation_entered,run_creation_resolved" &&
+        runResolvedEvent?.stage === "run_creation_resolved" &&
+        runResolvedEvent.outcome === "failed" &&
+        runResolvedEvent.errorCategory === "not_found"
+      ));
+    }
+
+    // ---- [3A-4/disabled-by-default] the real (non-fake) emitter is a
+    // total no-op unless RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED==="true" —
+    // proven directly against emitGovernanceDiagnosticEvent() itself, not
+    // through the DI seam (which always uses the test's own fake above).
+    {
+      let emitted = false;
+      const originalFlag = process.env.RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED;
+      delete process.env.RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED;
+      emitGovernanceDiagnosticEvent(
+        { stage: "run_creation_entered", invocationId: "inv-x" },
+        { emit: () => { emitted = true; } }
+      );
+      if (originalFlag === undefined) delete process.env.RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED;
+      else process.env.RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED = originalFlag;
+      results.push(check(
+        "[3A-4/disabled-by-default] emitGovernanceDiagnosticEvent() never calls emit() when RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED is unset",
+        emitted === false
+      ));
+    }
+
+    // ---- [3A-4/enabled-exact-match] only the exact string "true" enables
+    // it — same contract as RUNS_GOVERNANCE_SLACK_LIST_CHANNELS_ENABLED.
+    {
+      let emittedLine: string | null = null;
+      emitGovernanceDiagnosticEvent(
+        { stage: "run_creation_entered", invocationId: "inv-y" },
+        { env: { ...process.env, RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED: "TRUE" }, emit: (line) => { emittedLine = line; } }
+      );
+      let emittedWhenTrue: string | null = null;
+      emitGovernanceDiagnosticEvent(
+        { stage: "run_creation_entered", invocationId: "inv-y" },
+        { env: { ...process.env, RUNS_GOVERNANCE_DIAGNOSTICS_ENABLED: "true" }, emit: (line) => { emittedWhenTrue = line; } }
+      );
+      results.push(check(
+        "[3A-4/enabled-exact-match] a non-exact value (\"TRUE\") stays disabled; only exact \"true\" emits, and the emitted line contains no more than the tagged JSON event",
+        emittedLine === null &&
+        typeof emittedWhenTrue === "string" &&
+        (emittedWhenTrue as string).startsWith("[runs-governance-diagnostics] ") &&
+        JSON.parse((emittedWhenTrue as string).slice("[runs-governance-diagnostics] ".length)).invocationId === "inv-y"
+      ));
+    }
+
+    // ---- [3A-4/emitter-throws-safety] a diagnostic emitter that throws on
+    // EVERY stage — including stage E ("run_creation_resolved"), which
+    // fires only AFTER createRun() and the provider call/finalization have
+    // already succeeded — must never change the real outcome. Before this
+    // fix, an emitter exception at stage E rejected the whole async
+    // function and discarded an already-successful `coreOutcome`.
+    {
+      const emittedStages: string[] = [];
+      let threw: unknown;
+      let outcome: Awaited<ReturnType<typeof executeReadIntegrationAction>> | undefined;
+      const { calls } = await (async () => {
+        const { deps, calls } = makeDeps({
+          runsGovernancePreflight: decided("ALLOW"),
+          emitGovernanceDiagnostic: (event) => {
+            emittedStages.push(event.stage);
+            throw new Error(`simulated diagnostic emitter failure at stage "${event.stage}"`);
+          },
+        });
+        try {
+          outcome = await executeReadIntegrationAction(
+            { workId: "work-1", userId: OWNER_USER_ID, accessToken: "token", taskId: "task-1", connectionId: "conn-1", action: GOVERNED_ACTION },
+            deps
+          );
+        } catch (error) {
+          threw = error;
+        }
+        return { calls };
+      })();
+
+      results.push(check(
+        "[3A-4/emitter-throws-safety] a throwing diagnostic emitter never rejects executeReadIntegrationAction(), and the real outcome (Run completed) is still returned",
+        threw === undefined &&
+        outcome?.status === "completed" &&
+        calls.createRunCalls === 1 &&
+        calls.completeRunCalls === 1 &&
+        calls.executeIntegrationActionCalls === 1 &&
+        emittedStages.length === 7 &&
+        emittedStages[6] === "run_creation_resolved"
       ));
     }
 
